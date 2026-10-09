@@ -172,3 +172,8 @@ a.btn { text-decoration: none; color: inherit; }
 .annot-bar .txt.save { background: #2f6b2f; }
 .annot-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
 .annot-stage canvas { touch-action: none; display: block; }
+
+.gps-inline { display: inline-flex; gap: 8px; align-items: center; }
+.btn.ok { border-color: var(--accent); color: var(--accent); }
+.dim { opacity: .45; }
+.modal { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }

@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.2.0';
+  const APP_VERSION = '1.3.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -181,7 +181,6 @@
         if (key === 'siteName' || key === 'street' || key === 'city') {
           cur.site = composeSite(cur);
           $('.bar h1').textContent = cur.site || 'סקר חדש';
-          const pv = $('#sitePreview'); if (pv) pv.textContent = cur.site || '—';
           if (key === 'city') DB.setKV('lastCity', cur.city.trim());
         }
         if (key === 'project') DB.setKV('lastProject', cur.project.trim());
@@ -203,7 +202,7 @@
       h('div', { class: 'row', style: 'align-items:stretch' },
         h('div', { style: 'flex:2;min-width:200px' }, field('רחוב ומספר', inp('street', { list: 'streetList', placeholder: 'למשל: הנרקיס 5' }))),
         h('div', { style: 'flex:1;min-width:160px' }, field('עיר', inp('city', { list: 'cityList', placeholder: 'למשל: ירושלים' })))),
-      h('div', { class: 'muted small' }, 'בכותרת הדוח יופיע: ', h('b', { id: 'sitePreview' }, cur.site || '—')),
+      h('div', { class: 'muted small' }, 'בכותרת הדוח: שם המוסד בשורה הראשונה, ומתחתיו רחוב ועיר.'),
       h('div', { class: 'row', style: 'align-items:stretch' },
         h('div', { style: 'flex:1;min-width:200px' }, field('סמל מוסד (אם יש)', inp('code', { inputmode: 'numeric' }))),
         h('div', { style: 'flex:1;min-width:200px' }, field('תאריך הסקר', inp('date', { type: 'date' })))),
@@ -280,7 +279,6 @@
     cur.trees.push(t);
     selectTree(t.id);
     await saveNow();
-    if (await DB.getKV('autoGps', true)) captureGps(t, true);
   }
 
   let sugCache = { speciesAll: SPECIES_SEED, speciesTop: SPECIES_SEED.slice(0, 10), phrasesTop: PHRASE_SEED };
@@ -323,7 +321,12 @@
     const splitWrap = h('label', { class: 'row', style: 'margin-top:8px;cursor:pointer' },
       h('input', { type: 'checkbox', checked: t.split, style: 'width:24px;height:24px', onchange: e => { t.split = e.target.checked; changed(); renderPhotos(); } }),
       h('span', {}, 'פצל: תמונה נפרדת לכל עץ בטווח'));
-    const showSplit = () => splitWrap.classList.toggle('hidden', !/[-,–]/.test(t.num || '') && !t.split);
+    // פצל: תמיד מוצג, פעיל כשמספר העץ הוא טווח או רשימה (2-5, 7--9, 3,4)
+    const showSplit = () => {
+      const multi = /[-,–]/.test(t.num || '');
+      splitWrap.classList.toggle('dim', !multi && !t.split);
+      splitWrap.title = multi ? '' : 'פעיל כשמספר העץ הוא טווח, למשל 2-5';
+    };
     const numIn = h('input', { class: 'in', value: t.num || '', inputmode: 'text', 'aria-label': 'מספר העץ',
       oninput: e => { t.num = e.target.value; showSplit(); changed(); }, onchange: () => { renderTreeList(); renderPhotos(); } });
     showSplit();
@@ -337,11 +340,20 @@
       pineWrap.classList.toggle('hidden', !pine && (t.pines == null || t.pines === ''));
       pineIn.classList.toggle('alert', pine && (t.pines == null || t.pines === ''));
     };
+    // כשנכתב אורן (גם עם עוד מינים או בשגיאת כתיב) ואין כמות: שואל מיד "כמה אורנים?"
+    const askPines = async () => {
+      if (!Core.isPine(t.species) || (t.pines != null && t.pines !== '') || t._askedPines === t.species) return;
+      t._askedPines = t.species;
+      const n = await askNumber('כמה אורנים?', `במין העץ "${t.species}" זוהה אורן`);
+      if (n == null) { pineIn.focus(); return; }
+      t.pines = n; pineIn.value = n; markPine(); changed();
+    };
     const spIn = h('input', { class: 'in', value: t.species || '', list: 'speciesList', 'aria-label': 'מין עץ',
-      oninput: e => { t.species = e.target.value; markPine(); changed(); } });
+      oninput: e => { t.species = e.target.value; markPine(); changed(); if (e.inputType === 'insertReplacementText' || !e.inputType) askPines(); },
+      onchange: askPines });
     markPine();
     const spChips = h('div', { class: 'chips' }, sug.speciesTop.map(s => h('button', { class: 'chip', type: 'button',
-      onclick: () => { t.species = s; spIn.value = s; markPine(); changed(); } }, s)));
+      onclick: () => { t.species = s; spIn.value = s; markPine(); changed(); askPines(); } }, s)));
 
     // הערות
     const notesIn = h('textarea', { class: 'in', 'aria-label': 'הערות וטיפול מומלץ', oninput: e => { t.notes = e.target.value; changed(); } });
@@ -361,7 +373,7 @@
       } }, label)));
 
     // נ"צ
-    const gpsBox = h('div', { class: 'gps', id: 'gpsBox' });
+    const gpsBox = h('span', { class: 'gps-inline', id: 'gpsBox' });
     renderGps(t, gpsBox);
 
     const photosBox = h('div', { id: 'photosBox' });
@@ -377,12 +389,12 @@
         field('הערות וטיפול מומלץ', notesIn),
         notesChips,
         field('דחיפות', seg),
-        field('נ"צ', gpsBox),
         h('div', {},
           h('label', { class: 'f' }, 'תמונות'),
           h('div', { class: 'row', style: 'margin-bottom:10px' },
             h('button', { class: 'btn primary big', onclick: () => pickPhoto('camInput') }, '📷 צלם'),
-            h('button', { class: 'btn big', onclick: () => pickPhoto('galInput') }, '🖼 מהגלריה')),
+            h('button', { class: 'btn big', onclick: () => pickPhoto('galInput') }, '🖼 מהגלריה'),
+            gpsBox),
           photosBox),
         h('div', { class: 'row', style: 'justify-content:space-between;margin-top:20px' },
           h('button', { class: 'btn danger', onclick: deleteTree }, 'מחק עץ'),
@@ -401,17 +413,38 @@
     renderEditor();
   }
 
+  // חלון קטן עם מקלדת מספרים. מחזיר מספר, או null אם דילגו
+  function askNumber(title, sub) {
+    return new Promise(resolve => {
+      const inp = h('input', { class: 'in', type: 'number', inputmode: 'numeric', min: 0, style: 'font-size:28px;text-align:center' });
+      const close = v => { ov.remove(); resolve(v); };
+      const ok = () => { const v = inp.value.trim(); if (v !== '' && !isNaN(+v)) close(Number(v)); else inp.focus(); };
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') ok(); });
+      const ov = h('div', { class: 'modal' },
+        h('div', { class: 'card stack', style: 'max-width:360px;width:90%' },
+          h('h2', { style: 'margin:0;font-size:22px' }, title),
+          sub ? h('div', { class: 'muted small' }, sub) : null,
+          inp,
+          h('div', { class: 'row', style: 'justify-content:space-between' },
+            h('button', { class: 'btn', onclick: () => close(null) }, 'אחר כך'),
+            h('button', { class: 'btn primary big', onclick: ok }, 'שמור'))));
+      document.body.append(ov);
+      setTimeout(() => inp.focus(), 50);
+    });
+  }
+
   // ---------- GPS ----------
   function renderGps(t, box) {
     box = box || $('#gpsBox');
     if (!box || t.id !== curTreeId) return;
     const has = t.lat != null;
+    // נ"צ נלקח רק בלחיצה. כשיש כבר נ"צ, לחיצה שואלת אם לעדכן
     box.replaceChildren(
-      h('span', { class: 'coords' }, t._gpsBusy ? 'מאתר מיקום…' : has ? h('bdi', {}, `${t.lat.toFixed(6)}, ${t.lon.toFixed(6)}`) : 'אין מיקום',
-        has && t.acc != null ? h('span', { class: 'muted small' }, ` (דיוק ${Math.round(t.acc)} מ')`) : null),
-      h('button', { class: 'btn', onclick: () => captureGps(t) }, has ? 'עדכן למיקום הנוכחי' : 'מיקום נוכחי'),
-      has ? h('a', { class: 'btn', href: `https://www.google.com/maps?q=${t.lat},${t.lon}`, target: '_blank', rel: 'noopener' }, 'מפה') : null,
-      has ? h('button', { class: 'btn', onclick: () => { if (confirm('למחוק את הנ"צ של העץ?')) { t.lat = t.lon = t.acc = null; saveSoon(); refreshRow(t); renderGps(t); } } }, 'נקה') : null);
+      h('button', { class: 'btn big' + (has ? ' ok' : ''), disabled: t._gpsBusy ? '' : null, onclick: () => {
+        if (has && !confirm(`לעץ כבר יש נ"צ (${t.lat.toFixed(5)}, ${t.lon.toFixed(5)}). לעדכן למיקום הנוכחי?`)) return;
+        captureGps(t);
+      } }, t._gpsBusy ? '📍 מאתר…' : has ? `📍 נ"צ ✓${t.acc != null ? ` ±${Math.round(t.acc)}מ'` : ''}` : '📍 נ"צ'),
+      ...(has && !t._gpsBusy ? [h('a', { class: 'btn', href: `https://www.google.com/maps?q=${t.lat},${t.lon}`, target: '_blank', rel: 'noopener' }, 'מפה')] : []));
   }
 
   // מאזין עד 8 שניות ולוקח את הקריאה המדויקת ביותר
@@ -431,14 +464,14 @@
     };
     const wid = navigator.geolocation.watchPosition(pos => {
       if (!best || pos.coords.accuracy < best.coords.accuracy) best = pos;
-      if (best.coords.accuracy <= 5) finish();
+      if (best.coords.accuracy <= 8) finish();
     }, err => {
       if (!best) {
         t._gpsBusy = false; renderGps(t); done = true; navigator.geolocation.clearWatch(wid);
         if (!quiet || err.code === 1) toast(err.code === 1 ? 'צריך לאשר גישה למיקום בדפדפן' : 'לא הצלחתי לקבל מיקום. נסה שוב בשטח פתוח.');
       }
     }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
-    setTimeout(finish, 8000);
+    setTimeout(finish, 6000);
   }
 
   // ---------- תמונות ----------
@@ -476,6 +509,7 @@
           // הראשונה בקבוצה נכנסת לדוח, השאר לא (אפשר לשנות)
           np.inReport = !t.photos.some(x => Core.groupKey(t, x) === Core.groupKey(t, np));
           t.photos.push(np);
+          await saveNow(); // כל תמונה נרשמת בסקר מיד, גם אם האפליקציה תיסגר באמצע
         } catch (err) {
           console.error(err);
           toast('לא הצלחתי לשמור את התמונה: ' + err.message);
@@ -485,8 +519,6 @@
       refreshRow(t);
       if (t.id === curTreeId) renderPhotos();
       Sync.kick(true);
-      // צילום ראשון בלי נ"צ: לוקח מיקום
-      if (t.lat == null && !t._gpsBusy && await DB.getKV('autoGps', true)) captureGps(t, true);
     });
   }
 
@@ -607,22 +639,27 @@
       syncBox.replaceChildren(
         h('div', {}, tgOn ? (tgLeft ? `טלגרם: ${tgLeft} מתוך ${all.length} תמונות ממתינות לגיבוי.` : `טלגרם: כל ${all.length} התמונות מגובות.`) : 'טלגרם לא מחובר.'),
         h('div', {}, odOn ? (odLeft ? `OneDrive: ${odLeft} תמונות ממתינות.` : 'OneDrive: התמונות שמורות.') + (cur.odReportAt ? ` הדוח עודכן לאחרונה ב-${new Date(cur.odReportAt).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}.` : '') : 'OneDrive לא מחובר.'),
-        Sync.state.error ? h('div', { style: 'color:var(--danger)' }, Sync.state.error) : null);
+        ...(Sync.state.error ? [h('div', { style: 'color:var(--danger)' }, Sync.state.error)] : []));
     };
     drawSync();
 
     body.append(h('div', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
-        h('h2', { style: 'margin:0;font-size:20px' }, 'דוח אקסל'),
-        h('div', { class: 'muted small' }, 'קובץ בתבנית "סקר יציבות ירושלים - טאבלט אורנים", כמו היום, עם גיליון נוסף של נ"צ. אפשר לפתוח אותו באקסל בטאבלט ולהדפיס ל-PDF, או במחשב.'),
-        h('label', { class: 'row', style: 'cursor:pointer' },
-          h('input', { type: 'checkbox', checked: embed, style: 'width:24px;height:24px', onchange: e => { DB.setKV('embedPhotos', e.target.checked); } }),
-          'להכניס את התמונות שסומנו "בדוח" לנספח בתוך הקובץ'),
-        embed ? h('div', { class: 'small muted' }, `${rs.length} תמונות מסומנות לדוח` + (rs.length > Core.MAX_PRINTED ? `, ובנספח יש מקום ל-${Core.MAX_PRINTED}.` : '.'))
-          : h('div', { class: 'note small' }, 'בלי התמונות, הנספח עובד כמו בתבנית: תמונה אחת לכל עץ מתיקיית Pictures, דרך המאקרו במחשב. את התמונות לתיקייה מורידים מ"תמונות בקובץ ZIP".'),
+        h('h2', { style: 'margin:0;font-size:20px' }, 'דוח PDF'),
+        h('div', { class: 'muted small' }, cur.trees.some(Core.hasContent)
+          ? `הסקר המלא כמו באקסל: מכתב, טבלת העצים ונספח תמונות (${Math.min(rs.length, Core.MAX_PRINTED)} תמונות), בלי השורות הצהובות. בחלון שנפתח בוחרים "שמירה כ-PDF".`
+          : 'אין עצים בטבלה, ולכן יוצא מכתב אישור קצר, כמו "אישורי תקינות" בתוכנה במחשב. בחלון שנפתח בוחרים "שמירה כ-PDF".'),
         h('div', { class: 'row' },
-          h('button', { class: 'btn primary big', onclick: () => exportExcel(status) }, 'הפק אקסל'),
+          h('button', { class: 'btn primary big', onclick: async e => {
+            const b = e.currentTarget; b.disabled = true;
+            try { await saveNow(); await ReportPrint.print(cur, async id => { const d = await DB.getPhoto(id); return d && d.blob; }); }
+            catch (err) { toast('הפקת ה-PDF נכשלה: ' + err.message, 4000); }
+            finally { b.disabled = false; }
+          } }, 'הפק PDF'),
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
+        h('div', { class: 'small muted' }, odOn
+          ? 'קובץ האקסל נשמר ומתעדכן לבד ב-OneDrive בזמן העבודה, אין צורך להפיק אותו.'
+          : 'קובץ האקסל נשמר לבד ב-OneDrive כשהוא מחובר. כרגע OneDrive לא מחובר.'),
         status),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'גיבוי וסנכרון'),
@@ -669,7 +706,7 @@
     const r = await SurveyExcel.buildWorkbook(await templateBytes(), s, async id => {
       const p = await DB.getPhoto(id);
       return p ? { blob: p.blob, w: p.w, h: p.h } : null;
-    }, { embedPhotos: embed });
+    }, { embedPhotos: true });
     return { blob: new Blob([r.bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }), name: fileBase(s) + '.xlsm', placed: r.placed };
   }
 
@@ -693,8 +730,7 @@
       const zip = new JSZip();
       const used = new Set();
       // מספור כמו בנספח: עם תמונות בקובץ, לפי התמונות שסומנו; בלי, לפי משבצות התבנית
-      const embed = await DB.getKV('embedPhotos', true);
-      const pairs = embed ? Core.reportSlots(cur.trees).map(sl => [sl.index, sl.photo])
+      const pairs = true ? Core.reportSlots(cur.trees).map(sl => [sl.index, sl.photo])
         : Core.slotsOf(cur.trees).map(sl => [sl.index, Core.photoForSlot(sl)]);
       for (const [n, p] of pairs) {
         if (!p) continue;
@@ -728,8 +764,6 @@
     const tokenIn = h('input', { class: 'in', value: token, placeholder: '123456:ABC…', dir: 'ltr', autocomplete: 'off' });
     const chk = (key, def, label) => h('label', { class: 'row', style: 'cursor:pointer' },
       h('input', { type: 'checkbox', style: 'width:24px;height:24px', checked: undefined, onchange: e => DB.setKV(key, e.target.checked), oncreate: null }), label);
-    const autoGps = chk('autoGps', true, 'לקחת נ"צ אוטומטית בעץ חדש ובתמונה הראשונה');
-    autoGps.firstChild.checked = await DB.getKV('autoGps', true);
     const annotateAfter = chk('annotateAfter', true, 'אחרי צילום לפתוח מסך סימון על התמונה (קווים וחצים)');
     annotateAfter.firstChild.checked = await DB.getKV('annotateAfter', true);
     const shareFiles = chk('shareFiles', false, 'במקום הורדה, לפתוח את תפריט השיתוף (לשליחה לדרייב, וואטסאפ וכו\')');
@@ -795,7 +829,7 @@
           odStatus),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'עבודה בשטח'),
-          autoGps, annotateAfter, shareFiles),
+          annotateAfter, shareFiles),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'רשימות בחירה'),
           h('div', { class: 'muted small' }, 'שורה לכל פריט. האפליקציה מוסיפה אוטומטית גם מה שכבר כתבת בסקרים.'),
@@ -862,12 +896,15 @@
 
   // ---------- הפעלה ----------
   window.addEventListener('pagehide', saveNow);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
+  // יציאה מהאפליקציה (מסך כבוי, מעבר לאפליקציה אחרת): שומר מיד ומעדכן את האקסל ב-OneDrive
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { saveNow(); if (cur) Sync.now({ report: true }); } });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
   OD.handleRedirect().then(r => {
     if (r) { toast(r.ok ? '✓ מחובר ל-OneDrive' : 'החיבור ל-OneDrive נכשל: ' + r.message, 4000); Sync.state.odNeedsLogin = false; }
     route();
     Sync.kick(true);
+    setTimeout(() => { ReportPrint.preloadFonts(); getLayoutWarm(); }, 2000);
   });
+  function getLayoutWarm() { fetch('template/layout.json').catch(() => {}); }
 })();

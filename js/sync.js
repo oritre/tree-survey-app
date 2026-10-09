@@ -1,7 +1,7 @@
 // סנכרון ברקע כשיש קליטה: גיבוי כל התמונות לטלגרם ושמירת הסקרים ב-OneDrive
 (function (root) {
   'use strict';
-  const REPORT_EVERY = 5 * 60 * 1000; // דוח אקסל מתעדכן ב-OneDrive לכל היותר פעם ב-5 דקות בזמן עבודה
+  const REPORT_EVERY = 60 * 1000; // האקסל ב-OneDrive מתעדכן לבד: לכל היותר פעם בדקה בזמן עבודה, ומיד ביציאה מהסקר
 
   let running = false, again = false, timer = null, forceReport = false;
   const listeners = new Set();
