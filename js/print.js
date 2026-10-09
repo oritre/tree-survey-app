@@ -26,8 +26,8 @@
   function sheetValues(survey, slots) {
     const v = {}, imgs = {};
     const place = Core.placeOf(survey);
-    if (survey.code) v.B5 = survey.code;
-    if (survey.manager) v.B6 = survey.manager;
+    if (survey.code) v.B5 = survey.code; else v.A5 = ''; // בלי סמל מוסד / מנהל: גם הכותרת לא מודפסת
+    if (survey.manager) v.B6 = survey.manager; else v.A6 = '';
     if (place.name) v.F9 = place.name;
     if (place.address) v.D10 = place.address;
     if (survey.date) { v.F2 = fmtDate(survey.date); v.B14 = fmtDate(survey.date); }

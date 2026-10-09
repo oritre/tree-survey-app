@@ -14,6 +14,21 @@
 
   function emit() { for (const fn of listeners) try { fn(state); } catch (_) {} }
 
+  // יומן גיבוי: שגיאות ואירועים חשובים, נשמר בטאבלט (300 האחרונים) ומוצג במסך "בקרת גיבוי"
+  let logQ = Promise.resolve();
+  function log(level, msg, s) {
+    const e = { t: Date.now(), level, msg: String(msg).slice(0, 300), survey: s ? (s.site || s.id) : '' };
+    logQ = logQ.then(async () => {
+      const L = await DB.getKV('syncLog', []);
+      const last = L[L.length - 1];
+      if (last && last.msg === e.msg && last.survey === e.survey && e.t - last.t < 10 * 60 * 1000) { last.n = (last.n || 1) + 1; last.t = e.t; }
+      else L.push(e);
+      await DB.setKV('syncLog', L.slice(-300));
+    }).catch(() => {});
+    return logQ;
+  }
+  DB.getKV('syncLastOk', 0).then(v => { state.lastOk = v; }).catch(() => {});
+
   const fmtDate = iso => iso ? iso.split('-').reverse().join('/') : '';
 
   function surveyLine(s) {
@@ -85,24 +100,84 @@
     return dirty;
   }
 
+  // שתי תיקיות ב-OneDrive:
+  //  "גיבוי אפליקציית סקרי עצים" — הגיבוי של האפליקציה: נתוני הסקר, התמונות, גרסאות קודמות ועותק של האקסל וה-PDF.
+  //     ממנה החיפוש בענן עובד. לא מוחקים ממנה.
+  //  "סקרי עצים" — הדוחות לעבודה: אקסל ו-PDF בלבד. אפשר למחוק ממנה בלי לפגוע בגיבוי.
+  const folderBase = s => `${s.date || ''} ${s.site || 'סקר'}${s.code ? ' (' + s.code + ')' : ''}`;
+
+  // סקרים מגרסה 1.4 ישבו בתיקיית הדוחות: מתחילים להם גיבוי בתיקייה החדשה
+  function migrate(s) {
+    if (s.odLayout === 2) return false;
+    s.odFolderId = s.odPhotosId = s.odDataId = s.odDataHash = s.odIndexKey = s.odReportFolderId = null;
+    s.odLayout = 2;
+    return true;
+  }
+
   async function syncFolders(s) {
+    if (migrate(s)) {
+      // תמונות שעוד נמצאות בטאבלט יעלו לתיקיית הגיבוי. תמונות שכבר פונו נשארות בקובץ הקיים ב-OneDrive
+      for (const t of s.trees) for (const p of t.photos || []) {
+        const d = await DB.getPhoto(p.id);
+        if (d && d.blob) { p.odId = null; p.odName = null; }
+      }
+      await DB.putSurvey(s);
+    }
     if (!s.odFolderId) {
-      const r = await rootFolder();
-      const proj = await OD.folder(r, s.project || 'ללא פרויקט');
+      const proj = await OD.folder(await backupRoot(), s.project || 'ללא פרויקט');
       // שני סקרים עם אותו תאריך ושם (למשל סקר חדש שנפתח על בסיס ישן באותו יום) מקבלים תיקיות נפרדות
-      const base = `${s.date || ''} ${s.site || 'סקר'}${s.code ? ' (' + s.code + ')' : ''}`;
       for (let k = 1; ; k++) {
-        const id = await OD.folder(proj, k > 1 ? `${base} - ${k}` : base);
+        const id = await OD.folder(proj, k > 1 ? `${folderBase(s)} - ${k}` : folderBase(s));
         const other = await OD.readJson(id, 'נתוני סקר.json');
-        if (!other || other.id === s.id) { s.odFolderId = id; break; }
+        if (!other || other.id === s.id) { s.odFolderId = id; s.odFolderK = k; break; }
       }
       await DB.putSurvey(s);
     }
     if (!s.odPhotosId) { s.odPhotosId = await OD.folder(s.odFolderId, 'תמונות'); await DB.putSurvey(s); }
   }
 
+  async function reportFolder(s) {
+    if (!s.odReportFolderId) {
+      const proj = await OD.folder(await reportRoot(), s.project || 'ללא פרויקט');
+      s.odReportFolderId = await OD.folder(proj, (s.odFolderK || 1) > 1 ? `${folderBase(s)} - ${s.odFolderK}` : folderBase(s));
+      await DB.putSurvey(s);
+    }
+    return s.odReportFolderId;
+  }
+
+  // קובץ דוח: נשמר בתיקיית הגיבוי, ועותק שלו (העתקה בתוך OneDrive, בלי גלישה נוספת) בתיקיית הדוחות
+  async function putReportFile(s, name, blob) {
+    const item = await OD.upload(s.odFolderId, name, blob, true);
+    if (!item) { s.odFolderId = null; s.odPhotosId = null; await syncFolders(s); return putReportFile(s, name, blob); } // תיקיית הגיבוי נמחקה
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const dest = await reportFolder(s);
+      try { await OD.copy(item.id, dest, name); return; }
+      catch (e) {
+        if (e.status === 404) { s.odReportFolderId = null; continue; } // תיקיית הדוחות נמחקה: יוצרים מחדש
+        const up = await OD.upload(dest, name, blob, true);
+        if (up) return;
+        s.odReportFolderId = null;
+      }
+    }
+    throw new Error('לא ניתן לשמור בתיקיית הדוחות');
+  }
+
   async function syncOneDrive(s) {
     await syncFolders(s);
+
+    // הסקר נפתח ביום אחר: שומרים קודם את הגרסה הקודמת מהענן, כדי שלא תידרס
+    if (s.snapshotFrom) {
+      if (s.odDataId) {
+        const blob = await OD.download(s.odDataId);
+        if (blob) {
+          const vf = await OD.folder(s.odFolderId, 'גרסאות קודמות');
+          await OD.upload(vf, `נתוני סקר - עד ${s.snapshotFrom}.json`, blob, true);
+          log('info', `נשמרה גרסה קודמת של הסקר (עד ${s.snapshotFrom})`, s);
+        }
+      }
+      s.snapshotFrom = null;
+      await DB.putSurvey(s);
+    }
 
     // תמונות: כל אחת עולה פעם אחת, ומשנה שם אם השם/הפרטים השתנו
     for (const t of Core.sortTrees(s.trees)) {
@@ -114,6 +189,7 @@
           if (!d || !d.blob) continue;
           const ver = p.ver || 0;
           const item = await OD.upload(s.odPhotosId, name, d.blob, false);
+          if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s); throw new Error('תיקיית הגיבוי ב-OneDrive נמחקה, יוצר אותה מחדש'); }
           p.odId = item.id; p.odName = name; p.odVer = ver;
           await DB.putSurvey(s);
           emit();
@@ -141,7 +217,8 @@
     if (s.odDataHash !== hash) {
       const item = await OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([JSON.stringify(s, null, 1)], { type: 'application/json' }), true);
       await OD.upload(s.odFolderId, 'שכבת עצים.geojson', new Blob([root.Gis.geojson([s])], { type: 'application/geo+json' }), true);
-      if (item && item.id) s.odDataId = item.id;
+      if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s); throw new Error('תיקיית הגיבוי ב-OneDrive נמחקה, יוצר אותה מחדש'); }
+      if (item.id) s.odDataId = item.id;
       s.odDataHash = hash;
       await DB.putSurvey(s);
     }
@@ -154,6 +231,7 @@
       await DB.putSurvey(s);
       await updateIndex(s);
       await freeLocal(s);
+      log('ok', 'סיום סקר: אקסל ו-PDF נשמרו ב-OneDrive, והתמונות פונו מהטאבלט', s);
       emit();
     }
   }
@@ -178,10 +256,10 @@
       folderId: s.odFolderId, dataId: s.odDataId || null, finished: !!s.finished };
   }
 
-  async function rootFolder() {
-    const rootName = (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים';
-    return OD.folder(null, rootName);
-  }
+  const BACKUP_ROOT = 'גיבוי אפליקציית סקרי עצים';
+  async function backupRoot() { return OD.folder(null, (await DB.getKV('odBackupRoot', BACKUP_ROOT)) || BACKUP_ROOT); }
+  async function reportRoot() { return OD.folder(null, (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים'); }
+  const rootFolder = backupRoot;
 
   async function updateIndex(s) {
     if (!s.odDataId) return;
@@ -203,17 +281,19 @@
 
   // אקסל (ואם ביקשו גם PDF) לתיקיית הסקר ב-OneDrive, באותו שם
   async function uploadReport(s, opts) {
-    if (!s.odFolderId) await syncFolders(s);
+    await syncFolders(s);
     const r = await root.App.buildReport(s);
-    await OD.upload(s.odFolderId, r.name, r.blob, true);
+    await putReportFile(s, r.name, r.blob);
     s.odReportHash = hashSurvey(s); s.odReportAt = Date.now();
+    log('ok', 'האקסל נשמר ב-OneDrive', s);
     if (opts && opts.pdf) await uploadPdf(s, await root.App.buildPdf(s));
     await DB.putSurvey(s);
   }
   async function uploadPdf(s, pdf) {
-    if (!s.odFolderId) await syncFolders(s);
-    await OD.upload(s.odFolderId, pdf.name, pdf.blob, true);
+    await syncFolders(s);
+    await putReportFile(s, pdf.name, pdf.blob);
     s.odPdfAt = Date.now();
+    log('ok', 'ה-PDF נשמר ב-OneDrive', s);
     await DB.putSurvey(s);
   }
 
@@ -248,20 +328,22 @@
         const s = live(s0);
         if (tgOn) {
           try { await syncTelegram(s, { token, chat }); }
-          catch (e) { state.error = 'טלגרם: ' + e.message; }
+          catch (e) { state.error = 'טלגרם: ' + e.message; log('error', state.error, s); }
         }
         if (odOn && !state.odNeedsLogin) {
           try { await syncOneDrive(s); }
           catch (e) {
-            if (e instanceof OD.AuthError) state.odNeedsLogin = true;
-            else state.error = 'OneDrive: ' + e.message;
+            if (e instanceof OD.AuthError) { state.odNeedsLogin = true; log('error', 'OneDrive: צריך להתחבר מחדש', s); }
+            else { state.error = 'OneDrive: ' + e.message; log('error', state.error, s); }
           }
         }
       }
       surveys = await DB.allSurveys();
       countPending(surveys, tgOn, odOn);
+      if (!state.error && !state.odNeedsLogin && !state.tgPending && !state.odPending) { state.lastOk = Date.now(); DB.setKV('syncLastOk', state.lastOk); }
     } catch (e) {
       state.error = e.message;
+      log('error', 'שגיאה כללית בגיבוי: ' + e.message);
     } finally {
       running = false; state.busy = false; emit();
       if (root.App && root.App.onSynced) root.App.onSynced();
@@ -285,7 +367,16 @@
     // פעולות ידניות: עובדות על הסקר הפתוח ומחכות לסיום
     async uploadReport(s) { await syncFolders(s); await uploadReport(s, { pdf: false }); },
     async uploadPdf(s, pdf) { await syncFolders(s); await uploadPdf(s, pdf); },
-    cloudIndex, allInCloud, freeLocal,
+    cloudIndex, allInCloud, freeLocal, log, hashSurvey,
+    pendingOf(s, tgOn, odOn) {
+      const ph = s.trees.flatMap(t => t.photos || []);
+      return {
+        photos: ph.length,
+        tg: tgOn ? ph.filter(p => !p.tgMsgId || (p.ver || 0) !== (p.tgVer || 0)).length : null,
+        od: odOn ? ph.filter(p => !p.odId || (p.ver || 0) !== (p.odVer || 0)).length : null,
+        data: odOn ? s.odDataHash === hashSurvey(s) : null,
+      };
+    },
     onChange(fn) { listeners.add(fn); fn(state); return () => listeners.delete(fn); },
     caption, photoFileName,
   };

@@ -306,8 +306,9 @@
     const strings = new Strings(await zip.file('xl/sharedStrings.xml').async('string'));
 
     // כותרת
-    if (survey.code) sheet.setCell('B5', valueCell(strings, survey.code));
-    if (survey.manager) sheet.setCell('B6', strCell(strings, survey.manager));
+    // סמל מוסד / מנהל שלא מולאו: גם הכותרת שלהם לא מופיעה בדוח
+    if (survey.code) sheet.setCell('B5', valueCell(strings, survey.code)); else sheet.setCell('A5', emptyCell());
+    if (survey.manager) sheet.setCell('B6', strCell(strings, survey.manager)); else sheet.setCell('A6', emptyCell());
     // F9 שם המוסד, D10 הכתובת ("רחוב, עיר"), כמו בדוחות במחשב
     const place = Core.placeOf(survey);
     if (place.name) sheet.setCell('F9', strCell(strings, place.name));
