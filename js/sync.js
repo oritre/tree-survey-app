@@ -109,7 +109,7 @@
   // סקרים מגרסה 1.4 ישבו בתיקיית הדוחות: מתחילים להם גיבוי בתיקייה החדשה
   function migrate(s) {
     if (s.odLayout === 2) return false;
-    s.odFolderId = s.odPhotosId = s.odDataId = s.odDataHash = s.odIndexKey = s.odReportFolderId = null;
+    s.odFolderId = s.odPhotosId = s.odDataId = s.odDataHash = s.odIndexKey = s.odReportDir = null;
     s.odLayout = 2;
     return true;
   }
@@ -136,13 +136,13 @@
     if (!s.odPhotosId) { s.odPhotosId = await OD.folder(s.odFolderId, 'תמונות'); await DB.putSurvey(s); }
   }
 
+  // בתיקיית הדוחות: תיקייה לכל פרויקט, וכל קבצי הסקרים ישירות בתוכה (בלי תיקייה לכל סקר)
   async function reportFolder(s) {
-    if (!s.odReportFolderId) {
-      const proj = await OD.folder(await reportRoot(), s.project || 'ללא פרויקט');
-      s.odReportFolderId = await OD.folder(proj, (s.odFolderK || 1) > 1 ? `${folderBase(s)} - ${s.odFolderK}` : folderBase(s));
+    if (!s.odReportDir) {
+      s.odReportDir = await OD.folder(await reportRoot(), s.project || 'ללא פרויקט');
       await DB.putSurvey(s);
     }
-    return s.odReportFolderId;
+    return s.odReportDir;
   }
 
   // קובץ דוח: נשמר בתיקיית הגיבוי, ועותק שלו (העתקה בתוך OneDrive, בלי גלישה נוספת) בתיקיית הדוחות
@@ -153,10 +153,10 @@
       const dest = await reportFolder(s);
       try { await OD.copy(item.id, dest, name); return; }
       catch (e) {
-        if (e.status === 404) { s.odReportFolderId = null; continue; } // תיקיית הדוחות נמחקה: יוצרים מחדש
+        if (e.status === 404) { s.odReportDir = null; continue; } // תיקיית הדוחות נמחקה: יוצרים מחדש
         const up = await OD.upload(dest, name, blob, true);
         if (up) return;
-        s.odReportFolderId = null;
+        s.odReportDir = null;
       }
     }
     throw new Error('לא ניתן לשמור בתיקיית הדוחות');

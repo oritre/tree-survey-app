@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.5.0';
+  const APP_VERSION = '1.6.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -109,7 +109,14 @@
     return h('header', { class: 'bar' },
       back ? h('button', { class: 'icon-btn', 'aria-label': 'חזרה', onclick: () => go(back) }, '→') : null,
       h('h1', {}, title), h('button', { class: 'sync-pill icon-btn', id: 'syncPill', onclick: () => go('#/health') }, syncText()), ...right,
-      h('button', { class: 'icon-btn', title: 'כיבוי', 'aria-label': 'כיבוי האפליקציה', onclick: shutdown }, '⏻'));
+      powerBtn());
+  }
+
+  // כפתור כיבוי: ציור SVG (התו ⏻ לא קיים בגופן של רוב הטאבלטים)
+  function powerBtn() {
+    const b = h('button', { class: 'icon-btn power-btn', title: 'כיבוי', 'aria-label': 'כיבוי האפליקציה', onclick: shutdown });
+    b.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>';
+    return b;
   }
 
   // מצב הגיבוי בפינה: כמה ממתינות לטלגרם / OneDrive
@@ -691,7 +698,7 @@
         h('div', {},
           h('label', { class: 'f' }, 'תמונות'),
           h('div', { class: 'row', style: 'margin-bottom:10px' },
-            h('button', { class: 'btn primary big', onclick: () => pickPhoto('camInput') }, '📷 צלם'),
+            h('button', { class: 'btn primary big', onclick: takePhotos }, '📷 צלם'),
             h('button', { class: 'btn big', onclick: () => pickPhoto('galInput') }, '🖼 מהגלריה'),
             gpsBox),
           photosBox),
@@ -781,6 +788,54 @@
     inp.value = '';
     inp.click();
   }
+  // שומרת תמונה אחת לעץ: (סימון אם ביקשו) -> טאבלט -> רישום בסקר. מחזירה false אם לא נשמרה
+  async function addPhoto(t, file, annotate) {
+    try {
+      const p = await processImage(file);
+      let rec = { id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h };
+      if (annotate) {
+        const strokes = await Annotate.open(p.blob, [], { saveLabel: 'שמור', cancelLabel: 'בלי סימון' });
+        if (strokes && strokes.length) rec = await applyStrokes(rec, p.blob, strokes);
+      }
+      await DB.putPhoto(rec);
+      // בעץ מפוצל: התמונה עוברת למספר הראשון שעוד אין לו תמונה
+      let sub = null;
+      if (Core.splitActive(t)) {
+        const nums = Core.expandNum(t.num);
+        sub = nums.find(n => !t.photos.some(x => x.sub === n)) || nums[0];
+      }
+      const np = { id: p.id, w: p.w, h: p.h, sub, inReport: false, note: '', taken: Date.now() };
+      // הראשונה בקבוצה נכנסת לדוח, השאר לא (אפשר לשנות)
+      np.inReport = !t.photos.some(x => Core.groupKey(t, x) === Core.groupKey(t, np));
+      t.photos.push(np);
+      await saveNow(); // כל תמונה נרשמת בסקר מיד, גם אם האפליקציה תיסגר באמצע
+      refreshRow(t);
+      if (t.id === curTreeId) renderPhotos();
+      Sync.kick(true);
+      return true;
+    } catch (err) {
+      console.error(err);
+      toast('לא הצלחתי לשמור את התמונה: ' + err.message);
+      return false;
+    }
+  }
+
+  // "צלם": המצלמה של האפליקציה (מהירה, צילום ברצף). אם אין גישה — אפליקציית המצלמה של המכשיר
+  async function takePhotos() {
+    const t = treeById(curTreeId);
+    if (!t) return;
+    if (await DB.getKV('inAppCamera', true)) {
+      const annotate = await DB.getKV('annotateAfter', true);
+      try {
+        await Camera.open(blob => addPhoto(t, blob, annotate), { title: `עץ ${t.num || ''} ${t.species || ''}`.trim() });
+        return;
+      } catch (e) {
+        toast('המצלמה של האפליקציה לא זמינה (' + e.message + '), פותח את מצלמת המכשיר', 3000);
+      }
+    }
+    pickPhoto('camInput');
+  }
+
   for (const id of ['camInput', 'galInput']) {
     document.getElementById(id).addEventListener('change', async e => {
       const files = [...e.target.files];
@@ -789,35 +844,7 @@
       toast(files.length > 1 ? `שומר ${files.length} תמונות…` : 'שומר תמונה…', 1500);
       // אחרי צילום: מסך ציור (כמו בטלגרם) לפני שהתמונה נשמרת ונשלחת
       const annotate = id === 'camInput' && files.length === 1 && await DB.getKV('annotateAfter', true);
-      for (const f of files) {
-        try {
-          const p = await processImage(f);
-          let rec = { id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h };
-          if (annotate) {
-            const strokes = await Annotate.open(p.blob, [], { saveLabel: 'שמור', cancelLabel: 'בלי סימון' });
-            if (strokes && strokes.length) rec = await applyStrokes(rec, p.blob, strokes);
-          }
-          await DB.putPhoto(rec);
-          // בעץ מפוצל: התמונה עוברת למספר הראשון שעוד אין לו תמונה
-          let sub = null;
-          if (Core.splitActive(t)) {
-            const nums = Core.expandNum(t.num);
-            sub = nums.find(n => !t.photos.some(x => x.sub === n)) || nums[0];
-          }
-          const np = { id: p.id, w: p.w, h: p.h, sub, inReport: false, note: '', taken: Date.now() };
-          // הראשונה בקבוצה נכנסת לדוח, השאר לא (אפשר לשנות)
-          np.inReport = !t.photos.some(x => Core.groupKey(t, x) === Core.groupKey(t, np));
-          t.photos.push(np);
-          await saveNow(); // כל תמונה נרשמת בסקר מיד, גם אם האפליקציה תיסגר באמצע
-        } catch (err) {
-          console.error(err);
-          toast('לא הצלחתי לשמור את התמונה: ' + err.message);
-        }
-      }
-      await saveNow();
-      refreshRow(t);
-      if (t.id === curTreeId) renderPhotos();
-      Sync.kick(true);
+      for (const f of files) await addPhoto(t, f, annotate);
     });
   }
 
@@ -948,7 +975,7 @@
         ...(cur.odPdfAt ? [h('div', {}, `PDF הועלה ל-OneDrive: ${hm(cur.odPdfAt)}`)] : []),
         ...(Sync.state.error ? [h('div', { style: 'color:var(--danger)' }, Sync.state.error)] : []));
       finishBox.replaceChildren(cur.finished
-        ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}. האקסל וה-PDF בתיקיית הסקר ב-OneDrive, והתמונות פונו מהטאבלט (הן נטענות מהענן כשצריך).`)
+        ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}. האקסל וה-PDF בתיקיית הפרויקט ב-OneDrive, והתמונות פונו מהטאבלט (הן נטענות מהענן כשצריך).`)
         : cur.finishPending
           ? h('div', { class: 'small' }, Sync.state.offline ? '⏸ אין קליטה. הסקר יעלה לבד (אקסל + PDF) כשהקליטה תחזור.' : '⟳ מעלה את התמונות, ואז את האקסל וה-PDF…')
           : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר אקסל ו-PDF באותה תיקייה ב-OneDrive ומפנה את התמונות מהטאבלט. בלי קליטה זה יקרה לבד כשהקליטה תחזור.'));
@@ -973,7 +1000,7 @@
             await saveNow();
             status.textContent = 'מעלה אקסל ל-OneDrive…';
             await Sync.uploadReport(cur);
-            status.textContent = '✓ האקסל הועלה לתיקיית הסקר ב-OneDrive.';
+            status.textContent = '✓ האקסל הועלה ל-OneDrive (תיקיית הפרויקט בסקרי עצים).';
           }) }, '⬆ העלה אקסל לענן'))),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'דוח PDF'),
@@ -990,7 +1017,7 @@
             if (odOn) {
               status.textContent += ' מעלה ל-OneDrive…';
               await Sync.uploadPdf(cur, pdf);
-              status.textContent = `✓ ה-PDF הורד (${pdf.pages} עמודים) ונשמר גם בתיקיית הסקר ב-OneDrive.`;
+              status.textContent = `✓ ה-PDF הורד (${pdf.pages} עמודים) ונשמר גם ב-OneDrive.`;
             }
           }) }, 'הפק PDF'),
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
@@ -1022,7 +1049,8 @@
 
   function fileBase(s) {
     s = s || cur;
-    return safeName(`סקר בטיחות עצים - ${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}`);
+    // שני סקרים עם אותו שם ותאריך (באותה תיקיית פרויקט) מקבלים שמות קבצים שונים
+    return safeName(`סקר בטיחות עצים - ${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${(s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : ''}`);
   }
 
   async function deliver(blob, name) {
@@ -1094,6 +1122,8 @@
       h('input', { type: 'checkbox', style: 'width:24px;height:24px', checked: undefined, onchange: e => DB.setKV(key, e.target.checked), oncreate: null }), label);
     const annotateAfter = chk('annotateAfter', true, 'אחרי צילום לפתוח מסך סימון על התמונה (קווים וחצים)');
     annotateAfter.firstChild.checked = await DB.getKV('annotateAfter', true);
+    const inAppCamera = chk('inAppCamera', true, 'מצלמה מהירה בתוך האפליקציה (צילום ברצף). כבוי = אפליקציית המצלמה של המכשיר');
+    inAppCamera.firstChild.checked = await DB.getKV('inAppCamera', true);
     const shareFiles = chk('shareFiles', false, 'במקום הורדה, לפתוח את תפריט השיתוף (לשליחה לדרייב, וואטסאפ וכו\')');
     shareFiles.firstChild.checked = await DB.getKV('shareFiles', false);
     const speciesTa = h('textarea', { class: 'in', style: 'min-height:140px' });
@@ -1157,7 +1187,7 @@
           odStatus),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'עבודה בשטח'),
-          annotateAfter, shareFiles),
+          inAppCamera, annotateAfter, shareFiles),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'רשימות בחירה'),
           h('div', { class: 'muted small' }, 'שורה לכל פריט. האפליקציה מוסיפה אוטומטית גם מה שכבר כתבת בסקרים.'),
