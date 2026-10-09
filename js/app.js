@@ -1,13 +1,15 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.9.2';
+  const APP_VERSION = '1.10.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
     'אילנטה בלוטית', 'פרקינסוניה שיכנית', 'וושינגטוניה חסונה', 'תמר מצוי', 'דקל קנרי', 'זית אירופי', 'חרוב מצוי',
     'אלון מצוי', 'אלה אטלנטית', 'כליל החורש', 'מילה סורית', 'דולב מזרחי', 'אקליפטוס המקור', 'קזוארינה',
     "ג'קרנדה עלי-מימוזה", 'טיפואנה', 'ליגוסטרום יפני', 'אלביציה צהבהבה', 'שקד מצוי', 'רימון מצוי', 'תאנה', 'הדר', 'צפצפה', 'ערבה', 'סיגלון'];
+  // הערות קבועות לסקר לבנייה (ניתן לערוך בהגדרות)
+  const CONSTRUCTION_NOTES_SEED = ['לא בוגר', 'לא קיים', 'מיקום מקורב', 'פטור מרישיון'];
   const PHRASE_SEED = ['גיזום ענפים יבשים', 'הרמת נוף', 'דילול נוף', 'גיזום ענפים הנוגעים במבנה', 'גיזום ענפים מעל אזור משחק',
     'הסרת ענף שבור', 'הסרת ענפים תלויים', 'כריתה', 'כריתה ועקירת גדם', 'הסרת מכבדים', 'הדברה כנגד תהלוכן האורן',
     'קשירת ענפים', 'תקין, ללא טיפול'];
@@ -712,7 +714,10 @@
         h('div', { style: 'flex:1;min-width:160px' }, field('גוש', inp('gush', { inputmode: 'numeric' }))),
         h('div', { style: 'flex:1;min-width:160px' }, field('חלקה', inp('helka', { inputmode: 'numeric' })))),
       h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
-        h('h3', { style: 'margin:0;font-size:18px' }, 'הגדרות הסקר'),
+        h('label', { class: 'set-row' },
+          h('input', { type: 'checkbox', checked: !!cur.cset.embedPhotos, onchange: e => { cur.cset.embedPhotos = e.target.checked; saveSoon(); } }),
+          h('span', {}, h('b', {}, 'לצרף את התמונות לאקסל'), h('div', { class: 'muted small' }, 'התמונות שסומנו לדוח נכנסות לנספח (עמודות BF:BK) ליד מספר העץ. בלי סימון: רק מספרי העצים, והתמונות מתיקיית Pictures במחשב.'))),
+        h('h3', { style: 'margin:8px 0 0;font-size:18px' }, 'הגדרות הסקר'),
         h('div', { class: 'muted small' }, 'כמו בלשונית "חד גזעי" באקסל. חלות על כל העצים בסקר.'),
         Construction.SETTINGS.map(toggle), diam));
   }
@@ -791,7 +796,7 @@
     await saveNow();
   }
 
-  let sugCache = { speciesAll: SPECIES_SEED, speciesTop: SPECIES_SEED.slice(0, 10), phrasesTop: PHRASE_SEED };
+  let sugCache = { speciesAll: SPECIES_SEED, speciesTop: SPECIES_SEED.slice(0, 10), phrasesTop: PHRASE_SEED, constructionNotes: CONSTRUCTION_NOTES_SEED };
   function refreshSuggestions() { suggestions().then(s => { sugCache = s; }).catch(() => {}); }
 
   async function suggestions() {
@@ -813,6 +818,7 @@
       speciesAll: uniq(top(sp).concat(custom || SPECIES_SEED)),
       speciesTop: uniq(top(sp).concat(custom || SPECIES_SEED)).slice(0, 10),
       phrasesTop: uniq(top(ph).filter(p => ph.get(p) > 1).concat(phrases || PHRASE_SEED)).slice(0, 16),
+      constructionNotes: (await DB.getKV('constructionNotes', null)) || CONSTRUCTION_NOTES_SEED,
     };
   }
 
@@ -872,7 +878,7 @@
     // הערות
     const notesIn = h('textarea', { class: 'in', 'aria-label': 'הערות וטיפול מומלץ', oninput: e => { t.notes = e.target.value; changed(); } });
     notesIn.value = t.notes || '';
-    const notesChips = h('div', { class: 'chips' }, sug.phrasesTop.map(p => h('button', { class: 'chip', type: 'button',
+    const notesChips = h('div', { class: 'chips' }, (Construction.isConstruction(cur) ? sug.constructionNotes || CONSTRUCTION_NOTES_SEED : sug.phrasesTop).map(p => h('button', { class: 'chip', type: 'button',
       onclick: () => {
         const cur0 = notesIn.value.trim();
         notesIn.value = cur0 ? cur0.replace(/[,.]$/, '') + ', ' + p : p;
@@ -898,8 +904,8 @@
       h('div', { class: 'card stack' },
         h('div', { class: 'grid2' },
           h('div', {}, field('מספר העץ', numIn), splitWrap),
-          h('div', {}, field('מין עץ', spIn))),
-        spChips,
+          h('div', {}, field('מין עץ', build ? speciesCombo(spIn, t) : spIn))),
+        build ? null : spChips,
         build ? null : pineWrap,
         build,
         field(build ? 'הערות' : 'הערות וטיפול מומלץ', notesIn),
@@ -916,6 +922,32 @@
           h('button', { class: 'btn danger', onclick: deleteTree }, 'מחק עץ'),
           h('button', { class: 'btn primary', onclick: addTree }, '+ עץ הבא'))));
     renderPhotos();
+  }
+
+  // מין עץ בסקר לבנייה: רשימה נפתחת (חץ), חיפוש לפי חלק מהשם, ו-X שמנקה. רק שמות מהתבנית
+  function speciesCombo(input, t) {
+    input.removeAttribute('list');
+    input.setAttribute('autocomplete', 'off');
+    const names = [...Construction.SPECIES.keys()].filter(n => n.trim() && n !== 'Unknown');
+    const menu = h('div', { class: 'combo-menu hidden', role: 'listbox' });
+    const show = all => {
+      const q = all ? '' : input.value.trim();
+      const list = q ? names.filter(n => n.includes(q)) : names;
+      menu.replaceChildren(...(list.length ? list.slice(0, 200).map(n => h('button', { type: 'button', class: 'combo-opt', role: 'option',
+        onmousedown: e => e.preventDefault(),
+        onclick: () => { input.value = n; t.species = n; hide(); input.dispatchEvent(new Event('change')); input.dispatchEvent(new Event('input')); } }, n.trim()))
+        : [h('div', { class: 'muted small', style: 'padding:10px' }, 'אין מין כזה ברשימה')]));
+      menu.classList.remove('hidden');
+    };
+    const hide = () => menu.classList.add('hidden');
+    input.addEventListener('input', e => { if (e.isTrusted) show(false); });
+    input.addEventListener('focus', () => show(!input.value.trim() || Construction.SPECIES.has(Construction.canonSpecies(input.value))));
+    input.addEventListener('blur', () => setTimeout(hide, 150));
+    const arrow = h('button', { type: 'button', class: 'combo-btn', 'aria-label': 'פתח רשימת מינים', onmousedown: e => e.preventDefault(),
+      onclick: () => { if (menu.classList.contains('hidden')) { show(true); input.focus(); } else hide(); } }, '▾');
+    const clear = h('button', { type: 'button', class: 'combo-btn', 'aria-label': 'נקה', onmousedown: e => e.preventDefault(),
+      onclick: () => { input.value = ''; t.species = ''; input.dispatchEvent(new Event('input')); input.dispatchEvent(new Event('change')); input.focus(); show(true); } }, '✕');
+    return h('div', { class: 'combo' }, h('div', { class: 'combo-row' }, input, clear, arrow), menu);
   }
 
   // סקר לבנייה: מה שממלאים בשטח (כמו בגיליון סקר בתבנית), ומתחת הערכים שהאקסל מחשב
@@ -1395,7 +1427,7 @@
     if (Construction.isConstruction(s)) {
       const res = await fetch('template/construction.xltm');
       if (!res.ok) throw new Error('לא נמצאה תבנית סקר הבנייה');
-      const bytes = await Construction.buildWorkbook(new Uint8Array(await res.arrayBuffer()), s);
+      const bytes = await Construction.buildWorkbook(new Uint8Array(await res.arrayBuffer()), s, id => photoBlob(s, id));
       return { blob: new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }), name: fileBase(s) + '.xlsm', placed: 0 };
     }
     const r = await SurveyExcel.buildWorkbook(await templateBytes(), s, async id => {
@@ -1420,7 +1452,15 @@
       const zip = new JSZip();
       const used = new Set();
       // מספור כמו בנספח: עם תמונות בקובץ, לפי התמונות שסומנו; בלי, לפי משבצות התבנית
-      const pairs = true ? Core.reportSlots(cur.trees).map(sl => [sl.index, sl.photo])
+      // סקר לבנייה: שם הקובץ = מספר העץ, כמו הנתיב בתבנית (Pictures\<מספר>.jpg)
+      const seenN = new Map();
+      const constructionName = sl => {
+        const n = Core.firstNum(sl.label) != null ? String(Core.firstNum(sl.label)) : 'x';
+        const k = (seenN.get(n) || 0) + 1; seenN.set(n, k);
+        return k === 1 ? n : `${n}_${k}`;
+      };
+      const pairs = Construction.isConstruction(cur) ? Construction.photoSlots(cur.trees).map(sl => [constructionName(sl), sl.photo])
+        : true ? Core.reportSlots(cur.trees).map(sl => [sl.index, sl.photo])
         : Core.slotsOf(cur.trees).map(sl => [sl.index, Core.photoForSlot(sl)]);
       for (const [n, p] of pairs) {
         if (!p) continue;
@@ -1462,6 +1502,8 @@
     shareFiles.firstChild.checked = await DB.getKV('shareFiles', false);
     const speciesTa = h('textarea', { class: 'in', style: 'min-height:140px' });
     speciesTa.value = (await DB.getKV('species', null) || SPECIES_SEED).join('\n');
+    const cNotesTa = h('textarea', { class: 'in', style: 'min-height:110px' });
+    cNotesTa.value = (await DB.getKV('constructionNotes', null) || CONSTRUCTION_NOTES_SEED).join('\n');
     const phrasesTa = h('textarea', { class: 'in', style: 'min-height:140px' });
     phrasesTa.value = (await DB.getKV('phrases', null) || PHRASE_SEED).join('\n');
     const backupStatus = h('div', { class: 'small', role: 'status' });
@@ -1532,9 +1574,10 @@
           h('div', { class: 'muted small' }, 'שורה לכל פריט. האפליקציה מוסיפה אוטומטית גם מה שכבר כתבת בסקרים.'),
           field('מיני עצים', speciesTa),
           field('משפטי טיפול', phrasesTa),
+          field('הערות בסקר לבנייה (כפתורים מתחת להערות)', cNotesTa),
           h('button', { class: 'btn primary', onclick: async () => {
             const lines = ta => ta.value.split('\n').map(s => s.trim()).filter(Boolean);
-            await DB.setKV('species', lines(speciesTa)); await DB.setKV('phrases', lines(phrasesTa));
+            await DB.setKV('species', lines(speciesTa)); await DB.setKV('phrases', lines(phrasesTa)); await DB.setKV('constructionNotes', lines(cNotesTa)); refreshSuggestions();
             toast('נשמר');
           } }, 'שמור רשימות')),
         h('div', { class: 'card stack' },
