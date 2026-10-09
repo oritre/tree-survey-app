@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.1.3';
+  const APP_VERSION = '1.1.4';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -695,8 +695,8 @@
           h('div', { class: 'row' },
             h('button', { class: 'btn primary', onclick: async () => {
               // הטוקן נראה כך: 123456789:AAH...  מחלצים אותו גם מתוך הודעה שלמה של BotFather או עם רווחים
-              const raw = tokenIn.value.replace(/\s+/g, '');
-              const mt = raw.match(/\d{6,12}:[A-Za-z0-9_-]{35}/);
+              const raw = tokenIn.value;
+              const mt = raw.match(/\d{6,12}:[A-Za-z0-9_-]{30,}/) || raw.replace(/\s+/g, '').match(/\d{6,12}:[A-Za-z0-9_-]{35}/);
               if (!mt) { tgStatus.textContent = raw ? 'זה לא נראה כמו טוקן. טוקן נראה כך: 123456789:AAH... (מספר, נקודתיים, אותיות)' : ''; return; }
               const tk = mt[0];
               tokenIn.value = tk;
