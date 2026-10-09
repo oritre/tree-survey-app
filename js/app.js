@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.7.2';
+  const APP_VERSION = '1.8.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -109,8 +109,16 @@
   function bar(title, back, ...right) {
     return h('header', { class: 'bar' },
       back ? h('button', { class: 'icon-btn', 'aria-label': 'חזרה', onclick: () => go(back) }, '→') : null,
+      back ? homeBtn() : null,
       h('h1', {}, title), h('button', { class: 'sync-pill icon-btn', id: 'syncPill', onclick: () => go('#/health') }, syncText()), ...right,
       powerBtn());
+  }
+
+  // כפתור בית: חזרה למסך הראשי מכל מסך
+  function homeBtn() {
+    const b = h('button', { class: 'icon-btn home-btn', title: 'מסך הבית', 'aria-label': 'מסך הבית', onclick: () => go('#/') });
+    b.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 9.5V21h5v-6h4v6h5V9.5"/></svg>';
+    return b;
   }
 
   // כפתור כיבוי: ציור SVG (התו ⏻ לא קיים בגופן של רוב הטאבלטים)
@@ -156,7 +164,7 @@
       const ph = s.trees.reduce((a, t) => a + (t.photos || []).length, 0);
       return h('div', { class: 'card survey-item', role: 'button', tabindex: 0, onclick: () => go('#/s/' + s.id) },
         h('div', { style: 'flex:1;min-width:0' },
-          h('div', { class: 't' }, s.site || 'סקר ללא שם'),
+          h('div', { class: 't' }, s.site || 'סקר ללא שם', Construction.isConstruction(s) ? h('span', { class: 'badge type-badge' }, 'לבנייה') : null),
           h('div', { class: 'muted small' }, [s.code ? 'סמל ' + s.code : null, fmtDate(s.date)].filter(Boolean).join(' · ')),
           h('div', { class: 'small' }, `${n} עצים · ${ph} תמונות` + (s.finished ? ' · ✓ הסתיים, בענן' : s.finishPending ? ' · ממתין להעלאה' : ''))),
         h('span', { class: 'muted', 'aria-hidden': 'true' }, '←'));
@@ -237,8 +245,8 @@
 
   // סקר חדש להיום על בסיס סקר קיים. withPhotos: התמונות מועתקות (בטאבלט, או קישור לקובץ שכבר ב-OneDrive)
   async function copySurvey(old, withPhotos) {
-    const keep = ['num', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc'];
-    const s = { id: uid(), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
+    const keep = ['num', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS];
+    const s = { id: uid(), type: Construction.typeOf(old), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
       code: old.code || '', manager: old.manager || '', date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
     for (const t of old.trees || []) {
       const nt = Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, t[k]])));
@@ -597,9 +605,27 @@
     });
   }
 
+  // סקר חדש: קודם בוחרים סוג (יציבות / לבנייה)
+  function chooseType() {
+    return new Promise(resolve => {
+      const close = v => { ov.remove(); resolve(v); };
+      const opt = (type, title, sub) => h('button', { class: 'btn big type-opt', onclick: () => close(type) },
+        h('div', { style: 'font-size:20px;font-weight:700' }, title), h('div', { class: 'muted small' }, sub));
+      const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(null); } },
+        h('div', { class: 'card stack', style: 'max-width:440px;width:92%' },
+          h('h2', { style: 'margin:0;font-size:22px' }, 'איזה סקר?'),
+          opt('safety', '🌳 ' + Construction.TYPES.safety, 'דחיפות טיפול, אורנים, דוח בטיחות ומכתב אישור'),
+          opt('construction', '🏗 ' + Construction.TYPES.construction, 'גובה, קוטר, ערכיות 0-20 והמלצה: שימור / העתקה / כריתה'),
+          h('button', { class: 'btn', onclick: () => close(null) }, 'ביטול')));
+      document.body.append(ov);
+    });
+  }
+
   async function newSurvey() {
+    const type = await chooseType();
+    if (!type) return;
     const project = projectFilter != null ? projectFilter : await DB.getKV('lastProject', '');
-    const s = { id: uid(), project, site: '', siteName: '', street: '', city: await DB.getKV('lastCity', ''), code: '', manager: '', date: today(), trees: [], created: Date.now() };
+    const s = { id: uid(), type, project, site: '', siteName: '', street: '', city: await DB.getKV('lastCity', ''), code: '', manager: '', date: today(), trees: [], created: Date.now() };
     s.site = composeSite(s);
     await DB.putSurvey(s);
     go('#/s/' + s.id + '/details');
@@ -652,6 +678,8 @@
     });
     body.append(h('div', { class: 'card stack', style: 'max-width:720px;margin:0 auto' },
       projList, cityList, streetList,
+      field('סוג הסקר', h('select', { class: 'in', onchange: e => { cur.type = e.target.value; saveSoon(); } },
+        Object.entries(Construction.TYPES).map(([k, v]) => h('option', { value: k, selected: Construction.typeOf(cur) === k ? '' : null }, v)))),
       field('פרויקט (למשל: ירושלים)', inp('project', { list: 'projectList', placeholder: 'לניהול וסינון הסקרים, לא מופיע בדוח' })),
       field('שם המוסד / האתר', inp('siteName', { placeholder: 'למשל: גן חצב' })),
       h('div', { class: 'row', style: 'align-items:stretch' },
@@ -688,14 +716,15 @@
   }
 
   function treeRow(t) {
-    const pineMissing = Core.isPine(t.species) && (t.pines == null || t.pines === '');
+    const pineMissing = !Construction.isConstruction(cur) && Core.isPine(t.species) && (t.pines == null || t.pines === '');
     return h('button', { class: 'tree-row' + (t.id === curTreeId ? ' on' : ''), 'data-id': t.id, onclick: () => selectTree(t.id) },
       h('span', { class: 'n' }, t.num || '—'),
       h('span', { style: 'min-width:0' },
         h('div', { class: 'sp' }, t.species || 'ללא מין'),
         h('div', { class: 'meta' }, t.notes || '')),
       h('span', { class: 'badges' },
-        t.urgency ? h('span', { class: 'badge u-' + t.urgency }, t.urgency) : null,
+        Construction.isConstruction(cur) ? (t.rec ? h('span', { class: 'badge rec-' + t.rec }, t.rec) : null)
+          : t.urgency ? h('span', { class: 'badge u-' + t.urgency }, t.urgency) : null,
         pineMissing ? h('span', { class: 'badge alert', title: 'חסרה כמות אורנים' }, 'אורנים?') : null,
         h('span', { class: 'badge', title: 'תמונות' }, '📷' + (t.photos || []).length),
         t.lat != null ? h('span', { class: 'badge', title: 'יש נ"צ' }, '📍') : null));
@@ -791,12 +820,13 @@
       oninput: e => { t.pines = e.target.value === '' ? null : Number(e.target.value); markPine(); changed(); } });
     const pineWrap = field('כמה אורנים?', pineIn);
     const markPine = () => {
-      const pine = Core.isPine(t.species);
+      const pine = Core.isPine(t.species) && !Construction.isConstruction(cur);
       pineWrap.classList.toggle('hidden', !pine && (t.pines == null || t.pines === ''));
       pineIn.classList.toggle('alert', pine && (t.pines == null || t.pines === ''));
     };
     // כשנכתב אורן (גם עם עוד מינים או בשגיאת כתיב) ואין כמות: שואל מיד "כמה אורנים?"
     const askPines = async () => {
+      if (Construction.isConstruction(cur)) return;
       if (!Core.isPine(t.species) || (t.pines != null && t.pines !== '') || t._askedPines === t.species) return;
       t._askedPines = t.species;
       const n = await askNumber('כמה אורנים?', `במין העץ "${t.species}" זוהה אורן`);
@@ -832,6 +862,7 @@
     renderGps(t, gpsBox);
 
     const photosBox = h('div', { id: 'photosBox' });
+    const build = Construction.isConstruction(cur) ? constructionFields(t, changed) : null;
 
     pane.replaceChildren(
       h('datalist', { id: 'speciesList' }, sug.speciesAll.map(s => h('option', { value: s }))),
@@ -840,10 +871,11 @@
           h('div', {}, field('מספר העץ', numIn), splitWrap),
           h('div', {}, field('מין עץ', spIn))),
         spChips,
-        pineWrap,
-        field('הערות וטיפול מומלץ', notesIn),
+        build ? null : pineWrap,
+        build,
+        field(build ? 'הערות' : 'הערות וטיפול מומלץ', notesIn),
         notesChips,
-        field('דחיפות', seg),
+        build ? null : field('דחיפות', seg),
         h('div', {},
           h('label', { class: 'f' }, 'תמונות'),
           h('div', { class: 'row', style: 'margin-bottom:10px' },
@@ -855,6 +887,38 @@
           h('button', { class: 'btn danger', onclick: deleteTree }, 'מחק עץ'),
           h('button', { class: 'btn primary', onclick: addTree }, '+ עץ הבא'))));
     renderPhotos();
+  }
+
+  // סקר לבנייה: מידות, ניקוד 0-5 בארבעה מדדים (סה"כ ערכיות 0-20) והמלצה
+  function constructionFields(t, changed) {
+    const totalBox = h('div', { class: 'value-box', role: 'status' });
+    const showTotal = () => {
+      const n = Construction.total(t);
+      totalBox.replaceChildren(n == null ? h('span', { class: 'muted' }, 'ערכיות: ממלאים את ארבעת הציונים')
+        : h('span', {}, 'ערכיות ', h('b', {}, n + '/20'), ' · ', h('b', {}, Construction.category(n))));
+      totalBox.dataset.cat = Construction.category(n);
+    };
+    showTotal();
+    const measure = ([k, label]) => field(label, h('input', { class: 'in', inputmode: 'decimal', value: t[k] == null ? '' : t[k],
+      oninput: e => { t[k] = e.target.value.trim(); changed(); } }));
+    const score = ([k, label]) => {
+      const seg = h('div', { class: 'seg score', role: 'group', 'aria-label': label }, [0, 1, 2, 3, 4, 5].map(v =>
+        h('button', { type: 'button', class: String(t[k]) === String(v) ? 'on' : '', onclick: e => {
+          t[k] = String(t[k]) === String(v) ? null : v; changed(); showTotal();
+          [...seg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget && t[k] != null));
+        } }, String(v))));
+      return field(label, seg);
+    };
+    const recSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'המלצה' }, Construction.RECS.map(r =>
+      h('button', { type: 'button', class: t.rec === r ? 'on' : '', onclick: e => {
+        t.rec = t.rec === r ? '' : r; changed();
+        [...recSeg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget && !!t.rec));
+      } }, r)));
+    return h('div', { class: 'stack' },
+      h('div', { class: 'grid4' }, Construction.MEASURES.map(measure)),
+      h('div', { class: 'grid2 scores' }, Construction.SCORES.map(score)),
+      totalBox,
+      field('המלצה', recSeg));
   }
 
   async function deleteTree() {
@@ -1106,6 +1170,7 @@
 
   // ---------- הפקה ----------
   async function renderExport(body) {
+    if (Construction.isConstruction(cur)) return renderConstructionExport(body);
     const warns = Core.warnings(cur);
     const rs = Core.reportSlots(cur.trees);
     const status = h('div', { class: 'small muted', role: 'status' });
@@ -1195,6 +1260,62 @@
     const off = Sync.onChange(() => { if (!document.body.contains(syncBox)) { if (off) off(); return; } drawSync(); });
   }
 
+  // הפקה לסקר לבנייה: טבלת אקסל, תמונות ו-GIS. "סיום סקר" מעלה את האקסל ל-OneDrive ומפנה את התמונות
+  async function renderConstructionExport(body) {
+    const warns = Construction.warnings(cur);
+    const status = h('div', { class: 'small muted', role: 'status' });
+    const odOn = await OD.connected();
+    const n = cur.trees.filter(Core.hasContent).length;
+    const by = r => cur.trees.filter(Core.hasContent).filter(t => t.rec === r).length;
+    const busy = async (btn, fn) => { btn.disabled = true; try { await fn(); } catch (err) { console.error(err); status.textContent = 'נכשל: ' + err.message; } finally { btn.disabled = false; } };
+    const hm = t => new Date(t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    body.append(h('div', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
+      h('div', { class: 'card stack' },
+        h('h2', { style: 'margin:0;font-size:20px' }, 'סיכום'),
+        h('div', {}, `${n} עצים · ` + Construction.RECS.map(r => `${r}: ${by(r)}`).join(' · ')),
+        h('div', { class: 'muted small' }, 'נוסח הדוח לסקר לבנייה (PDF) יתווסף כשתגיע תבנית. בינתיים: טבלת אקסל, תמונות ושכבת GIS.')),
+      h('div', { class: 'card stack' },
+        h('h2', { style: 'margin:0;font-size:20px' }, 'סיום סקר'),
+        cur.finished ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}. האקסל בתיקיית הפרויקט ב-OneDrive.`)
+          : cur.finishPending ? h('div', { class: 'small' }, '⟳ מעלה את התמונות ואת האקסל…')
+          : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר את טבלת האקסל ב-OneDrive ומפנה את התמונות מהטאבלט.'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary big', onclick: async () => {
+            if (!odOn) { toast('צריך לחבר את OneDrive בהגדרות', 4000); return; }
+            if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
+            cur.finishPending = true; cur.finished = false;
+            await saveNow(); Sync.now(); go(`#/s/${cur.id}/export`);
+            toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה ל-OneDrive…', 3000);
+          } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'))),
+      h('div', { class: 'card stack' },
+        h('h2', { style: 'margin:0;font-size:20px' }, 'טבלת עצים'),
+        h('div', { class: 'muted small' }, 'מס\' עץ, מין, גובה, גזעים, קוטר גזע וחופה, ניקוד, ערכיות, המלצה, הערות ונ"צ.'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
+            await saveNow();
+            const r = await buildReport(cur);
+            await deliver(r.blob, r.name);
+            status.textContent = '✓ האקסל הורד.';
+            if (odOn) { status.textContent += ' מעלה ל-OneDrive…'; await Sync.uploadReport(cur); status.textContent = '✓ האקסל הורד ונשמר גם ב-OneDrive.'; }
+          }) }, 'הורד אקסל'),
+          h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
+        status),
+      h('div', { class: 'card stack' },
+        h('h2', { style: 'margin:0;font-size:20px' }, 'שכבת GIS'),
+        h('div', { class: 'muted small' }, `${cur.trees.filter(t => t.lat != null).length} עצים עם נ"צ.`),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn', onclick: () => deliver(new Blob([Gis.geojson([cur])], { type: 'application/geo+json' }), fileBase() + '.geojson') }, 'GeoJSON'),
+          h('button', { class: 'btn', onclick: () => deliver(new Blob([Gis.kml([cur], cur.site)], { type: 'application/vnd.google-earth.kml+xml' }), fileBase() + '.kml') }, 'KML'),
+          h('button', { class: 'btn primary', onclick: e => busy(e.currentTarget, async () => {
+            await saveNow();
+            status.textContent = 'מכין מפה…';
+            status.textContent = await shareMap([cur], cur.site || 'סקר עצים');
+          }) }, '🗺 מפת עצים לשיתוף'))),
+      h('div', { class: 'card stack' },
+        h('h2', { style: 'margin:0;font-size:20px' }, 'בדיקה לפני הפקה'),
+        warns.length ? h('ul', { class: 'warn-list' }, warns.map(w => h('li', {}, w))) : h('div', { class: 'okbox' }, 'הכול מלא.'))));
+  }
+
   async function templateBytes() {
     const res = await fetch('template/survey.xltm');
     if (!res.ok) throw new Error('לא נמצאה התבנית');
@@ -1204,7 +1325,8 @@
   function fileBase(s) {
     s = s || cur;
     // שני סקרים עם אותו שם ותאריך (באותה תיקיית פרויקט) מקבלים שמות קבצים שונים
-    return safeName(`סקר בטיחות עצים - ${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${(s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : ''}`);
+    const kind = Construction.isConstruction(s) ? 'סקר עצים לבנייה' : 'סקר בטיחות עצים';
+    return safeName(`${kind} - ${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${(s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : ''}`);
   }
 
   async function deliver(blob, name) {
@@ -1219,6 +1341,7 @@
 
   // בונה את קובץ האקסל של סקר (משמש גם להורדה וגם ל-OneDrive)
   async function buildReport(s) {
+    if (Construction.isConstruction(s)) return { blob: await Construction.xlsx(s), name: fileBase(s) + '.xlsx', placed: 0 };
     const r = await SurveyExcel.buildWorkbook(await templateBytes(), s, async id => {
       const p = await DB.getPhoto(id);
       const blob = await photoBlob(s, id);
@@ -1229,6 +1352,7 @@
 
   // דוח PDF (אותו שם כמו האקסל, כדי שיופיעו אחד ליד השני ב-OneDrive)
   async function buildPdf(s, onProgress) {
+    if (Construction.isConstruction(s)) return null; // הדוח לבנייה עוד לא מוגדר
     const r = await ReportPrint.toPdf(s, id => photoBlob(s, id), onProgress);
     return { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages };
   }

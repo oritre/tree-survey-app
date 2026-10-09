@@ -308,7 +308,8 @@
     await putReportFile(s, r.name, r.blob);
     s.odReportHash = hashSurvey(s); s.odReportAt = Date.now();
     log('ok', 'האקסל נשמר ב-OneDrive', s);
-    if (opts && opts.pdf) await uploadPdf(s, await root.App.buildPdf(s));
+    const pdf = opts && opts.pdf ? await root.App.buildPdf(s) : null;
+    if (pdf) await uploadPdf(s, pdf);
     await DB.putSurvey(s);
   }
   async function uploadPdf(s, pdf) {
