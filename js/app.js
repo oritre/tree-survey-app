@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.9.0';
+  const APP_VERSION = '1.9.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -647,7 +647,7 @@
   }
 
   // שם המוסד, רחוב ועיר נשמרים בנפרד, ובכותרת הדוח (F9) מופיעים יחד: "שם, רחוב, עיר"
-  const composeSite = s => [s.siteName, s.street, s.city].map(x => (x || '').trim()).filter(Boolean).join(', ');
+  const composeSite = s => [Construction.isConstruction(s) ? '' : s.siteName, s.street, s.city].map(x => (x || '').trim()).filter(Boolean).join(', ');
   function migrateSite(s) {
     if (s.siteName == null && s.street == null && s.city == null) { s.siteName = s.site || ''; s.street = ''; s.city = ''; }
   }
@@ -655,6 +655,8 @@
   function field(label, input) { return h('div', {}, h('label', { class: 'f' }, label), input); }
 
   function renderDetails(body) {
+    const build = Construction.isConstruction(cur);
+    if (build) cur.site = composeSite(cur);
     const inp = (key, attrs) => h('input', Object.assign({
       class: 'in', value: cur[key] || '',
       oninput: e => {
@@ -678,18 +680,18 @@
     });
     body.append(h('div', { class: 'card stack', style: 'max-width:720px;margin:0 auto' },
       projList, cityList, streetList,
-      field('סוג הסקר', h('select', { class: 'in', onchange: e => { cur.type = e.target.value; saveSoon(); } },
+      field('סוג הסקר', h('select', { class: 'in', onchange: e => { cur.type = e.target.value; cur.site = composeSite(cur); saveSoon(); renderSurvey(); } },
         Object.entries(Construction.TYPES).map(([k, v]) => h('option', { value: k, selected: Construction.typeOf(cur) === k ? '' : null }, v)))),
       field('פרויקט (למשל: ירושלים)', inp('project', { list: 'projectList', placeholder: 'לניהול וסינון הסקרים, לא מופיע בדוח' })),
-      field('שם המוסד / האתר', inp('siteName', { placeholder: 'למשל: גן חצב' })),
+      build ? null : field('שם המוסד / האתר', inp('siteName', { placeholder: 'למשל: גן חצב' })),
       h('div', { class: 'row', style: 'align-items:stretch' },
         h('div', { style: 'flex:2;min-width:200px' }, field('רחוב ומספר', inp('street', { list: 'streetList', placeholder: 'למשל: הנרקיס 5' }))),
         h('div', { style: 'flex:1;min-width:160px' }, field('עיר', inp('city', { list: 'cityList', placeholder: 'למשל: ירושלים' })))),
-      h('div', { class: 'muted small' }, 'בכותרת הדוח: שם המוסד בשורה הראשונה, ומתחתיו רחוב ועיר.'),
+      h('div', { class: 'muted small' }, build ? 'בכותרת האקסל (B7): רחוב ועיר.' : 'בכותרת הדוח: שם המוסד בשורה הראשונה, ומתחתיו רחוב ועיר.'),
       h('div', { class: 'row', style: 'align-items:stretch' },
-        h('div', { style: 'flex:1;min-width:200px' }, field('סמל מוסד (אם יש)', inp('code', { inputmode: 'numeric' }))),
+        build ? null : h('div', { style: 'flex:1;min-width:200px' }, field('סמל מוסד (אם יש)', inp('code', { inputmode: 'numeric' }))),
         h('div', { style: 'flex:1;min-width:200px' }, field('תאריך הסקר', inp('date', { type: 'date' })))),
-      Construction.isConstruction(cur) ? constructionDetails(inp) : field('מנהל/ת', inp('manager')),
+      build ? constructionDetails(inp) : field('מנהל/ת', inp('manager')),
       h('div', { class: 'row' },
         h('button', { class: 'btn primary big', onclick: () => go(`#/s/${cur.id}/trees`) }, 'המשך לעצים'),
         h('span', { style: 'flex:1' }),
@@ -861,7 +863,10 @@
       oninput: e => { t.species = e.target.value; markPine(); changed(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); if (e.inputType === 'insertReplacementText' || !e.inputType) askPines(); },
       onchange: askPines });
     markPine();
-    const spChips = h('div', { class: 'chips' }, sug.speciesTop.map(s => h('button', { class: 'chip', type: 'button',
+    const chipSpecies = Construction.isConstruction(cur)
+      ? [...new Set(sug.speciesAll.map(Construction.canonSpecies).filter(x => Construction.SPECIES.has(x)))].slice(0, 16)
+      : sug.speciesTop;
+    const spChips = h('div', { class: 'chips' }, chipSpecies.map(s => h('button', { class: 'chip', type: 'button',
       onclick: () => { t.species = s; spIn.value = s; markPine(); changed(); askPines(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); } }, s)));
 
     // הערות
@@ -889,7 +894,7 @@
     const build = Construction.isConstruction(cur) ? constructionFields(t, changed, spIn) : null;
 
     pane.replaceChildren(
-      h('datalist', { id: 'speciesList' }, (build ? [...new Set(sug.speciesAll.concat([...Construction.SPECIES.keys()].map(x => x.trim())))] : sug.speciesAll).map(s => h('option', { value: s }))),
+      h('datalist', { id: 'speciesList' }, (build ? [...Construction.SPECIES.keys()] : sug.speciesAll).map(s => h('option', { value: s }))),
       h('div', { class: 'card stack' },
         h('div', { class: 'grid2' },
           h('div', {}, field('מספר העץ', numIn), splitWrap),
@@ -946,15 +951,19 @@
         } }, String(v))));
       return field(label + ' (0-5)', seg);
     };
-    const trIn = h('input', { class: 'in', value: t.transplant || '', list: 'transplantList', oninput: e => { t.transplant = e.target.value; changed(); } });
+    const curTr = Construction.transplantOf(t);
+    const trSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'היתכנות העתקה' }, Construction.TRANSPLANT.map(v =>
+      h('button', { type: 'button', class: curTr === v ? 'on' : '', onclick: e => {
+        t.transplant = v; changed();
+        [...trSeg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget));
+      } }, v)));
     // מין העץ: כשנבחר שם מהרשימה, נשמר בדיוק כמו בתבנית
     spIn.addEventListener('change', () => { const c = Construction.canonSpecies(t.species); if (c !== t.species) { t.species = c; spIn.value = c; changed(); } showAuto(); });
     constructionFields.refresh = showAuto;
     return h('div', { class: 'stack' },
       h('div', { class: 'grid4' }, Construction.MEASURES.map(measure)),
       h('div', { class: 'grid2 scores' }, Construction.SCORES.map(score)),
-      field('היתכנות העתקה', trIn),
-      h('datalist', { id: 'transplantList' }, ['ניתן להעתקה', 'לא ניתן להעתקה'].map(v => h('option', { value: v }))),
+      field('היתכנות העתקה', trSeg),
       autoBox);
   }
 

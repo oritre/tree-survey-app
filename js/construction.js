@@ -11,7 +11,9 @@
   const SPECIES = new Map(D.SPECIES.map(([name, r, s, v]) => [name, { r, s, v }]));
   // שם כפי שנכתב בטאבלט -> השם המדויק ברשימה (ברשימה יש שמות עם רווח בסוף, והאקסל משווה בדיוק)
   const byTrim = new Map(D.SPECIES.map(([name]) => [name.trim(), name]));
-  const canonSpecies = name => { const n = String(name || ''); return SPECIES.has(n) ? n : (byTrim.get(n.trim()) || n); };
+  // טקסט נקי בלבד: בלי סימני כיווניות ורווח קשיח, שלא ישברו את החיפוש באקסל
+  const clean = v => String(v || '').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '').replace(/\u00a0/g, ' ');
+  const canonSpecies = name => { const n = clean(name); return SPECIES.has(n) ? n : (byTrim.get(n.trim()) || n); };
   const ALWAYS_EXEMPT = new Set(D.ALWAYS_EXEMPT);
   const PALMS = new Map(Object.entries(D.PALMS));
   const COLUMNAR = new Set(D.COLUMNAR);
@@ -35,6 +37,9 @@
   // מה שממלאים בשטח (העמודה בגיליון סקר בסוגריים). כל השאר מחושב
   const MEASURES = [['qty', 'כמות עצים', 'D'], ['height', "גובה עץ (מ')", 'E'], ['f1', 'גזע 1 (ס"מ)', 'F'], ['f2', 'גזע 2', 'G'], ['f3', 'גזע 3', 'H']];
   const SCORES = [['health', 'מצב בריאותי', 'J'], ['loc', 'מקום העץ', 'K'], ['canopy', 'חופת העץ', 'M']];
+  // היתכנות העתקה (Q): רק אחד מאלה, ברירת מחדל מקף
+  const TRANSPLANT = ['נמוכה', 'בינונית', 'גבוהה', '-'];
+  const transplantOf = t => TRANSPLANT.includes(t.transplant) ? t.transplant : '-';
   const FIELDS = MEASURES.map(m => m[0]).concat(SCORES.map(s => s[0]), ['transplant']);
 
   const num = v => (v == null || v === '' || isNaN(+v)) ? null : Number(v);
@@ -200,7 +205,7 @@
       sheet.set('C' + r, c.name.trim() ? c.name : null);
       for (const [k, , col] of MEASURES) sheet.set(col + r, num(t[k]));
       for (const [k, , col] of SCORES) sheet.set(col + r, num(t[k]));
-      sheet.set('Q' + r, (t.transplant || '').trim() || null);
+      sheet.set('Q' + r, transplantOf(t));
       sheet.set('R' + r, (t.notes || '').trim() || null);
       sheet.cached('I' + r, c.I); sheet.cached('L' + r, c.L); sheet.cached('N' + r, c.N);
       sheet.cached('O' + r, c.O); sheet.cached('P' + r, c.P);
@@ -222,7 +227,7 @@
   }
 
   root.Construction = {
-    TYPES, typeOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
+    TYPES, typeOf, TRANSPLANT, transplantOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
     compute, category, warnings, buildWorkbook, TREE_ROWS, pagesFor,
   };
 })(this);
