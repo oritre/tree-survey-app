@@ -56,6 +56,7 @@
       return v === undefined ? def : v;
     },
     setKV(k, v) { return tx('kv', 'readwrite', st => { st.put(v, k); }); },
+    delKV(k) { return tx('kv', 'readwrite', st => { st.delete(k); }); },
   };
   root.DB = DB;
 })(self);

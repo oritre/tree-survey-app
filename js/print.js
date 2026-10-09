@@ -413,10 +413,25 @@
     return { blob: makePdf(out), pages: pages.length };
   }
 
+  // העמודים של PDF שהאפליקציה יצרה (כל עמוד הוא תמונת JPEG אחת), לתצוגה בתוך האפליקציה
+  async function pdfPages(blob) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const text = new TextDecoder('latin1').decode(bytes);
+    const re = /\/Filter \/DCTDecode \/Length (\d+) >>\nstream\n/g;
+    const out = [];
+    let m;
+    while ((m = re.exec(text))) {
+      const start = m.index + m[0].length, n = +m[1];
+      out.push(new Blob([bytes.subarray(start, start + n)], { type: 'image/jpeg' }));
+      re.lastIndex = start + n;
+    }
+    return out;
+  }
+
   function fileTitle(survey) {
     const place = Core.placeOf(survey);
     return (place.name ? `${survey.code ? survey.code + ' ' : ''}${place.name}` : 'סקר בטיחות עצים').replace(/[\\/:*?"<>|]+/g, ' ');
   }
 
-  root.ReportPrint = { toPdf, buildPages, preloadFonts, fileTitle, CSS };
+  root.ReportPrint = { toPdf, pdfPages, buildPages, preloadFonts, fileTitle, CSS };
 })(self);
