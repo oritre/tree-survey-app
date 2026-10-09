@@ -273,6 +273,33 @@
     await DB.putSurvey(s);
   }
 
+  // הגדרות משותפות לכל המכשירים (טוקן הטלגרם והצ'אט), בקובץ בתיקיית הגיבוי ב-OneDrive.
+  // מה שעודכן אחרון (בטאבלט או בענן) הוא שקובע
+  const SETTINGS = 'הגדרות משותפות.json';
+  let settingsSynced = false;
+  async function syncSettings() {
+    const r = await backupRoot();
+    const cloud = (await OD.readJson(r, SETTINGS)) || {};
+    const local = { tgToken: await DB.getKV('tgToken', ''), tgChat: await DB.getKV('tgChat', ''), tgChatName: await DB.getKV('tgChatName', ''), tgUpdated: await DB.getKV('tgUpdated', 0) };
+    if ((cloud.tgUpdated || 0) > local.tgUpdated) {
+      for (const k of ['tgToken', 'tgChat', 'tgChatName', 'tgUpdated']) await DB.setKV(k, cloud[k] != null ? cloud[k] : '');
+      log('info', cloud.tgToken ? 'הגדרות הטלגרם נטענו מהענן' : 'הטלגרם נותק במכשיר אחר');
+    } else if (local.tgUpdated > (cloud.tgUpdated || 0) || (!cloud.tgUpdated && local.tgToken)) {
+      if (!local.tgUpdated) { local.tgUpdated = Date.now(); await DB.setKV('tgUpdated', local.tgUpdated); }
+      await OD.upload(r, SETTINGS, new Blob([JSON.stringify(Object.assign(cloud, local))], { type: 'application/json' }), true);
+    }
+    settingsSynced = true;
+  }
+
+  // סקר מלא לפי רשומה באינדקס: מהטאבלט אם הוא שם, אחרת מ-OneDrive
+  async function loadSurvey(e) {
+    const local = await DB.getSurvey(e.id);
+    if (local) return local;
+    if (!e.dataId) return null;
+    const b = await OD.download(e.dataId);
+    return b ? JSON.parse(await b.text()) : null;
+  }
+
   async function cloudIndex() {
     const r = await rootFolder();
     const idx = (await OD.readJson(r, INDEX)) || { surveys: [] };
@@ -316,6 +343,9 @@
     running = true; again = false;
     state.busy = true; state.error = ''; state.offline = !navigator.onLine; emit();
     try {
+      if (!settingsSynced && !state.offline && (await OD.connected())) {
+        try { await syncSettings(); } catch (e) { if (e instanceof OD.AuthError) state.odNeedsLogin = true; }
+      }
       const token = await DB.getKV('tgToken', ''), chat = await DB.getKV('tgChat', '');
       const tgOn = !!(token && chat);
       const odOn = (await OD.connected()) && !!(await OD.clientId());
@@ -367,7 +397,9 @@
     // פעולות ידניות: עובדות על הסקר הפתוח ומחכות לסיום
     async uploadReport(s) { await syncFolders(s); await uploadReport(s, { pdf: false }); },
     async uploadPdf(s, pdf) { await syncFolders(s); await uploadPdf(s, pdf); },
-    cloudIndex, allInCloud, freeLocal, log, hashSurvey,
+    cloudIndex, allInCloud, freeLocal, log, hashSurvey, loadSurvey,
+    // הגדרות הטלגרם השתנו בטאבלט: יישמרו בענן בגיבוי הבא
+    settingsChanged() { settingsSynced = false; DB.setKV('tgUpdated', Date.now()).then(() => schedule(0)); },
     pendingOf(s, tgOn, odOn) {
       const ph = s.trees.flatMap(t => t.photos || []);
       return {

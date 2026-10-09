@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.6.0';
+  const APP_VERSION = '1.7.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -100,6 +100,7 @@
     cur = null;
     if (hash.startsWith('#/cloud')) return renderCloud();
     if (hash.startsWith('#/health')) return renderHealth();
+    if (hash.startsWith('#/summary')) return renderSummary();
     if (hash.startsWith('#/settings')) return renderSettings();
     return renderHome();
   }
@@ -174,7 +175,8 @@
       h('main', { class: 'stack' },
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', style: 'flex:1', onclick: newSurvey }, '+ סקר חדש'),
-          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/cloud') }, '🔎 חיפוש סקרים בענן')),
+          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/cloud') }, '🔎 חיפוש סקרים בענן'),
+          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/summary') }, '🌲 אורנים ומפות')),
         chips, list,
         hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} סקרים מימים קודמים שמורים בענן. `,
           h('a', { href: '#/cloud' }, 'לחיפוש סקרים בענן')) : null,
@@ -351,12 +353,19 @@
       document.head.append(sc);
     }));
   }
+  // תצלומי אוויר: גוגל (הכי חד בישראל) ו-Bing (ב-zoom עמוק ממשיך להגדיל את התמונה האחרונה במקום להיעלם)
   const LAYERS = {
-    'גוגל – מפה': ['https://mt{s}.google.com/vt/lyrs=m&hl=iw&x={x}&y={y}&z={z}', { subdomains: '0123', maxZoom: 21, attribution: '© Google' }],
-    'גוגל – לוויין': ['https://mt{s}.google.com/vt/lyrs=y&hl=iw&x={x}&y={y}&z={z}', { subdomains: '0123', maxZoom: 21, attribution: '© Google' }],
-    'תצלום אוויר (Esri)': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 19, attribution: '© Esri' }],
-    'OpenStreetMap': ['https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '© OpenStreetMap' }],
+    'גוגל – לוויין': ['https://mt{s}.google.com/vt/lyrs=y&hl=iw&x={x}&y={y}&z={z}', { subdomains: '0123', maxZoom: 22, maxNativeZoom: 21, attribution: '© Google' }],
+    'Bing – תצלום אוויר': ['bing', { maxZoom: 22, maxNativeZoom: 19, attribution: '© Microsoft' }],
+    'גוגל – מפה': ['https://mt{s}.google.com/vt/lyrs=m&hl=iw&x={x}&y={y}&z={z}', { subdomains: '0123', maxZoom: 22, maxNativeZoom: 21, attribution: '© Google' }],
   };
+  function tileLayer(url, o) {
+    const L = window.L;
+    if (url !== 'bing') return L.tileLayer(url, o);
+    const quad = (x, y, z) => { let q = ''; for (let i = z; i > 0; i--) { const m = 1 << (i - 1); q += ((x & m) ? 1 : 0) + ((y & m) ? 2 : 0); } return q; };
+    const Bing = L.TileLayer.extend({ getTileUrl: c => `https://ecn.t${(c.x + c.y) % 4}.tiles.virtualearth.net/tiles/a${quad(c.x, c.y, c.z)}.jpeg?g=1` });
+    return new Bing('', o);
+  }
   async function refineOnMap(t) {
     if (!navigator.onLine) { toast('אין קליטה: המפה צריכה אינטרנט', 3000); return; }
     try { await loadLeaflet(); } catch (e) { toast(e.message, 3000); return; }
@@ -373,9 +382,9 @@
       h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, h('div', { class: 'crosshair' })),
       h('div', { class: 'map-info' }, info));
     document.body.append(ov);
-    const map = window.L.map(mapEl, { zoomControl: true, attributionControl: true }).setView(start, t.lat != null ? 20 : 18);
+    const map = window.L.map(mapEl, { zoomControl: true, attributionControl: true, maxZoom: 22 }).setView(start, t.lat != null ? 20 : 18);
     const base = {};
-    for (const [name, [url, o]] of Object.entries(LAYERS)) base[name] = window.L.tileLayer(url, o);
+    for (const [name, [url, o]] of Object.entries(LAYERS)) base[name] = tileLayer(url, o);
     const pref = await DB.getKV('mapLayer', 'גוגל – לוויין');
     (base[pref] || base['גוגל – לוויין']).addTo(map);
     window.L.control.layers(base, null, { position: 'topleft', collapsed: false }).addTo(map);
@@ -446,6 +455,135 @@
       go('#/s/' + s.id + '/details');
     } catch (err) { toast('נכשל: ' + err.message, 5000); }
     finally { btn.disabled = false; }
+  }
+
+  // ---------- אורנים ומפות: סיכום על פני כמה סקרים ----------
+  // תמונה ממוזערת לעץ במפה: מהטאבלט אם יש, אחרת מ-OneDrive
+  async function mapThumb(s, p) {
+    const rec = await DB.getPhoto(p.id);
+    if (rec && (rec.thumb || rec.blob)) return rec.thumb || await makeThumb(rec.blob);
+    return p.odId && navigator.onLine && await OD.connected() ? OD.thumb(p.odId) : null;
+  }
+  // מפה כדף אינטרנט אחד: מורידים/משתפים, ונשמרת גם בתיקיית הפרויקט ב-OneDrive. מחזיר הודעה למשתמש
+  async function shareMap(surveys, title, onProgress) {
+    const r = await Reports.mapHtml(surveys, title, mapThumb);
+    if (!r.points) throw new Error('אין עצים עם נ"צ בסקרים שנבחרו');
+    const name = safeName(`מפת עצים - ${title} - ${fmtDate(today()).replace(/\//g, '.')}`) + '.html';
+    await deliver(r.blob, name);
+    let msg = `✓ המפה הורדה: ${r.points} עצים` + (r.noGps ? ` (${r.noGps} עצים בלי נ"צ לא מופיעים)` : '') + '. אפשר לשלוח את הקובץ בוואטסאפ או במייל, והוא נפתח בכל דפדפן.';
+    const saved = await saveSummaryToCloud(surveys, name, r.blob);
+    if (saved) msg += ` נשמרה גם ב-OneDrive: ${saved}.`;
+    return msg;
+  }
+  // קובץ סיכום לתיקיית הדוחות ב-OneDrive (תיקיית הפרויקט אם כולם מאותו פרויקט)
+  async function saveSummaryToCloud(surveys, name, blob) {
+    try {
+      if (!navigator.onLine || !(await OD.connected())) return '';
+      const root = await OD.folder(null, (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים');
+      const projects = [...new Set(surveys.map(s => s.project || 'ללא פרויקט'))];
+      const dir = projects.length === 1 ? await OD.folder(root, projects[0]) : root;
+      await OD.upload(dir, name, blob, true);
+      const path = ((await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים') + (projects.length === 1 ? '/' + projects[0] : '');
+      Sync.log('ok', 'קובץ סיכום נשמר ב-OneDrive: ' + name);
+      return path;
+    } catch (e) { Sync.log('error', 'שמירת קובץ סיכום ב-OneDrive נכשלה: ' + e.message); return ''; }
+  }
+
+  async function renderSummary() {
+    const app = $('#app');
+    const msg = h('div', { class: 'muted small', role: 'status' });
+    const status = h('div', { class: 'small', role: 'status' });
+    const q = h('input', { class: 'in', type: 'search', placeholder: 'סינון: פרויקט, סמל, שם, רחוב, עיר' });
+    const latest = h('input', { type: 'checkbox', checked: true });
+    const list = h('div', { class: 'stack' });
+    const sel = new Set();
+    let entries = [];
+    const btnP = h('button', { class: 'btn primary big', disabled: true }, '🌲 סיכום אורנים (אקסל)');
+    const btnM = h('button', { class: 'btn primary big', disabled: true }, '🗺 מפה לשיתוף');
+    app.replaceChildren(bar('אורנים ומפות', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
+      h('div', { class: 'card stack' },
+        h('div', { class: 'small' }, 'בחר פרויקט שלם או כמה סקרים. סיכום האורנים יוצא כאקסל: שורה לכל מוסד (לפי סמל מוסד, ובלי סמל לפי שם וכתובת). המפה היא דף אינטרנט: נקודה ירוקה לעץ תקין, אדומה לעץ שדורש טיפול, ולחיצה על נקודה מציגה את פרטי העץ.'),
+        h('label', { class: 'row small', style: 'gap:8px' }, latest, 'רק הסקר האחרון בכל מוסד (כדי לא לספור פעמיים)'),
+        h('div', { class: 'row' }, btnP, btnM), status),
+      q, msg, list));
+    const key = e => e.id;
+    const hay = e => [e.code, e.siteName, e.street, e.city, e.project, e.site].join(' ').toLowerCase();
+    const upd = () => {
+      btnP.disabled = btnM.disabled = !sel.size;
+      msg.textContent = entries.length ? `נבחרו ${sel.size} סקרים מתוך ${entries.length}` : msg.textContent;
+    };
+    const draw = () => {
+      const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const shown = entries.filter(e => words.every(w => hay(e).includes(w)));
+      const groups = new Map();
+      for (const e of shown) { const pr = e.project || 'ללא פרויקט'; if (!groups.has(pr)) groups.set(pr, []); groups.get(pr).push(e); }
+      const names = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'he'));
+      list.replaceChildren(...names.map(pr => {
+        const es = groups.get(pr).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        const all = h('input', { type: 'checkbox', checked: es.every(e => sel.has(key(e))), onchange: ev => {
+          for (const e of es) ev.target.checked ? sel.add(key(e)) : sel.delete(key(e));
+          draw();
+        } });
+        return h('div', { class: 'card stack' },
+          h('label', { class: 'row', style: 'gap:10px;font-weight:600;font-size:18px' }, all, `${pr} (${es.length})`),
+          ...es.map(e => h('label', { class: 'row small', style: 'gap:10px;align-items:flex-start' },
+            h('input', { type: 'checkbox', checked: sel.has(key(e)), onchange: ev => { ev.target.checked ? sel.add(key(e)) : sel.delete(key(e)); draw(); } }),
+            h('span', {}, h('b', {}, e.siteName || e.site || 'סקר ללא שם'), ' · ',
+              [e.code ? 'סמל ' + e.code : null, [e.street, e.city].filter(Boolean).join(', '), fmtDate(e.date), `${e.trees || 0} עצים`].filter(Boolean).join(' · ')))));
+      }));
+      upd();
+    };
+    q.addEventListener('input', draw);
+    // רשימת הסקרים: מהאינדקס בענן, ובנוסף סקרים שבטאבלט ועוד לא עלו
+    msg.textContent = 'טוען…';
+    const local = await DB.allSurveys();
+    const fromLocal = s => ({ id: s.id, project: s.project, code: s.code, siteName: s.siteName || s.site, street: s.street, city: s.city, site: s.site, date: s.date, trees: s.trees.filter(Core.hasContent).length, updated: s.updated });
+    let cloud = [];
+    if (await OD.connected() && navigator.onLine) {
+      try { cloud = await Sync.cloudIndex(); } catch (e) { msg.textContent = 'הטעינה מהענן נכשלה (' + e.message + '). מוצגים רק הסקרים שבטאבלט.'; }
+    }
+    const byId = new Map(cloud.map(e => [e.id, e]));
+    for (const s of local) byId.set(s.id, Object.assign({}, byId.get(s.id) || {}, fromLocal(s)));
+    entries = [...byId.values()];
+    if (!entries.length) msg.textContent = 'אין סקרים.';
+    draw();
+
+    async function chosen() {
+      const out = [];
+      let i = 0;
+      for (const e of entries.filter(e => sel.has(key(e)))) {
+        status.textContent = `טוען סקרים… ${++i} מתוך ${sel.size}`;
+        const s = await Sync.loadSurvey(e);
+        if (s) out.push(s);
+      }
+      return latest.checked ? Reports.latestPerPlace(out) : out;
+    }
+    const titleOf = list => {
+      const pr = [...new Set(list.map(s => s.project || ''))].filter(Boolean);
+      return list.length === 1 ? (list[0].site || 'סקר עצים') : pr.length === 1 ? pr[0] : `${list.length} סקרים`;
+    };
+    const run = (btn, fn) => async () => {
+      btnP.disabled = btnM.disabled = true;
+      try { status.textContent = await fn(); } catch (err) { console.error(err); status.textContent = 'נכשל: ' + err.message; }
+      finally { upd(); }
+    };
+    btnP.onclick = run(btnP, async () => {
+      const list = await chosen();
+      const rows = Reports.pineRows(list);
+      const name = safeName(`סיכום אורנים - ${titleOf(list)} - ${fmtDate(today()).replace(/\//g, '.')}`) + '.xlsx';
+      const blob = await Reports.pinesXlsx(list);
+      await deliver(blob, name);
+      const tot = rows[rows.length - 1];
+      let m = `✓ האקסל הורד: ${list.length} מוסדות, ${tot[5]} אורנים` + (tot[6] ? ` (${tot[6]} עצי אורן בלי כמות)` : '') + '.';
+      const saved = await saveSummaryToCloud(list, name, blob);
+      if (saved) m += ` נשמר גם ב-OneDrive: ${saved}.`;
+      return m;
+    });
+    btnM.onclick = run(btnM, async () => {
+      const list = await chosen();
+      status.textContent = 'מכין מפה (טוען תמונות קטנות)…';
+      return shareMap(list, titleOf(list));
+    });
   }
 
   async function newSurvey() {
@@ -1034,7 +1172,12 @@
         h('div', { class: 'muted small' }, `${cur.trees.filter(t => t.lat != null).length} עצים עם נ"צ. GeoJSON נפתח ב-QGIS וב-ArcGIS, ו-KML בגוגל ארת'.`),
         h('div', { class: 'row' },
           h('button', { class: 'btn', onclick: () => deliver(new Blob([Gis.geojson([cur])], { type: 'application/geo+json' }), fileBase() + '.geojson') }, 'GeoJSON'),
-          h('button', { class: 'btn', onclick: () => deliver(new Blob([Gis.kml([cur], cur.site)], { type: 'application/vnd.google-earth.kml+xml' }), fileBase() + '.kml') }, 'KML'))),
+          h('button', { class: 'btn', onclick: () => deliver(new Blob([Gis.kml([cur], cur.site)], { type: 'application/vnd.google-earth.kml+xml' }), fileBase() + '.kml') }, 'KML'),
+          h('button', { class: 'btn primary', onclick: e => busy(e.currentTarget, async () => {
+            await saveNow();
+            status.textContent = 'מכין מפה…';
+            status.textContent = await shareMap([cur], cur.site || 'סקר עצים');
+          }) }, '🗺 מפת עצים לשיתוף'))),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'בדיקה לפני הפקה'),
         warns.length ? h('ul', { class: 'warn-list' }, warns.map(w => h('li', {}, w))) : h('div', { class: 'okbox' }, 'הכול מלא.'))));
@@ -1131,7 +1274,7 @@
     const phrasesTa = h('textarea', { class: 'in', style: 'min-height:140px' });
     phrasesTa.value = (await DB.getKV('phrases', null) || PHRASE_SEED).join('\n');
     const backupStatus = h('div', { class: 'small', role: 'status' });
-    const odClientIn = h('input', { class: 'in', value: await DB.getKV('odClientId', ''), dir: 'ltr', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', autocomplete: 'off' });
+    const odClientIn = h('input', { class: 'in', value: await OD.clientId(), dir: 'ltr', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', autocomplete: 'off' });
     const odRootIn = h('input', { class: 'in', value: await DB.getKV('odRoot', 'סקרי עצים') });
     const odConnected = await OD.connected();
     const odUser = await DB.getKV('odUser', '');
@@ -1162,22 +1305,27 @@
                 const c = await TG.findChat(tk);
                 if (!c) { tgStatus.textContent = `הבוט @${me.username} תקין, אבל לא מצאתי הודעה אליו. שלח לו /start ולחץ שוב.`; return; }
                 await DB.setKV('tgToken', tk); await DB.setKV('tgChat', c.id); await DB.setKV('tgChatName', c.name || '');
+                Sync.settingsChanged(); // אותו טוקן בכל המכשירים
                 await TG.sendText(tk, c.id, '✓ אפליקציית סקר העצים מחוברת. כל תמונה שמצלמים באפליקציה תגובה לכאן.');
                 Sync.kick(true);
                 tgStatus.textContent = `✓ מחובר לצ'אט: ${c.name || c.id} דרך @${me.username}`;
               } catch (e) { tgStatus.textContent = 'החיבור נכשל: ' + e.message; }
             } }, 'חבר'),
-            token ? h('button', { class: 'btn', onclick: async () => { await DB.setKV('tgToken', ''); await DB.setKV('tgChat', ''); renderSettings(); } }, 'נתק') : null),
+            token ? h('button', { class: 'btn', onclick: async () => {
+              if (!confirm('לנתק את הטלגרם בכל המכשירים?')) return;
+              await DB.setKV('tgToken', ''); await DB.setKV('tgChat', ''); await DB.setKV('tgChatName', ''); Sync.settingsChanged(); renderSettings();
+            } }, 'נתק') : null),
+          h('div', { class: 'muted small' }, 'הטוקן נשמר גם ב-OneDrive, כך שבכל מכשיר שמתחבר ל-OneDrive הטלגרם מתחבר לבד. החלפת טוקן כאן מעדכנת את כל המכשירים.'),
           tgStatus),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'OneDrive'),
-          h('div', { class: 'muted small' }, 'כשיש קליטה, כל סקר נשמר בתיקייה משלו: התיקייה הראשית / הפרויקט / תאריך ושם האתר. בתוכה דוח האקסל (מתעדכן כל 5 דקות בזמן עבודה), תמונות, שכבת GIS ונתוני הסקר.'),
+          h('div', { class: 'muted small' }, 'אקסל ו-PDF נשמרים בתיקיית הדוחות, תיקייה לכל פרויקט. הנתונים, התמונות וההגדרות המשותפות נשמרים בתיקייה "גיבוי אפליקציית סקרי עצים".'),
           field('מזהה האפליקציה ב-Microsoft (Client ID)', odClientIn),
           field('תיקיית הדוחות ב-OneDrive (אקסל ו-PDF; הגיבוי נשמר בנפרד ב"גיבוי אפליקציית סקרי עצים")', odRootIn),
           h('div', { class: 'row' },
             h('button', { class: 'btn primary', onclick: async () => {
               await DB.setKV('odClientId', odClientIn.value.trim()); await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים');
-              if (!odClientIn.value.trim()) { odStatus.textContent = 'חסר מזהה אפליקציה.'; return; }
+
               if (!navigator.onLine) { odStatus.textContent = 'צריך קליטה כדי להתחבר.'; return; }
               await saveNow();
               try { await OD.beginLogin(); } catch (e) { odStatus.textContent = e.message; }

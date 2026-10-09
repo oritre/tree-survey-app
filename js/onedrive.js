@@ -15,7 +15,20 @@
   const OD = {
     AuthError,
 
-    async clientId() { return (await DB.getKV('odClientId', '')).trim(); },
+    // מזהה האפליקציה "סקר עצים" ב-Azure של אורי (מזהה ציבורי, לא סוד). אפשר להחליף בהגדרות
+    DEFAULT_CLIENT_ID: '8a7b998d-9b77-4afc-9bfe-9b4a4ee12364',
+    async clientId() { return (await DB.getKV('odClientId', '')).trim() || OD.DEFAULT_CLIENT_ID; },
+
+    // תמונה ממוזערת של קובץ ב-OneDrive (למפות), או null
+    async thumb(itemId) {
+      try {
+        const j = await OD.api('GET', `/me/drive/items/${itemId}/thumbnails?select=medium`);
+        const u = j && j.value && j.value[0] && j.value[0].medium && j.value[0].medium.url;
+        if (!u) return null;
+        const r = await fetch(u);
+        return r.ok ? r.blob() : null;
+      } catch (_) { return null; }
+    },
 
     async beginLogin() {
       const clientId = await OD.clientId();
