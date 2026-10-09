@@ -9,11 +9,12 @@
 
   // ---------- טבלאות מהתבנית ----------
   const SPECIES = new Map(D.SPECIES.map(([name, r, s, v]) => [name, { r, s, v }]));
-  // שם כפי שנכתב בטאבלט -> השם המדויק ברשימה (ברשימה יש שמות עם רווח בסוף, והאקסל משווה בדיוק)
-  const byTrim = new Map(D.SPECIES.map(([name]) => [name.trim(), name]));
-  // טקסט נקי בלבד: בלי סימני כיווניות ורווח קשיח, שלא ישברו את החיפוש באקסל
-  const clean = v => String(v || '').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '').replace(/\u00a0/g, ' ');
-  const canonSpecies = name => { const n = clean(name); return SPECIES.has(n) ? n : (byTrim.get(n.trim()) || n); };
+  // שם כפי שנכתב בטאבלט -> השם המדויק ברשימה. ברשימה יש שמות עם רווח בסוף ושמות עם רווח קשיח (NBSP),
+  // והאקסל משווה בדיוק, ולכן תמיד נשמר השם כמו שהוא ברשימה
+  const clean = v => String(v || '').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '');
+  const key = v => clean(v).replace(/[\u00a0\s]+/g, ' ').trim().toLowerCase();
+  const byKey = new Map(D.SPECIES.map(([name]) => [key(name), name]));
+  const canonSpecies = name => { const n = clean(name); return SPECIES.has(n) ? n : (byKey.get(key(n)) || n.replace(/\u00a0/g, ' ')); };
   const ALWAYS_EXEMPT = new Set(D.ALWAYS_EXEMPT);
   const PALMS = new Map(Object.entries(D.PALMS));
   const COLUMNAR = new Set(D.COLUMNAR);
@@ -96,8 +97,8 @@
     const covered = coveredNums(trees);
     for (const t of Core.sortTrees(trees)) {
       const name = 'עץ ' + (t.num || t.species);
-      if (!(t.species || '').trim()) w.push(`${name}: אין מין עץ.`);
-      else if (!SPECIES.has(canonSpecies(t.species))) w.push(`${name}: "${t.species}" לא ברשימת המינים של התבנית, ולכן אין ערך מין ושווי.`);
+      // מין ריק מותר (התא נשאר ריק באקסל)
+      if ((t.species || '').trim() && !SPECIES.has(canonSpecies(t.species))) w.push(`${name}: "${t.species}" לא ברשימת המינים של התבנית, ולכן אין ערך מין ושווי.`);
       if (num(t.height) == null) w.push(`${name}: אין גובה.`);
       if (num(t.f1) == null) w.push(`${name}: אין קוטר גזע 1.`);
       const miss = SCORES.filter(([k]) => num(t[k]) == null).map(x => x[1]);
