@@ -1,5 +1,5 @@
 // עבודה בלי קליטה: שומר את קבצי האפליקציה במטמון
-const CACHE = 'tree-survey-v1.1.3';
+const CACHE = 'tree-survey-v1.1.4';
 const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'vendor/jszip.min.js', 'js/core.js', 'js/excel.js',
   'js/db.js', 'js/telegram.js', 'js/gis.js', 'js/onedrive.js', 'js/sync.js', 'js/app.js', 'template/survey.xltm', 'icons/icon-192.png', 'icons/icon-512.png'];
 

@@ -5,14 +5,23 @@
 
   async function call(token, method, body) {
     for (let attempt = 0; attempt < 5; attempt++) {
-      const res = await fetch(API + token + '/' + method, { method: 'POST', body });
-      const j = await res.json().catch(() => ({ ok: false, description: 'HTTP ' + res.status }));
+      // בלי פרמטרים: GET. בלי קבצים: טופס רגיל (urlencoded). multipart רק כשיש תמונה
+      let opts = { method: 'POST', body };
+      if (body instanceof FormData) {
+        const entries = [...body.entries()];
+        if (!entries.length) opts = { method: 'GET' };
+        else if (!entries.some(([, v]) => v instanceof Blob)) opts = { method: 'POST', body: new URLSearchParams(entries) };
+      }
+      const res = await fetch(API + token + '/' + method, opts);
+      const text = await res.text();
+      let j;
+      try { j = JSON.parse(text); } catch (_) { j = { ok: false, description: `HTTP ${res.status} (${method}) ${text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)}` }; }
       if (j.ok) return j.result;
       if (j.error_code === 429 && j.parameters && j.parameters.retry_after) {
         await new Promise(r => setTimeout(r, (j.parameters.retry_after + 1) * 1000));
         continue;
       }
-      if (j.error_code === 401 || j.error_code === 404 || (!j.error_code && (res.status === 400 || res.status === 404))) throw new Error('הטוקן לא תקין. העתק אותו שוב מ-BotFather');
+      if (j.error_code === 401 || (j.error_code === 404 && method === 'getMe')) throw new Error('טלגרם דחה את הטוקן (' + j.error_code + '). העתק אותו שוב מ-BotFather');
       throw new Error(j.description || 'שגיאה בטלגרם');
     }
     throw new Error('טלגרם עמוס, נסה שוב מאוחר יותר');
