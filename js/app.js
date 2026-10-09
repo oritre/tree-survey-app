@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.5.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -83,6 +83,8 @@
         await saveNow();
         cur = await DB.getSurvey(m[1]);
         if (!cur) { location.hash = '#/'; return; }
+        const next = await onOpenSurvey(cur);
+        if (next !== cur) { cur = null; go('#/s/' + next.id + '/details'); return; }
         migrateSite(cur);
         for (const t of cur.trees) { delete t._gpsBusy; Core.normalizePhotos(t); }
         refreshSuggestions();
@@ -97,6 +99,7 @@
     if (cur) Sync.now();
     cur = null;
     if (hash.startsWith('#/cloud')) return renderCloud();
+    if (hash.startsWith('#/health')) return renderHealth();
     if (hash.startsWith('#/settings')) return renderSettings();
     return renderHome();
   }
@@ -105,7 +108,8 @@
   function bar(title, back, ...right) {
     return h('header', { class: 'bar' },
       back ? h('button', { class: 'icon-btn', 'aria-label': 'חזרה', onclick: () => go(back) }, '→') : null,
-      h('h1', {}, title), h('button', { class: 'sync-pill icon-btn', id: 'syncPill', onclick: () => go('#/settings') }, syncText()), ...right);
+      h('h1', {}, title), h('button', { class: 'sync-pill icon-btn', id: 'syncPill', onclick: () => go('#/health') }, syncText()), ...right,
+      h('button', { class: 'icon-btn', title: 'כיבוי', 'aria-label': 'כיבוי האפליקציה', onclick: shutdown }, '⏻'));
   }
 
   // מצב הגיבוי בפינה: כמה ממתינות לטלגרם / OneDrive
@@ -130,7 +134,13 @@
   let projectFilter = null;
   async function renderHome() {
     const app = $('#app');
-    const surveys = (await DB.allSurveys()).sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    // במסך הבית: רק סקרים שעבדו עליהם היום, וכל סקר שעוד לא גובה במלואו לענן (כדי שלא ייעלם לפני שעלה).
+    // סקרים קודמים נמצאים ב"חיפוש סקרים בענן"
+    const all = (await DB.allSurveys()).sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    const odOn = await OD.connected();
+    const surveys = all.filter(s => dayOf(s.updated || s.created) === today() || !inCloud(s, odOn));
+    const hiddenN = all.length - surveys.length;
+    cleanupOld(all.filter(s => !surveys.includes(s)));
     const projects = [...new Set(surveys.map(s => s.project || ''))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b, 'he'));
     if (projectFilter != null && !projects.includes(projectFilter)) projectFilter = null;
     const card = s => {
@@ -147,7 +157,7 @@
     const list = surveys.length ? shown.map(pr => h('section', {},
       h('h2', { class: 'proj-head' }, (pr || 'ללא פרויקט') + ` (${surveys.filter(s => (s.project || '') === pr).length})`),
       h('div', { class: 'grid-list' }, surveys.filter(s => (s.project || '') === pr).map(card))))
-      : h('div', { class: 'empty' }, 'עוד אין סקרים. לחץ על "סקר חדש" כדי להתחיל.');
+      : h('div', { class: 'empty' }, all.length ? 'אין סקרים מהיום. סקרים קודמים נמצאים ב"חיפוש סקרים בענן".' : 'עוד אין סקרים. לחץ על "סקר חדש" כדי להתחיל.');
     const chips = projects.length > 1 ? h('div', { class: 'project-chips', role: 'group', 'aria-label': 'סינון לפי פרויקט' },
       h('button', { class: 'chip' + (projectFilter == null ? ' on' : ''), onclick: () => { projectFilter = null; renderHome(); } }, 'כל הפרויקטים'),
       projects.map(pr => h('button', { class: 'chip' + (projectFilter === pr ? ' on' : ''), onclick: () => { projectFilter = pr; renderHome(); } }, pr || 'ללא פרויקט'))) : null;
@@ -159,10 +169,220 @@
           h('button', { class: 'btn primary big', style: 'flex:1', onclick: newSurvey }, '+ סקר חדש'),
           h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/cloud') }, '🔎 חיפוש סקרים בענן')),
         chips, list,
+        hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} סקרים מימים קודמים שמורים בענן. `,
+          h('a', { href: '#/cloud' }, 'לחיפוש סקרים בענן')) : null,
         h('p', { class: 'muted small', style: 'text-align:center', id: 'homeFoot' }, 'סקר פתוח נשמר בטאבלט (כדי לעבוד גם בלי קליטה) ומגובה לטלגרם ול-OneDrive. אחרי "סיום סקר" התמונות מפונות מהטאבלט ונשארות בענן. גרסה ' + APP_VERSION)));
     if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => {
       const el = $('#homeFoot'); if (el && e.usage != null) el.append(` · בשימוש בטאבלט: ${(e.usage / 1048576).toFixed(0)} MB`);
     }).catch(() => {});
+  }
+
+  const dayOf = t => { const d = new Date(t || 0); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  // הסקר כולו בענן: נתונים ותמונות ב-OneDrive (ובטלגרם אם מחובר), בלי "סיום סקר" שממתין
+  function inCloud(s, odOn) {
+    if (!odOn) return false;
+    if (s.finishPending || s.odDataHash !== Sync.hashSurvey(s)) return false;
+    return Sync.allInCloud(s);
+  }
+  // סקרים מימים קודמים שכבר בענן: התמונות המלאות מפונות מהטאבלט (הנתונים עצמם קטנים ונשארים)
+  let cleaning = false; const freedIds = new Set();
+  async function cleanupOld(list) {
+    if (cleaning) return; cleaning = true;
+    try { for (const s of list) if (!freedIds.has(s.id)) { await Sync.freeLocal(s); freedIds.add(s.id); } } catch (_) {} finally { cleaning = false; }
+  }
+
+  // חלון בחירה: מחזיר את value של הכפתור שנלחץ
+  function askChoice(title, sub, options) {
+    return new Promise(resolve => {
+      const ov = h('div', { class: 'modal' },
+        h('div', { class: 'card stack', style: 'max-width:440px;width:92%' },
+          h('h2', { style: 'margin:0;font-size:21px' }, title),
+          sub ? h('div', { class: 'muted small' }, sub) : null,
+          ...options.map(o => h('button', { class: 'btn big block' + (o.primary ? ' primary' : ''), style: 'text-align:right', onclick: () => { ov.remove(); resolve(o.value); } },
+            o.label, o.hint ? h('div', { class: 'small', style: 'font-weight:400;opacity:.8' }, o.hint) : null))));
+      document.body.append(ov);
+    });
+  }
+
+  // פתיחת סקר קיים מיום אחר: שואלים אם לעדכן את התאריך. עדכון תאריך = סקר חדש, והסקר הקודם נשאר כמו שהוא
+  async function onOpenSurvey(s) {
+    const t = today();
+    if (s.date && s.date !== t && s.dateAskedDay !== t) {
+      const choice = await askChoice('לעדכן את תאריך הסקר להיום?', `הסקר מתאריך ${fmtDate(s.date)}. הסקר הקודם לא יידרס בשום מקרה.`, [
+        { value: 'keep', label: `לא, להמשיך את הסקר מ-${fmtDate(s.date)}`, hint: 'הגרסה הקודמת נשמרת בענן לפני העריכה' },
+        { value: 'new', primary: true, label: `כן, סקר חדש בתאריך ${fmtDate(t)}`, hint: 'העצים מועתקים בלי התמונות (למשל סקר חוזר)' },
+        { value: 'newPhotos', label: `כן, סקר חדש בתאריך ${fmtDate(t)} עם התמונות` },
+      ]);
+      if (choice !== 'keep') {
+        const n = await copySurvey(s, choice === 'newPhotos');
+        toast(`נפתח סקר חדש בתאריך ${fmtDate(t)}. הסקר מ-${fmtDate(s.date)} נשאר כמו שהוא.`, 4000);
+        return n;
+      }
+      s.dateAskedDay = t;
+    }
+    // עריכה ביום אחר מהעריכה האחרונה: הגרסה שבענן נשמרת קודם כגרסה קודמת
+    if (s.updated && dayOf(s.updated) !== t && s.odDataId && !s.snapshotFrom) s.snapshotFrom = dayOf(s.updated);
+    await DB.putSurvey(s);
+    return s;
+  }
+
+  // סקר חדש להיום על בסיס סקר קיים. withPhotos: התמונות מועתקות (בטאבלט, או קישור לקובץ שכבר ב-OneDrive)
+  async function copySurvey(old, withPhotos) {
+    const keep = ['num', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc'];
+    const s = { id: uid(), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
+      code: old.code || '', manager: old.manager || '', date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
+    for (const t of old.trees || []) {
+      const nt = Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, t[k]])));
+      if (withPhotos) for (const p of t.photos || []) {
+        const np = Object.assign({}, p, { id: uid() });
+        delete np.odName; // שם הקובץ בתיקייה החדשה ייקבע מחדש
+        const d = await DB.getPhoto(p.id);
+        if (d && d.blob) { delete np.odId; delete np.odVer; await DB.putPhoto(Object.assign({}, d, { id: np.id })); } // יעלה לתיקיית הסקר החדש
+        else if (p.odId) await DB.putPhoto({ id: np.id, thumb: d && d.thumb, w: p.w, h: p.h, cloud: true }); // נשאר בענן, נטען כשצריך
+        else continue;
+        nt.photos.push(np);
+      }
+      s.trees.push(nt);
+    }
+    s.site = composeSite(s);
+    await DB.putSurvey(s);
+    return s;
+  }
+
+  // ---------- בקרת גיבוי ----------
+  async function renderHealth() {
+    const app = $('#app');
+    const tgOn = !!((await DB.getKV('tgToken', '')) && (await DB.getKV('tgChat', '')));
+    const odOn = await OD.connected();
+    const surveys = (await DB.allSurveys()).sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    const L = (await DB.getKV('syncLog', [])).slice().reverse();
+    const st = Sync.state;
+    const ago = t => { if (!t) return 'אף פעם'; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'עכשיו' : m < 60 ? `לפני ${m} דק'` : new Date(t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); };
+    const checks = [
+      [odOn, odOn ? 'OneDrive מחובר' : 'OneDrive לא מחובר: הסקרים לא מגובים לענן'],
+      [!st.odNeedsLogin, st.odNeedsLogin ? 'OneDrive: צריך להתחבר מחדש (בהגדרות)' : 'ההתחברות ל-OneDrive תקפה'],
+      [tgOn, tgOn ? 'טלגרם מחובר' : 'טלגרם לא מחובר: התמונות לא מגובות לטלגרם'],
+      [!st.offline, st.offline ? 'אין קליטה כרגע: הכל נשמר בטאבלט ויעלה כשתחזור' : 'יש קליטה'],
+      [!st.error, st.error ? 'שגיאה אחרונה: ' + st.error : 'אין שגיאות בגיבוי האחרון'],
+      [!!st.lastOk && Date.now() - st.lastOk < 30 * 60000 || !(st.tgPending + st.odPending), `גיבוי מלא אחרון: ${ago(st.lastOk)}`],
+    ];
+    let persisted = null;
+    try { persisted = navigator.storage && navigator.storage.persisted ? await navigator.storage.persisted() : null; } catch (_) {}
+    if (persisted === false) checks.push([false, 'הדפדפן לא אישר אחסון קבוע: מומלץ להתקין את האפליקציה למסך הבית']);
+    app.replaceChildren(bar('בקרת גיבוי', '#/'),
+      h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
+        h('div', { class: 'card stack' },
+          h('h2', { style: 'margin:0;font-size:20px' }, 'מצב כללי'),
+          h('ul', { class: 'checks' }, checks.map(([ok, txt]) => h('li', { class: ok ? 'ok' : 'bad' }, (ok ? '✓ ' : '⚠ ') + txt))),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary', onclick: () => { Sync.now(); toast('מגבה עכשיו…'); setTimeout(renderHealth, 4000); } }, 'גבה עכשיו'),
+            h('button', { class: 'btn', onclick: () => go('#/settings') }, 'הגדרות'))),
+        h('div', { class: 'card stack' },
+          h('h2', { style: 'margin:0;font-size:20px' }, 'סקרים בטאבלט'),
+          surveys.length ? h('table', { class: 'htable' },
+            h('tr', {}, h('th', {}, 'סקר'), h('th', {}, 'נתונים בענן'), h('th', {}, 'תמונות ב-OneDrive'), h('th', {}, 'תמונות בטלגרם'), h('th', {}, 'אקסל / PDF')),
+            surveys.map(s => {
+              const p = Sync.pendingOf(s, tgOn, odOn);
+              const mark = (ok, txt) => h('td', { class: ok ? 'ok' : 'bad' }, txt);
+              return h('tr', {},
+                h('td', {}, h('a', { href: '#/s/' + s.id + '/export' }, s.site || 'סקר ללא שם'), h('div', { class: 'muted small' }, fmtDate(s.date))),
+                odOn ? mark(p.data, p.data ? '✓' : 'ממתין') : h('td', {}, '—'),
+                odOn ? mark(!p.od, p.od ? `${p.photos - p.od}/${p.photos}` : `✓ ${p.photos}`) : h('td', {}, '—'),
+                tgOn ? mark(!p.tg, p.tg ? `${p.photos - p.tg}/${p.photos}` : `✓ ${p.photos}`) : h('td', {}, '—'),
+                h('td', {}, s.finished ? '✓ הסתיים' : s.finishPending ? 'ממתין להעלאה' : s.odReportAt ? 'אקסל ' + ago(s.odReportAt) : '—'));
+            })) : h('div', { class: 'muted' }, 'אין סקרים בטאבלט.')),
+        h('div', { class: 'card stack' },
+          h('h2', { style: 'margin:0;font-size:20px' }, 'יומן גיבוי'),
+          L.length ? h('ul', { class: 'log' }, L.slice(0, 100).map(e => h('li', { class: e.level },
+            h('span', { class: 'muted small' }, new Date(e.t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' '),
+            (e.level === 'error' ? '⚠ ' : e.level === 'ok' ? '✓ ' : '') + e.msg + (e.n > 1 ? ` (×${e.n})` : '') + (e.survey ? ' · ' + e.survey : ''))))
+            : h('div', { class: 'muted' }, 'אין אירועים.'))));
+  }
+
+  // ---------- כיבוי ----------
+  // שומר הכל בטאבלט, מנסה להעלות את מה שממתין (עד דקה וחצי), ואז סוגר
+  async function shutdown() {
+    await saveNow();
+    const msg = h('div', {}, 'שומר ומגבה…');
+    const ov = h('div', { class: 'modal' }, h('div', { class: 'card stack', style: 'max-width:420px;width:92%' },
+      h('h2', { style: 'margin:0;font-size:21px' }, 'כיבוי'), msg,
+      h('button', { class: 'btn block', onclick: () => finish(true) }, 'סגור עכשיו')));
+    document.body.append(ov);
+    let done = false;
+    const finish = force => {
+      if (done) return; done = true; off();
+      const st = Sync.state, n = st.tgPending + st.odPending;
+      Sync.log(n ? 'info' : 'ok', n ? `כיבוי: ${n} פריטים ממתינים לגיבוי, יעלו בפתיחה הבאה` : 'כיבוי: הכל גובה');
+      msg.textContent = n
+        ? `✓ הכל שמור בטאבלט. ${n} פריטים עוד לא עלו לענן${st.offline ? ' (אין קליטה)' : ''}, והם יעלו לבד בפעם הבאה שהאפליקציה תיפתח עם קליטה.`
+        : '✓ הכל שמור בטאבלט ובענן.';
+      setTimeout(() => {
+        window.close(); // עובד באפליקציה מותקנת. אם לא נסגרה, מציגים הודעה
+        setTimeout(() => { msg.append(h('div', { class: 'muted small', style: 'margin-top:8px' }, 'אפשר לסגור את האפליקציה (החלקה למעלה ממסך האפליקציות האחרונות).')); }, 400);
+      }, force ? 0 : 1200);
+    };
+    const check = st => {
+      const n = st.tgPending + st.odPending;
+      if (st.offline || st.odNeedsLogin) return finish();
+      msg.textContent = st.busy ? `מגבה… ${n ? n + ' ממתינים' : ''}` : 'בודק…';
+      if (!st.busy && !n && started) finish();
+    };
+    let started = false;
+    const off = Sync.onChange(check);
+    Sync.now(); setTimeout(() => { started = true; check(Sync.state); }, 1500);
+    setTimeout(() => finish(), 90000);
+  }
+
+  // ---------- דיוק נ"צ במפה ----------
+  let leafletP = null;
+  function loadLeaflet() {
+    if (window.L) return Promise.resolve();
+    return leafletP || (leafletP = new Promise((res, rej) => {
+      document.head.append(h('link', { rel: 'stylesheet', href: 'vendor/leaflet/leaflet.css' }));
+      const sc = h('script', { src: 'vendor/leaflet/leaflet.js' });
+      sc.onload = res; sc.onerror = () => { leafletP = null; rej(new Error('טעינת המפה נכשלה')); };
+      document.head.append(sc);
+    }));
+  }
+  const LAYERS = {
+    'גוגל – מפה': ['https://mt{s}.google.com/vt/lyrs=m&hl=iw&x={x}&y={y}&z={z}', { subdomains: '0123', maxZoom: 21, attribution: '© Google' }],
+    'גוגל – לוויין': ['https://mt{s}.google.com/vt/lyrs=y&hl=iw&x={x}&y={y}&z={z}', { subdomains: '0123', maxZoom: 21, attribution: '© Google' }],
+    'תצלום אוויר (Esri)': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 19, attribution: '© Esri' }],
+    'OpenStreetMap': ['https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '© OpenStreetMap' }],
+  };
+  async function refineOnMap(t) {
+    if (!navigator.onLine) { toast('אין קליטה: המפה צריכה אינטרנט', 3000); return; }
+    try { await loadLeaflet(); } catch (e) { toast(e.message, 3000); return; }
+    const others = cur.trees.filter(x => x !== t && x.lat != null);
+    let start = t.lat != null ? [t.lat, t.lon] : others.length ? [others[0].lat, others[0].lon] : null;
+    if (!start) start = await new Promise(r => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => r([p.coords.latitude, p.coords.longitude]), () => r([31.7683, 35.2137]), { timeout: 5000, maximumAge: 60000 }) : r([31.7683, 35.2137]));
+    const mapEl = h('div', { class: 'map-box' });
+    const info = h('div', { class: 'small' }, 'הזז את המפה כך שהעץ יהיה מתחת לצלב, ולחץ "שמור מיקום".');
+    const ov = h('div', { class: 'annot map-ov' },
+      h('div', { class: 'annot-bar' },
+        h('span', { class: 'sp', style: 'font-weight:600' }, `נ"צ לעץ ${t.num || ''}`),
+        h('button', { class: 'txt', onclick: () => close() }, 'ביטול'),
+        h('button', { class: 'txt save', onclick: () => { const c = map.getCenter(); close([c.lat, c.lng]); } }, 'שמור מיקום')),
+      h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, h('div', { class: 'crosshair' })),
+      h('div', { class: 'map-info' }, info));
+    document.body.append(ov);
+    const map = window.L.map(mapEl, { zoomControl: true, attributionControl: true }).setView(start, t.lat != null ? 20 : 18);
+    const base = {};
+    for (const [name, [url, o]] of Object.entries(LAYERS)) base[name] = window.L.tileLayer(url, o);
+    const pref = await DB.getKV('mapLayer', 'גוגל – לוויין');
+    (base[pref] || base['גוגל – לוויין']).addTo(map);
+    window.L.control.layers(base, null, { position: 'topleft', collapsed: false }).addTo(map);
+    map.on('baselayerchange', e => DB.setKV('mapLayer', e.name));
+    for (const o of others) window.L.circleMarker([o.lat, o.lon], { radius: 7, color: '#fff', weight: 2, fillColor: '#2e7d32', fillOpacity: 1 }).bindTooltip('עץ ' + (o.num || ''), { permanent: true, direction: 'top', offset: [0, -6] }).addTo(map);
+    if (t.lat != null) window.L.circleMarker([t.lat, t.lon], { radius: 6, color: '#ffd400', weight: 3, fillOpacity: 0 }).bindTooltip('המיקום הנוכחי').addTo(map);
+    setTimeout(() => map.invalidateSize(), 50);
+    let close;
+    const res = await new Promise(r => { close = r; });
+    map.remove(); ov.remove();
+    if (!res) return;
+    t.lat = res[0]; t.lon = res[1]; t.acc = null; t.gpsSrc = 'map'; t.gpsTime = Date.now();
+    saveSoon(); refreshRow(t); renderGps(t);
+    toast('המיקום עודכן מהמפה', 2000);
   }
 
   // ---------- חיפוש סקרים בענן ----------
@@ -214,13 +434,7 @@
         go('#/s/' + old.id);
         return;
       }
-      const keep = ['num', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime'];
-      const s = { id: uid(), project: old.project || '', siteName: old.siteName || '', street: old.street || '', city: old.city || '',
-        code: old.code || '', manager: old.manager || '', date: today(), created: Date.now(), prev: { id: old.id, date: old.date },
-        trees: (old.trees || []).map(t => Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, t[k]])))) };
-      if (old.siteName == null && old.site) s.siteName = old.site;
-      s.site = composeSite(s);
-      await DB.putSurvey(s);
+      const s = await copySurvey(old, false);
       toast(`נפתח סקר חדש על בסיס הסקר מ-${fmtDate(old.date)}. עדכן את העצים והוסף תמונות.`, 5000);
       go('#/s/' + s.id + '/details');
     } catch (err) { toast('נכשל: ' + err.message, 5000); }
@@ -528,8 +742,8 @@
       h('button', { class: 'btn big' + (has ? ' ok' : ''), disabled: t._gpsBusy ? '' : null, onclick: () => {
         if (has && !confirm(`לעץ כבר יש נ"צ (${t.lat.toFixed(5)}, ${t.lon.toFixed(5)}). לעדכן למיקום הנוכחי?`)) return;
         captureGps(t);
-      } }, t._gpsBusy ? '📍 מאתר…' : has ? `📍 נ"צ ✓${t.acc != null ? ` ±${Math.round(t.acc)}מ'` : ''}` : '📍 נ"צ'),
-      ...(has && !t._gpsBusy ? [h('a', { class: 'btn', href: `https://www.google.com/maps?q=${t.lat},${t.lon}`, target: '_blank', rel: 'noopener' }, 'מפה')] : []));
+      } }, t._gpsBusy ? '📍 מאתר…' : has ? `📍 נ"צ ✓${t.acc != null ? ` ±${Math.round(t.acc)}מ'` : t.gpsSrc === 'map' ? ' (מפה)' : ''}` : '📍 נ"צ'),
+      h('button', { class: 'btn big', disabled: t._gpsBusy ? '' : null, onclick: () => refineOnMap(t) }, has ? '🗺 דייק במפה' : '🗺 סמן במפה'));
   }
 
   // מאזין עד 8 שניות ולוקח את הקריאה המדויקת ביותר
@@ -929,7 +1143,7 @@
           h('h2', { style: 'margin:0;font-size:20px' }, 'OneDrive'),
           h('div', { class: 'muted small' }, 'כשיש קליטה, כל סקר נשמר בתיקייה משלו: התיקייה הראשית / הפרויקט / תאריך ושם האתר. בתוכה דוח האקסל (מתעדכן כל 5 דקות בזמן עבודה), תמונות, שכבת GIS ונתוני הסקר.'),
           field('מזהה האפליקציה ב-Microsoft (Client ID)', odClientIn),
-          field('תיקייה ראשית ב-OneDrive', odRootIn),
+          field('תיקיית הדוחות ב-OneDrive (אקסל ו-PDF; הגיבוי נשמר בנפרד ב"גיבוי אפליקציית סקרי עצים")', odRootIn),
           h('div', { class: 'row' },
             h('button', { class: 'btn primary', onclick: async () => {
               await DB.setKV('odClientId', odClientIn.value.trim()); await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים');

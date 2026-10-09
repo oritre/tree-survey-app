@@ -107,6 +107,7 @@
         return OD.api('PUT', `${path}/content?@microsoft.graph.conflictBehavior=${behavior}`, blob, { 'Content-Type': blob.type || 'application/octet-stream' });
       }
       const sess = await OD.api('POST', `${path}/createUploadSession`, { item: { '@microsoft.graph.conflictBehavior': behavior } });
+      if (!sess) return null; // תיקיית היעד לא קיימת
       let last;
       for (let start = 0; start < blob.size; start += CHUNK) {
         const end = Math.min(blob.size, start + CHUNK);
@@ -138,6 +139,15 @@
       if (!item || !item.id) return null;
       const b = await OD.download(item.id);
       return b ? JSON.parse(await b.text()) : null;
+    },
+
+    // העתקה בתוך OneDrive (לא עובר דרך הטאבלט, בלי גלישה)
+    async copy(itemId, parentId, name) {
+      const tok = await OD.accessToken();
+      const res = await fetch(`${GRAPH}/me/drive/items/${itemId}/copy?@microsoft.graph.conflictBehavior=replace`, {
+        method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentReference: { id: parentId }, name: decodeURIComponent(OD.seg(name)) }) });
+      if (!res.ok && res.status !== 202) { const e = new Error('העתקה ב-OneDrive נכשלה (' + res.status + ')'); e.status = res.status; throw e; }
     },
 
     rename(itemId, name) {
