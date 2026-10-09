@@ -93,6 +93,7 @@
     const w = [];
     const trees = s.trees.filter(Core.hasContent);
     if (trees.length > TREE_ROWS.length) w.push(`יש ${trees.length} עצים, ובתבנית יש מקום ל-${TREE_ROWS.length} בלבד.`);
+    const covered = coveredNums(trees);
     for (const t of Core.sortTrees(trees)) {
       const name = 'עץ ' + (t.num || t.species);
       if (!(t.species || '').trim()) w.push(`${name}: אין מין עץ.`);
@@ -101,7 +102,7 @@
       if (num(t.f1) == null) w.push(`${name}: אין קוטר גזע 1.`);
       const miss = SCORES.filter(([k]) => num(t[k]) == null).map(x => x[1]);
       if (miss.length) w.push(`${name}: חסר ניקוד ${miss.join(', ')}.`);
-      if (!(t.photos || []).length) w.push(`${name}: אין תמונה.`);
+      if (!(t.photos || []).length && !covered.has(Core.firstNum(t.num))) w.push(`${name}: אין תמונה.`);
       if (t.lat == null) w.push(`${name}: אין נ"צ.`);
     }
     return w;
@@ -133,10 +134,19 @@
       if (Core.splitActive(t)) {
         for (const n of Core.expandNum(t.num)) for (const p of photos.filter(x => x.sub === n)) slots.push({ tree: t, sub: n, label: String(n), photo: p });
       } else {
-        for (const p of photos) slots.push({ tree: t, sub: null, label: String(t.num || t.species || ''), photo: p });
+        // תמונה אחת לכמה עצים: "עצים בתמונה" (למשל 7-9) היא התווית בנספח
+        for (const p of photos) slots.push({ tree: t, sub: null, label: String((p.trees || '').trim() || t.num || t.species || ''), photo: p });
       }
     }
     return slots.slice(0, SLOT_CELLS.length).map((x, i) => Object.assign(x, { index: i + 1 }));
+  }
+  // שם קובץ התמונה כמו בנוסחה של התבנית: מה שלפני "--" או ",", אחרת כל התווית (7-9 -> 7-9.jpg)
+  const pictureName = label => { const l = String(label || ''); return l.includes('--') ? l.split('--')[0] : l.includes(',') ? l.split(',')[0] : l; };
+  // מספרי עצים שמופיעים בתמונה של עץ אחר ("עצים בתמונה")
+  function coveredNums(trees) {
+    const set = new Set();
+    for (const t of trees) for (const p of t.photos || []) if (p.inReport && (p.trees || '').trim()) for (const n of Core.expandNum(p.trees) || []) set.add(n);
+    return set;
   }
   // דף התבנית שמכיל את משבצת i (0 = עמוד ראשון), כדי לפתוח את השורות המוסתרות
   const photoPagesFor = n => n <= 12 ? 0 : Math.min(18, Math.ceil((n - 12) / 12));
@@ -305,6 +315,6 @@
 
   root.Construction = {
     TYPES, typeOf, TRANSPLANT, transplantOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
-    compute, category, warnings, buildWorkbook, TREE_ROWS, pagesFor, photoSlots, SLOT_CELLS,
+    compute, category, warnings, buildWorkbook, TREE_ROWS, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums,
   };
 })(this);
