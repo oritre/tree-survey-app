@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.1.1';
+  const APP_VERSION = '1.1.2';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -688,14 +688,18 @@
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'בוט טלגרם'),
           h('ol', { class: 'small', style: 'margin:0;padding-inline-start:20px' },
-            h('li', {}, 'מדביקים כאן את הטוקן של tree_survey_bot (אותו טוקן כמו בתוכנה במחשב).'),
+            h('li', {}, 'פותחים בוט חדש לגיבוי ב-BotFather (/newbot) ומדביקים כאן את הטוקן שלו. אפשר להדביק את כל ההודעה של BotFather.'),
             h('li', {}, 'שולחים לבוט בטלגרם הודעה כלשהי, למשל /start, מהחשבון או מהקבוצה שאליה התמונות צריכות להגיע.'),
             h('li', {}, 'לוחצים "חבר".')),
           field('טוקן הבוט', tokenIn),
           h('div', { class: 'row' },
             h('button', { class: 'btn primary', onclick: async () => {
-              const tk = tokenIn.value.trim();
-              if (!tk) return;
+              // הטוקן נראה כך: 123456789:AAH...  מחלצים אותו גם מתוך הודעה שלמה של BotFather או עם רווחים
+              const raw = tokenIn.value.replace(/\s+/g, '');
+              const mt = raw.match(/\d{6,12}:[A-Za-z0-9_-]{35}/);
+              if (!mt) { tgStatus.textContent = raw ? 'זה לא נראה כמו טוקן. טוקן נראה כך: 123456789:AAH... (מספר, נקודתיים, אותיות)' : ''; return; }
+              const tk = mt[0];
+              tokenIn.value = tk;
               tgStatus.textContent = 'בודק…';
               try {
                 const me = await TG.getMe(tk);

@@ -12,6 +12,7 @@
         await new Promise(r => setTimeout(r, (j.parameters.retry_after + 1) * 1000));
         continue;
       }
+      if (j.error_code === 401 || j.error_code === 404 || (!j.error_code && (res.status === 400 || res.status === 404))) throw new Error('הטוקן לא תקין. העתק אותו שוב מ-BotFather');
       throw new Error(j.description || 'שגיאה בטלגרם');
     }
     throw new Error('טלגרם עמוס, נסה שוב מאוחר יותר');
