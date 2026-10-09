@@ -156,3 +156,19 @@ a.btn { text-decoration: none; color: inherit; }
 .project-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .project-chips .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .proj-head { font-size: 16px; color: var(--muted); margin: 18px 0 8px; font-weight: 700; }
+
+/* סימון על תמונה */
+.ph-card .pen { position: absolute; bottom: 4px; inset-inline-end: 4px; width: 40px; height: 40px; border-radius: 8px; border: 0; background: rgba(0,0,0,.5); color: #fff; font-size: 18px; cursor: pointer; }
+.annot { position: fixed; inset: 0; z-index: 80; background: #111; display: flex; flex-direction: column; }
+.annot-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; background: #222; }
+.annot-bar .grp { display: flex; gap: 4px; background: #333; border-radius: 10px; padding: 3px; }
+.annot-bar button { min-width: 44px; height: 44px; border: 0; border-radius: 8px; background: transparent; color: #fff; font-size: 20px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.annot-bar button.on { background: #555; outline: 2px solid #fff; }
+.annot-bar button:disabled { opacity: .35; }
+.annot-bar .sw::before { content: ''; width: 24px; height: 24px; border-radius: 50%; background: var(--c); border: 2px solid #888; }
+.annot-bar [data-width] i { display: block; width: 24px; background: #fff; border-radius: 4px; }
+.annot-bar .sp { flex: 1; }
+.annot-bar .txt { font-size: 17px; padding: 0 16px; background: #444; }
+.annot-bar .txt.save { background: #2f6b2f; }
+.annot-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
+.annot-stage canvas { touch-action: none; display: block; }

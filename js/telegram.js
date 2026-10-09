@@ -59,6 +59,21 @@
       return m.message_id;
     },
 
+    // מחליף את התמונה בהודעה קיימת (אחרי ציור עליה). false אם ההודעה כבר לא קיימת
+    async editPhoto(token, chat, messageId, blob, caption) {
+      const f = new FormData();
+      f.append('chat_id', chat);
+      f.append('message_id', messageId);
+      f.append('f', blob, 'tree.jpg');
+      f.append('media', JSON.stringify({ type: 'photo', media: 'attach://f', caption }));
+      try { await call(token, 'editMessageMedia', f); return true; }
+      catch (e) {
+        if (/not modified/i.test(e.message)) return true;
+        if (/not found|can't be edited/i.test(e.message)) return false;
+        throw e;
+      }
+    },
+
     async editCaption(token, chat, messageId, caption) {
       try {
         await call(token, 'editMessageCaption', form({ chat_id: chat, message_id: messageId, caption }));
