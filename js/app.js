@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.4.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -47,10 +47,27 @@
   const saveSoon = debounce(() => { if (cur) { DB.putSurvey(cur); Sync.kick(); } }, 400);
   const saveNow = () => cur && DB.putSurvey(cur);
 
+  // תמונה מלאה: מהטאבלט, ואם כבר פונתה אחרי "סיום סקר" — מ-OneDrive
+  async function photoBlob(s, id) {
+    const d = await DB.getPhoto(id);
+    if (d && d.blob) return d.blob;
+    const meta = (s || cur).trees.flatMap(t => t.photos || []).find(p => p.id === id);
+    if (!meta || !meta.odId) return null;
+    return OD.download(meta.odId);
+  }
+
   async function thumbUrl(photoId) {
     if (thumbUrls.has(photoId)) return thumbUrls.get(photoId);
     const p = await DB.getPhoto(photoId);
     if (!p) return '';
+    if (!p.thumb && !p.blob) { // סקר שנפתח מהענן: התמונה הממוזערת נוצרת פעם אחת ונשמרת
+      try {
+        const big = await photoBlob(cur, photoId);
+        if (!big) return '';
+        p.thumb = await makeThumb(big);
+        await DB.putPhoto(p);
+      } catch (_) { return ''; }
+    }
     const u = URL.createObjectURL(p.thumb || p.blob);
     thumbUrls.set(photoId, u);
     return u;
@@ -76,9 +93,10 @@
       return renderSurvey();
     }
     await saveNow();
-    // יציאה מסקר: הדוח ב-OneDrive מתעדכן מיד ולא מחכה 5 דקות
-    if (cur) Sync.now({ report: true });
+    // יציאה מסקר: נתוני הסקר עולים לענן מיד
+    if (cur) Sync.now();
     cur = null;
+    if (hash.startsWith('#/cloud')) return renderCloud();
     if (hash.startsWith('#/settings')) return renderSettings();
     return renderHome();
   }
@@ -105,7 +123,7 @@
   window.App = {
     live: id => (cur && cur.id === id ? cur : null),
     onSynced: () => { if (cur && tab === 'trees') renderPhotos(); },
-    buildReport,
+    buildReport, buildPdf,
   };
 
   // ---------- מסך הבית ----------
@@ -122,7 +140,7 @@
         h('div', { style: 'flex:1;min-width:0' },
           h('div', { class: 't' }, s.site || 'סקר ללא שם'),
           h('div', { class: 'muted small' }, [s.code ? 'סמל ' + s.code : null, fmtDate(s.date)].filter(Boolean).join(' · ')),
-          h('div', { class: 'small' }, `${n} עצים · ${ph} תמונות`)),
+          h('div', { class: 'small' }, `${n} עצים · ${ph} תמונות` + (s.finished ? ' · ✓ הסתיים, בענן' : s.finishPending ? ' · ממתין להעלאה' : ''))),
         h('span', { class: 'muted', 'aria-hidden': 'true' }, '←'));
     };
     const shown = projectFilter == null ? projects : [projectFilter];
@@ -137,9 +155,76 @@
     app.replaceChildren(
       bar('סקרי עצים', null, h('button', { class: 'icon-btn', onclick: () => go('#/settings') }, '⚙ הגדרות')),
       h('main', { class: 'stack' },
-        h('button', { class: 'btn primary big block', onclick: newSurvey }, '+ סקר חדש'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary big', style: 'flex:1', onclick: newSurvey }, '+ סקר חדש'),
+          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/cloud') }, '🔎 חיפוש סקרים בענן')),
         chips, list,
-        h('p', { class: 'muted small', style: 'text-align:center' }, 'הנתונים נשמרים בטאבלט, ומגובים לטלגרם ול-OneDrive כשיש קליטה. גרסה ' + APP_VERSION)));
+        h('p', { class: 'muted small', style: 'text-align:center', id: 'homeFoot' }, 'סקר פתוח נשמר בטאבלט (כדי לעבוד גם בלי קליטה) ומגובה לטלגרם ול-OneDrive. אחרי "סיום סקר" התמונות מפונות מהטאבלט ונשארות בענן. גרסה ' + APP_VERSION)));
+    if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => {
+      const el = $('#homeFoot'); if (el && e.usage != null) el.append(` · בשימוש בטאבלט: ${(e.usage / 1048576).toFixed(0)} MB`);
+    }).catch(() => {});
+  }
+
+  // ---------- חיפוש סקרים בענן ----------
+  // כל הסקרים שעלו ל-OneDrive, מכל מכשיר. אפשר לפתוח סקר כמו שהוא, או להתחיל ממנו סקר חדש (למשל בשנה הבאה)
+  let cloudCache = null;
+  async function renderCloud() {
+    const app = $('#app');
+    const q = h('input', { class: 'in', type: 'search', placeholder: 'סמל מוסד, שם, רחוב, עיר או פרויקט', style: 'font-size:18px' });
+    const list = h('div', { class: 'stack' });
+    const msg = h('div', { class: 'muted small', role: 'status' });
+    app.replaceChildren(bar('חיפוש סקרים בענן', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' }, q, msg, list));
+    if (!(await OD.connected())) { msg.textContent = 'צריך לחבר את OneDrive בהגדרות כדי לחפש בענן.'; return; }
+    const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
+    const draw = () => {
+      const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const hay = e => [e.code, e.siteName, e.street, e.city, e.project, e.site, e.manager].join(' ').toLowerCase();
+      const found = (cloudCache || []).filter(e => words.every(w => hay(e).includes(w)))
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      msg.textContent = cloudCache ? `${found.length} סקרים` + (words.length ? ` מתוך ${cloudCache.length}` : '') : '';
+      list.replaceChildren(...found.slice(0, 100).map(e => h('div', { class: 'card stack' },
+        h('div', { class: 't', style: 'font-weight:600' }, e.siteName || e.site || 'סקר ללא שם'),
+        h('div', { class: 'muted small' }, [e.code ? 'סמל ' + e.code : null, [e.street, e.city].filter(Boolean).join(', '), e.project, fmtDate(e.date)].filter(Boolean).join(' · ')),
+        h('div', { class: 'small' }, `${e.trees} עצים · ${e.photos} תמונות` + (e.finished ? ' · ✓ הסתיים' : '')),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary', onclick: ev => fromCloud(e, true, ev.currentTarget) }, 'סקר חדש על בסיסו'),
+          h('button', { class: 'btn', onclick: ev => local.has(e.id) ? go('#/s/' + e.id) : fromCloud(e, false, ev.currentTarget) }, local.has(e.id) ? 'פתח (נמצא בטאבלט)' : 'פתח את הסקר הזה')))));
+    };
+    q.addEventListener('input', draw);
+    draw();
+    msg.textContent = 'טוען מהענן…';
+    try { cloudCache = await Sync.cloudIndex(); draw(); setTimeout(() => q.focus(), 50); }
+    catch (e) { msg.textContent = (e instanceof OD.AuthError ? 'צריך להתחבר מחדש ל-OneDrive בהגדרות. ' : 'הטעינה נכשלה: ') + e.message; }
+  }
+
+  // asNew=true: סקר חדש עם אותם פרטי מוסד ואותם עצים (מספר, מין, הערות, אורנים, נ"צ), בתאריך של היום ובלי תמונות
+  async function fromCloud(e, asNew, btn) {
+    btn.disabled = true;
+    try {
+      if (!e.dataId) throw new Error('לסקר הזה אין עדיין נתונים בענן');
+      const blob = await OD.download(e.dataId);
+      if (!blob) throw new Error('קובץ נתוני הסקר לא נמצא ב-OneDrive');
+      const old = JSON.parse(await blob.text());
+      if (!asNew) {
+        // פתיחת אותו סקר: הנתונים יורדים לטאבלט, והתמונות נשארות בענן ונטענות כשצריך
+        for (const t of old.trees) for (const p of t.photos || []) {
+          if (!(await DB.getPhoto(p.id))) await DB.putPhoto({ id: p.id, thumb: null, w: p.w, h: p.h, cloud: true });
+        }
+        await DB.putSurvey(old);
+        go('#/s/' + old.id);
+        return;
+      }
+      const keep = ['num', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime'];
+      const s = { id: uid(), project: old.project || '', siteName: old.siteName || '', street: old.street || '', city: old.city || '',
+        code: old.code || '', manager: old.manager || '', date: today(), created: Date.now(), prev: { id: old.id, date: old.date },
+        trees: (old.trees || []).map(t => Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, t[k]])))) };
+      if (old.siteName == null && old.site) s.siteName = old.site;
+      s.site = composeSite(s);
+      await DB.putSurvey(s);
+      toast(`נפתח סקר חדש על בסיס הסקר מ-${fmtDate(old.date)}. עדכן את העצים והוסף תמונות.`, 5000);
+      go('#/s/' + s.id + '/details');
+    } catch (err) { toast('נכשל: ' + err.message, 5000); }
+    finally { btn.disabled = false; }
   }
 
   async function newSurvey() {
@@ -560,6 +645,10 @@
   async function editPhoto(t, p) {
     const rec = await DB.getPhoto(p.id);
     if (!rec) return;
+    if (!rec.blob) { // התמונה פונתה מהטאבלט: מורידים אותה מ-OneDrive
+      try { rec.blob = await photoBlob(cur, p.id); } catch (e) { toast('לא ניתן לטעון את התמונה מ-OneDrive: ' + e.message, 4000); return; }
+      if (!rec.blob) return;
+    }
     const orig = rec.orig || rec.blob;
     const strokes = await Annotate.open(orig, rec.strokes || [], { saveLabel: 'שמור', cancelLabel: 'ביטול' });
     if (!strokes) return;
@@ -616,9 +705,10 @@
   }
 
   async function openPhoto(id) {
-    const p = await DB.getPhoto(id);
-    if (!p) return;
-    const url = URL.createObjectURL(p.blob);
+    let blob;
+    try { blob = await photoBlob(cur, id); } catch (e) { toast('לא ניתן לטעון את התמונה מ-OneDrive: ' + e.message, 4000); return; }
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
     const ov = h('div', { style: 'position:fixed;inset:0;background:#000;z-index:60;display:flex;align-items:center;justify-content:center', onclick: () => { ov.remove(); URL.revokeObjectURL(url); } },
       h('img', { src: url, style: 'max-width:100%;max-height:100%;object-fit:contain' }));
     document.body.append(ov);
@@ -627,45 +717,76 @@
   // ---------- הפקה ----------
   async function renderExport(body) {
     const warns = Core.warnings(cur);
-    const embed = await DB.getKV('embedPhotos', true);
     const rs = Core.reportSlots(cur.trees);
     const status = h('div', { class: 'small muted', role: 'status' });
     const syncBox = h('div', { class: 'small', role: 'status' });
+    const finishBox = h('div', { class: 'stack' });
     const tgOn = !!(await DB.getKV('tgChat', ''));
     const odOn = await OD.connected();
+    const hm = t => new Date(t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     const drawSync = () => {
       const all = cur.trees.flatMap(t => t.photos || []);
       const tgLeft = all.filter(p => !p.tgMsgId).length, odLeft = all.filter(p => !p.odId).length;
       syncBox.replaceChildren(
         h('div', {}, tgOn ? (tgLeft ? `טלגרם: ${tgLeft} מתוך ${all.length} תמונות ממתינות לגיבוי.` : `טלגרם: כל ${all.length} התמונות מגובות.`) : 'טלגרם לא מחובר.'),
-        h('div', {}, odOn ? (odLeft ? `OneDrive: ${odLeft} תמונות ממתינות.` : 'OneDrive: התמונות שמורות.') + (cur.odReportAt ? ` הדוח עודכן לאחרונה ב-${new Date(cur.odReportAt).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}.` : '') : 'OneDrive לא מחובר.'),
+        h('div', {}, odOn ? (odLeft ? `OneDrive: ${odLeft} תמונות ממתינות.` : 'OneDrive: התמונות ונתוני הסקר שמורים.') : 'OneDrive לא מחובר.'),
+        ...(cur.odReportAt ? [h('div', {}, `אקסל הועלה ל-OneDrive: ${hm(cur.odReportAt)}`)] : []),
+        ...(cur.odPdfAt ? [h('div', {}, `PDF הועלה ל-OneDrive: ${hm(cur.odPdfAt)}`)] : []),
         ...(Sync.state.error ? [h('div', { style: 'color:var(--danger)' }, Sync.state.error)] : []));
+      finishBox.replaceChildren(cur.finished
+        ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}. האקסל וה-PDF בתיקיית הסקר ב-OneDrive, והתמונות פונו מהטאבלט (הן נטענות מהענן כשצריך).`)
+        : cur.finishPending
+          ? h('div', { class: 'small' }, Sync.state.offline ? '⏸ אין קליטה. הסקר יעלה לבד (אקסל + PDF) כשהקליטה תחזור.' : '⟳ מעלה את התמונות, ואז את האקסל וה-PDF…')
+          : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר אקסל ו-PDF באותה תיקייה ב-OneDrive ומפנה את התמונות מהטאבלט. בלי קליטה זה יקרה לבד כשהקליטה תחזור.'));
     };
     drawSync();
+    const busy = async (btn, fn) => { btn.disabled = true; try { await fn(); } catch (err) { console.error(err); status.textContent = 'נכשל: ' + err.message; } finally { btn.disabled = false; drawSync(); } };
 
     body.append(h('div', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
-        h('h2', { style: 'margin:0;font-size:20px' }, 'דוח PDF'),
-        h('div', { class: 'muted small' }, cur.trees.some(Core.hasContent)
-          ? `הסקר המלא כמו באקסל: מכתב, טבלת העצים ונספח תמונות (${Math.min(rs.length, Core.MAX_PRINTED)} תמונות), בלי השורות הצהובות. בחלון שנפתח בוחרים "שמירה כ-PDF".`
-          : 'אין עצים בטבלה, ולכן יוצא מכתב אישור קצר, כמו "אישורי תקינות" בתוכנה במחשב. בחלון שנפתח בוחרים "שמירה כ-PDF".'),
+        h('h2', { style: 'margin:0;font-size:20px' }, 'סיום סקר'),
+        finishBox,
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', onclick: async e => {
-            const b = e.currentTarget; b.disabled = true;
-            try { await saveNow(); await ReportPrint.print(cur, async id => { const d = await DB.getPhoto(id); return d && d.blob; }); }
-            catch (err) { toast('הפקת ה-PDF נכשלה: ' + err.message, 4000); }
-            finally { b.disabled = false; }
-          } }, 'הפק PDF'),
+            if (!odOn) { toast('צריך לחבר את OneDrive בהגדרות', 4000); return; }
+            if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
+            cur.finishPending = true; cur.finished = false;
+            await saveNow(); Sync.now(); drawSync();
+            toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה ל-OneDrive…', 3000);
+          } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'),
+          h('button', { class: 'btn big', onclick: e => busy(e.currentTarget, async () => {
+            if (!odOn) throw new Error('OneDrive לא מחובר');
+            await saveNow();
+            status.textContent = 'מעלה אקסל ל-OneDrive…';
+            await Sync.uploadReport(cur);
+            status.textContent = '✓ האקסל הועלה לתיקיית הסקר ב-OneDrive.';
+          }) }, '⬆ העלה אקסל לענן'))),
+      h('div', { class: 'card stack' },
+        h('h2', { style: 'margin:0;font-size:20px' }, 'דוח PDF'),
+        h('div', { class: 'muted small' }, cur.trees.some(Core.hasContent)
+          ? `הסקר המלא כמו באקסל: מכתב, טבלת העצים ונספח תמונות (${Math.min(rs.length, Core.MAX_PRINTED)} תמונות), בלי השורות הצהובות.`
+          : 'אין עצים בטבלה, ולכן יוצא מכתב אישור קצר, כמו "אישורי תקינות" בתוכנה במחשב.'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
+            await saveNow();
+            status.textContent = 'מפיק PDF…';
+            const pdf = await buildPdf(cur, (i, n) => { status.textContent = `מפיק PDF… עמוד ${i} מתוך ${n}`; });
+            await deliver(pdf.blob, pdf.name);
+            status.textContent = `✓ ה-PDF הורד (${pdf.pages} עמודים).`;
+            if (odOn) {
+              status.textContent += ' מעלה ל-OneDrive…';
+              await Sync.uploadPdf(cur, pdf);
+              status.textContent = `✓ ה-PDF הורד (${pdf.pages} עמודים) ונשמר גם בתיקיית הסקר ב-OneDrive.`;
+            }
+          }) }, 'הפק PDF'),
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
-        h('div', { class: 'small muted' }, odOn
-          ? 'קובץ האקסל נשמר ומתעדכן לבד ב-OneDrive בזמן העבודה, אין צורך להפיק אותו.'
-          : 'קובץ האקסל נשמר לבד ב-OneDrive כשהוא מחובר. כרגע OneDrive לא מחובר.'),
         status),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'גיבוי וסנכרון'),
+        h('div', { class: 'muted small' }, 'כל שינוי נשמר מיד בטאבלט. נתוני הסקר עולים ל-OneDrive אחרי כל שינוי, והתמונות לטלגרם ול-OneDrive מיד אחרי הצילום.'),
         syncBox,
         h('div', { class: 'row' },
-          h('button', { class: 'btn primary', onclick: () => { Sync.now({ report: true }); toast('מגבה עכשיו…'); } }, 'גבה עכשיו'),
+          h('button', { class: 'btn primary', onclick: () => { Sync.now(); toast('מגבה עכשיו…'); } }, 'גבה עכשיו'),
           (!tgOn || !odOn) ? h('button', { class: 'btn', onclick: () => go('#/settings') }, 'להגדרות') : null)),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'שכבת GIS'),
@@ -702,25 +823,18 @@
 
   // בונה את קובץ האקסל של סקר (משמש גם להורדה וגם ל-OneDrive)
   async function buildReport(s) {
-    const embed = await DB.getKV('embedPhotos', true);
     const r = await SurveyExcel.buildWorkbook(await templateBytes(), s, async id => {
       const p = await DB.getPhoto(id);
-      return p ? { blob: p.blob, w: p.w, h: p.h } : null;
+      const blob = await photoBlob(s, id);
+      return blob ? { blob, w: p && p.w, h: p && p.h } : null;
     }, { embedPhotos: true });
     return { blob: new Blob([r.bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }), name: fileBase(s) + '.xlsm', placed: r.placed };
   }
 
-  async function exportExcel(status) {
-    await saveNow();
-    status.textContent = 'מפיק את הקובץ…';
-    try {
-      const r = await buildReport(cur);
-      await deliver(r.blob, r.name);
-      status.textContent = `הקובץ הורד. ${cur.trees.filter(Core.hasContent).length} עצים, ${r.placed.length} תמונות בנספח.`;
-    } catch (e) {
-      console.error(e);
-      status.textContent = 'ההפקה נכשלה: ' + e.message;
-    }
+  // דוח PDF (אותו שם כמו האקסל, כדי שיופיעו אחד ליד השני ב-OneDrive)
+  async function buildPdf(s, onProgress) {
+    const r = await ReportPrint.toPdf(s, id => photoBlob(s, id), onProgress);
+    return { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages };
   }
 
   async function exportZip(status) {
@@ -734,16 +848,16 @@
         : Core.slotsOf(cur.trees).map(sl => [sl.index, Core.photoForSlot(sl)]);
       for (const [n, p] of pairs) {
         if (!p) continue;
-        const d = await DB.getPhoto(p.id);
-        if (d) { zip.file(n + '.jpg', d.blob); used.add(p.id); }
+        const b = await photoBlob(cur, p.id);
+        if (b) { zip.file(n + '.jpg', b); used.add(p.id); }
       }
       // שאר התמונות בתיקייה extra, לפי מספר העץ (שמות באנגלית כדי שווינדוס יפתח את ה-ZIP בלי ג'יבריש)
       for (const t of Core.sortTrees(cur.trees)) {
         let k = 1;
         for (const p of t.photos || []) {
           if (used.has(p.id)) continue;
-          const d = await DB.getPhoto(p.id);
-          if (d) zip.file(`extra/tree_${String(t.num || 'x').replace(/[^0-9,-]+/g, '') || 'x'}${p.sub ? '_' + p.sub : ''}_${k++}.jpg`, d.blob);
+          const b = await photoBlob(cur, p.id);
+          if (b) zip.file(`extra/tree_${String(t.num || 'x').replace(/[^0-9,-]+/g, '') || 'x'}${p.sub ? '_' + p.sub : ''}_${k++}.jpg`, b);
         }
       }
       const blob = await zip.generateAsync({ type: 'blob' });
@@ -858,7 +972,7 @@
     let n = 0;
     for (const s of surveys) for (const t of s.trees) for (const p of t.photos || []) {
       const d = await DB.getPhoto(p.id);
-      if (d) {
+      if (d && d.blob) { // תמונות שפונו מהטאבלט כבר נמצאות ב-OneDrive
         zip.file('photos/' + p.id + '.jpg', d.blob); n++;
         if (d.orig) zip.file('photos/' + p.id + '.orig.jpg', d.orig);
         if (d.strokes && d.strokes.length) zip.file('photos/' + p.id + '.strokes.json', JSON.stringify(d.strokes));
@@ -896,8 +1010,8 @@
 
   // ---------- הפעלה ----------
   window.addEventListener('pagehide', saveNow);
-  // יציאה מהאפליקציה (מסך כבוי, מעבר לאפליקציה אחרת): שומר מיד ומעדכן את האקסל ב-OneDrive
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { saveNow(); if (cur) Sync.now({ report: true }); } });
+  // יציאה מהאפליקציה (מסך כבוי, מעבר לאפליקציה אחרת): שומר מיד בטאבלט ומעלה את נתוני הסקר
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { saveNow(); if (cur) Sync.now(); } });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
   OD.handleRedirect().then(r => {

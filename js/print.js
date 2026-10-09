@@ -2,7 +2,7 @@
 // מכתב + טבלה + נספח תמונות, שורות צהובות מוסתרות, ורק עמודים שיש בהם משהו.
 // סקר בלי אף עץ יוצא כמכתב אישור קצר, כמו "אישורי תקינות".
 // הציור נעשה ב-HTML לפי מבנה התבנית (template/layout.json, נוצר ב-tools/extract_layout.py),
-// והדפדפן שומר אותו כ-PDF דרך חלון ההדפסה.
+// ומומר לקובץ PDF בתוך האפליקציה (toPdf).
 (function (root) {
   'use strict';
   // מדידות מתוך PDF אמיתי שאקסל הפיק מהתבנית (184838 גן בית הכרם)
@@ -314,35 +314,109 @@
     return Promise.all(['400 10pt RepArial', '700 10pt RepArial'].map(f => document.fonts.load(f, 'אבג abc 123').catch(() => {})));
   }
 
-  // מכין את העמודים ופותח את חלון ההדפסה ("שמירה כ-PDF")
-  async function print(survey, getPhotoBlob) {
+  // ---------- קובץ PDF אמיתי ----------
+  // כל עמוד מצויר לתמונה (SVG עם HTML בתוכו -> canvas -> JPEG) ונארז לקובץ PDF.
+  // כך ה-PDF נוצר בתוך האפליקציה, בלי חלון הדפסה, ואפשר להעלות אותו ל-OneDrive ליד האקסל.
+  const SCALE = 2; // ~190 DPI: חד בהדפסה, וקובץ קטן
+  const PX = 96 / 72;
+  const dataUrlCache = {};
+  const blobToDataUrl = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
+  const urlToDataUrl = u => dataUrlCache[u] || (dataUrlCache[u] = fetch(u).then(r => { if (!r.ok) throw new Error(u); return r.blob(); }).then(blobToDataUrl));
+
+  async function fontCss() {
+    const faces = [['hebrew', 400], ['latin', 400], ['hebrew', 700], ['latin', 700]];
+    const urls = await Promise.all(faces.map(([sub, w]) => urlToDataUrl(`fonts/arimo-${sub}-${w}-normal.woff2`)));
+    return faces.map(([sub, w], i) => `@font-face{font-family:RepArial;src:url(${urls[i]}) format('woff2');font-weight:${w};unicode-range:${sub === 'hebrew' ? 'U+0590-05FF,U+200C-2010,U+20AA,U+25CC,U+FB1D-FB4F' : 'U+0000-00FF,U+2000-206F'}}`).join('');
+  }
+
+  // תמונה קטנה יותר לדוח: התא בנספח ברוחב ~5 ס"מ, אין טעם לשמור 4000 פיקסלים
+  async function shrink(blob, maxSide) {
+    const bmp = await createImageBitmap(blob);
+    const k = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close && bmp.close();
+    return new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+  }
+
+  function loadImg(src) {
+    return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('ציור העמוד נכשל')); im.src = src; });
+  }
+
+  async function pageToJpeg(xhtml, css) {
+    const W = PAGE_W * PX, H = PAGE_H * PX;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><foreignObject x="0" y="0" width="${W}" height="${H}">` +
+      `<div xmlns="http://www.w3.org/1999/xhtml" id="printRoot" style="display:block"><style>${css}</style>${xhtml}</div></foreignObject></svg>`;
+    // data: ולא blob: — אחרת כרום מסמן את הציור כ"לא בטוח" ולא מאפשר לשמור אותו
+    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    {
+      const im = await loadImg(url);
+      await new Promise(r => setTimeout(r, 30));
+      const c = document.createElement('canvas');
+      c.width = Math.round(W * SCALE); c.height = Math.round(H * SCALE);
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(im, 0, 0, c.width, c.height);
+      const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
+      return { bytes: new Uint8Array(await blob.arrayBuffer()), w: c.width, h: c.height };
+    }
+  }
+
+  // כותב PDF פשוט: עמוד A4 לכל תמונה
+  function makePdf(images) {
+    const enc = new TextEncoder();
+    const chunks = []; let len = 0; const offs = [];
+    const put = x => { const b = typeof x === 'string' ? enc.encode(x) : x; chunks.push(b); len += b.length; };
+    const obj = (n, body) => { offs[n] = len; put(`${n} 0 obj\n`); body(); put('\nendobj\n'); };
+    put('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+    const n = images.length, kids = [];
+    for (let i = 0; i < n; i++) kids.push(`${3 + i * 3} 0 R`);
+    obj(1, () => put('<< /Type /Catalog /Pages 2 0 R >>'));
+    obj(2, () => put(`<< /Type /Pages /Count ${n} /Kids [${kids.join(' ')}] >>`));
+    images.forEach((im, i) => {
+      const pg = 3 + i * 3, cs = pg + 1, xo = pg + 2;
+      obj(pg, () => put(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE_W} ${PAGE_H}] /Resources << /XObject << /Im0 ${xo} 0 R >> >> /Contents ${cs} 0 R >>`));
+      const content = `q ${PAGE_W} 0 0 ${PAGE_H} 0 0 cm /Im0 Do Q`;
+      obj(cs, () => put(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`));
+      obj(xo, () => { put(`<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bytes.length} >>\nstream\n`); put(im.bytes); put('\nendstream'); });
+    });
+    const total = 3 + n * 3;
+    const xref = len;
+    let x = `xref\n0 ${total}\n0000000000 65535 f \n`;
+    for (let k = 1; k < total; k++) x += String(offs[k]).padStart(10, '0') + ' 00000 n \n';
+    put(x + `trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+    return new Blob(chunks, { type: 'application/pdf' });
+  }
+
+  // מפיק את הדוח כקובץ PDF. getPhotoBlob(id) מחזיר את התמונה (מהטאבלט או מהענן)
+  async function toPdf(survey, getPhotoBlob, onProgress) {
     const photoUrls = {};
     const slots = Core.reportSlots(survey.trees).slice(0, Core.MAX_PRINTED);
     for (const s of slots) {
+      if (photoUrls[s.photo.id]) continue;
       const b = await getPhotoBlob(s.photo.id);
-      if (b) photoUrls[s.photo.id] = URL.createObjectURL(b);
+      if (b) photoUrls[s.photo.id] = await blobToDataUrl(await shrink(b, 900));
     }
     const pages = await buildPages(survey, photoUrls);
-    ensureStyle();
-    let rootEl = document.getElementById('printRoot');
-    if (!rootEl) { rootEl = document.createElement('div'); rootEl.id = 'printRoot'; document.body.append(rootEl); }
-    rootEl.innerHTML = pages.join('');
-    await Promise.all([...rootEl.querySelectorAll('img')].map(img => img.complete ? null : new Promise(r => { img.onload = img.onerror = r; })));
-    await preloadFonts();
-    if (document.fonts && document.fonts.ready) await document.fonts.ready;
-    await new Promise(r => setTimeout(r, 300)); // שהגופן יוחל לפני ההדפסה, אחרת הטקסט יוצא ריק
-    const oldTitle = document.title;
-    document.title = (Core.placeOf(survey).name ? `${survey.code ? survey.code + ' ' : ''}${Core.placeOf(survey).name}` : 'סקר בטיחות עצים').replace(/[\\/:*?"<>|]+/g, ' ');
-    const cleanup = () => {
-      document.title = oldTitle;
-      Object.values(photoUrls).forEach(u => URL.revokeObjectURL(u));
-      rootEl.innerHTML = '';
-      window.removeEventListener('afterprint', cleanup);
-    };
-    window.addEventListener('afterprint', cleanup);
-    window.print();
-    return pages.length;
+    const imgs = {};
+    for (const n of ['letterhead', 'footer', 'stamp']) imgs[`template/${n}.png`] = await urlToDataUrl(`template/${n}.png`);
+    const css = (await fontCss()) + CSS.replace(/@font-face\{[^}]*\}/g, '').replace('#printRoot{display:none}', '');
+    const holder = document.createElement('div');
+    const out = [];
+    for (let i = 0; i < pages.length; i++) {
+      if (onProgress) onProgress(i + 1, pages.length);
+      holder.innerHTML = pages[i].replace(/src="(template\/[a-z]+\.png)"/g, (m, u) => `src="${imgs[u]}"`);
+      const xhtml = new XMLSerializer().serializeToString(holder.firstElementChild);
+      out.push(await pageToJpeg(xhtml, css));
+    }
+    return { blob: makePdf(out), pages: pages.length };
   }
 
-  root.ReportPrint = { print, buildPages, preloadFonts, CSS };
+  function fileTitle(survey) {
+    const place = Core.placeOf(survey);
+    return (place.name ? `${survey.code ? survey.code + ' ' : ''}${place.name}` : 'סקר בטיחות עצים').replace(/[\\/:*?"<>|]+/g, ' ');
+  }
+
+  root.ReportPrint = { toPdf, buildPages, preloadFonts, fileTitle, CSS };
 })(self);

@@ -122,6 +122,24 @@
       return OD.api('PUT', `/me/drive/items/${itemId}/content`, blob, { 'Content-Type': blob.type || 'application/octet-stream' });
     },
 
+    // הורדת קובץ מ-OneDrive (תמונה או נתוני סקר) לפי מזהה
+    async download(itemId) {
+      const meta = await OD.api('GET', `/me/drive/items/${itemId}?select=id,@microsoft.graph.downloadUrl`);
+      const url = meta && meta['@microsoft.graph.downloadUrl'];
+      if (!url) return null;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('ההורדה מ-OneDrive נכשלה (' + res.status + ')');
+      return res.blob();
+    },
+
+    // קובץ JSON לפי שם בתוך תיקייה, או null אם אין
+    async readJson(parentId, name) {
+      const item = await OD.api('GET', `/me/drive/items/${parentId}:/${OD.seg(name)}`);
+      if (!item || !item.id) return null;
+      const b = await OD.download(item.id);
+      return b ? JSON.parse(await b.text()) : null;
+    },
+
     rename(itemId, name) {
       return OD.api('PATCH', `/me/drive/items/${itemId}`, { name: decodeURIComponent(OD.seg(name)) });
     },
