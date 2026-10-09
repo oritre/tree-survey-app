@@ -338,7 +338,10 @@
     state.tgPending = tg; state.odPending = od;
   }
 
+  let stopped = false; // אחרי כיבוי: לא מגבים יותר עד שהאפליקציה נפתחת מחדש
+  function stop() { stopped = true; clearTimeout(timer); }
   async function run() {
+    if (stopped) return;
     if (running) { again = true; return; }
     running = true; again = false;
     state.busy = true; state.error = ''; state.offline = !navigator.onLine; emit();
@@ -391,7 +394,7 @@
   window.addEventListener('offline', () => { state.offline = true; emit(); });
   setInterval(() => { if (!running) run(); }, 3 * 60 * 1000);
 
-  root.Sync = {
+  root.Sync = { stop,
     kick, state,
     now() { state.odNeedsLogin = false; schedule(0); },
     // פעולות ידניות: עובדות על הסקר הפתוח ומחכות לסיום

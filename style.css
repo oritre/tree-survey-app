@@ -225,3 +225,7 @@ a.btn { text-decoration: none; color: inherit; }
   .cam-bottom { flex-direction: column-reverse; padding: 24px 14px; }
 }
 .power-btn svg { display: block; }
+.off-screen { position: fixed; inset: 0; z-index: 200; background: var(--bg); color: var(--text); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; }
+.off-screen h2 { margin: 0; font-size: 26px; }
+.off-screen p { margin: 0; max-width: 460px; font-size: 17px; }
+.off-icon svg { width: 64px; height: 64px; color: var(--muted, #777); }

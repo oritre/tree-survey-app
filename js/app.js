@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.7.0';
+  const APP_VERSION = '1.7.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -310,27 +310,37 @@
 
   // ---------- כיבוי ----------
   // שומר הכל בטאבלט, מנסה להעלות את מה שממתין (עד דקה וחצי), ואז סוגר
+  // כיבוי: שומר, מחכה לגיבוי (עד דקה וחצי), ואז עוצר את הגיבוי ומנסה לסגור את החלון.
+  // אנדרואיד לא תמיד מרשה לאתר לסגור את עצמו, ולכן במקרה כזה מוצג מסך "כבוי" מלא, שאפשר פשוט להשאיר.
   async function shutdown() {
     await saveNow();
     const msg = h('div', {}, 'שומר ומגבה…');
-    const ov = h('div', { class: 'modal' }, h('div', { class: 'card stack', style: 'max-width:420px;width:92%' },
-      h('h2', { style: 'margin:0;font-size:21px' }, 'כיבוי'), msg,
-      h('button', { class: 'btn block', onclick: () => finish(true) }, 'סגור עכשיו')));
+    const closeBtn = h('button', { class: 'btn primary block', onclick: () => finish(true) }, 'סגור עכשיו');
+    const ov = h('div', { class: 'modal', style: 'z-index:100' }, h('div', { class: 'card stack', style: 'max-width:420px;width:92%' },
+      h('h2', { style: 'margin:0;font-size:21px' }, 'כיבוי'), msg, closeBtn));
     document.body.append(ov);
     let done = false;
-    const finish = force => {
+    const finish = () => {
       if (done) return; done = true; off();
       const st = Sync.state, n = st.tgPending + st.odPending;
       Sync.log(n ? 'info' : 'ok', n ? `כיבוי: ${n} פריטים ממתינים לגיבוי, יעלו בפתיחה הבאה` : 'כיבוי: הכל גובה');
-      msg.textContent = n
-        ? `✓ הכל שמור בטאבלט. ${n} פריטים עוד לא עלו לענן${st.offline ? ' (אין קליטה)' : ''}, והם יעלו לבד בפעם הבאה שהאפליקציה תיפתח עם קליטה.`
-        : '✓ הכל שמור בטאבלט ובענן.';
-      setTimeout(() => {
-        window.close(); // עובד באפליקציה מותקנת. אם לא נסגרה, מציגים הודעה
-        setTimeout(() => { msg.append(h('div', { class: 'muted small', style: 'margin-top:8px' }, 'אפשר לסגור את האפליקציה (החלקה למעלה ממסך האפליקציות האחרונות).')); }, 400);
-      }, force ? 0 : 1200);
+      Sync.stop();
+      const text = n
+        ? `הכל שמור בטאבלט. ${n} פריטים עוד לא עלו לענן${st.offline ? ' (אין קליטה)' : ''}, והם יעלו לבד בפעם הבאה שהאפליקציה תיפתח עם קליטה.`
+        : 'הכל שמור בטאבלט ובענן.';
+      // מסך כבוי מלא: מחליף את כל האפליקציה, כך שגם אם החלון לא נסגר אי אפשר לגעת בסקר בטעות
+      $('#app').replaceChildren();
+      ov.replaceWith(h('div', { class: 'off-screen' },
+        h('div', { class: 'off-icon', 'aria-hidden': 'true' }),
+        h('h2', {}, 'האפליקציה כבויה'),
+        h('p', {}, '✓ ' + text),
+        h('p', { class: 'muted small' }, 'אפשר לסגור את החלון (החלקה למעלה ממסך האפליקציות האחרונות) או פשוט להשאיר אותו כך.'),
+        h('button', { class: 'btn', onclick: () => location.reload() }, 'הפעל מחדש')));
+      document.querySelector('.off-screen .off-icon').innerHTML = powerBtn().innerHTML;
+      window.close();
     };
     const check = st => {
+      if (done) return;
       const n = st.tgPending + st.odPending;
       if (st.offline || st.odNeedsLogin) return finish();
       msg.textContent = st.busy ? `מגבה… ${n ? n + ' ממתינים' : ''}` : 'בודק…';
@@ -339,8 +349,9 @@
     let started = false;
     const off = Sync.onChange(check);
     Sync.now(); setTimeout(() => { started = true; check(Sync.state); }, 1500);
-    setTimeout(() => finish(), 90000);
+    setTimeout(finish, 90000);
   }
+
 
   // ---------- דיוק נ"צ במפה ----------
   let leafletP = null;
