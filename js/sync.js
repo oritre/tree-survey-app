@@ -1,9 +1,11 @@
 // סנכרון ברקע כשיש קליטה: גיבוי כל התמונות לטלגרם ושמירת הסקרים ב-OneDrive
 (function (root) {
   'use strict';
-  const REPORT_EVERY = 60 * 1000; // האקסל ב-OneDrive מתעדכן לבד: לכל היותר פעם בדקה בזמן עבודה, ומיד ביציאה מהסקר
+  // נתוני הסקר עולים ל-OneDrive אחרי כל שינוי (קובץ קטן). האקסל וה-PDF עולים רק ב"סיום סקר"
+  // או בלחיצה על "העלה אקסל לענן", כי הם כוללים את כל התמונות ועולים הרבה גלישה.
+  const INDEX = 'אינדקס סקרים.json'; // רשימת כל הסקרים בענן, לחיפוש לפי סמל, שם, רחוב ועיר
 
-  let running = false, again = false, timer = null, forceReport = false;
+  let running = false, again = false, timer = null;
   const listeners = new Set();
   const state = { tgPending: 0, odPending: 0, error: '', odNeedsLogin: false, busy: false, offline: !navigator.onLine };
 
@@ -51,7 +53,7 @@
         const cap = caption(s, t, p);
         if (!p.tgMsgId) {
           const d = await DB.getPhoto(p.id);
-          if (!d) continue;
+          if (!d || !d.blob) continue;
           if (!s.tgHeaderSent) {
             await TG.sendText(cfg.token, cfg.chat, '📋 סקר בטיחות עצים\n' + surveyLine(s));
             s.tgHeaderSent = true;
@@ -65,7 +67,7 @@
         } else if ((p.ver || 0) !== (p.tgVer || 0)) {
           // ציירו על התמונה אחרי שנשלחה: מחליפים את התמונה באותה הודעה
           const d = await DB.getPhoto(p.id);
-          if (!d) continue;
+          if (!d || !d.blob) continue;
           const ver = p.ver || 0;
           const ok = await TG.editPhoto(cfg.token, cfg.chat, p.tgMsgId, d.blob, cap);
           if (ok) { p.tgVer = ver; p.tgCaption = cap; } else { p.tgMsgId = null; p.tgCaption = null; }
@@ -83,15 +85,24 @@
     return dirty;
   }
 
-  async function syncOneDrive(s) {
-    const rootName = (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים';
+  async function syncFolders(s) {
     if (!s.odFolderId) {
-      const r = await OD.folder(null, rootName);
+      const r = await rootFolder();
       const proj = await OD.folder(r, s.project || 'ללא פרויקט');
-      s.odFolderId = await OD.folder(proj, `${s.date || ''} ${s.site || 'סקר'}${s.code ? ' (' + s.code + ')' : ''}`);
+      // שני סקרים עם אותו תאריך ושם (למשל סקר חדש שנפתח על בסיס ישן באותו יום) מקבלים תיקיות נפרדות
+      const base = `${s.date || ''} ${s.site || 'סקר'}${s.code ? ' (' + s.code + ')' : ''}`;
+      for (let k = 1; ; k++) {
+        const id = await OD.folder(proj, k > 1 ? `${base} - ${k}` : base);
+        const other = await OD.readJson(id, 'נתוני סקר.json');
+        if (!other || other.id === s.id) { s.odFolderId = id; break; }
+      }
       await DB.putSurvey(s);
     }
     if (!s.odPhotosId) { s.odPhotosId = await OD.folder(s.odFolderId, 'תמונות'); await DB.putSurvey(s); }
+  }
+
+  async function syncOneDrive(s) {
+    await syncFolders(s);
 
     // תמונות: כל אחת עולה פעם אחת, ומשנה שם אם השם/הפרטים השתנו
     for (const t of Core.sortTrees(s.trees)) {
@@ -100,7 +111,7 @@
         const name = photoFileName(t, p, k++);
         if (!p.odId) {
           const d = await DB.getPhoto(p.id);
-          if (!d) continue;
+          if (!d || !d.blob) continue;
           const ver = p.ver || 0;
           const item = await OD.upload(s.odPhotosId, name, d.blob, false);
           p.odId = item.id; p.odName = name; p.odVer = ver;
@@ -109,7 +120,7 @@
         } else if ((p.ver || 0) !== (p.odVer || 0)) {
           // התמונה עודכנה (ציור): מחליפים את הקובץ ב-OneDrive
           const d = await DB.getPhoto(p.id);
-          if (!d) continue;
+          if (!d || !d.blob) continue;
           const ver = p.ver || 0;
           let item;
           try { item = await OD.replaceContent(p.odId, d.blob); }
@@ -125,20 +136,85 @@
       }
     }
 
-    // נתוני הסקר ושכבת GIS: בכל שינוי. דוח אקסל: לכל היותר פעם ב-5 דקות
+    // נתוני הסקר ושכבת GIS: אחרי כל שינוי
     const hash = hashSurvey(s);
     if (s.odDataHash !== hash) {
-      await OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([JSON.stringify(s, null, 1)], { type: 'application/json' }), true);
+      const item = await OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([JSON.stringify(s, null, 1)], { type: 'application/json' }), true);
       await OD.upload(s.odFolderId, 'שכבת עצים.geojson', new Blob([root.Gis.geojson([s])], { type: 'application/geo+json' }), true);
+      if (item && item.id) s.odDataId = item.id;
       s.odDataHash = hash;
       await DB.putSurvey(s);
     }
-    if (s.odReportHash !== hash && (forceReport || Date.now() - (s.odReportAt || 0) > REPORT_EVERY)) {
-      const r = await root.App.buildReport(s);
-      await OD.upload(s.odFolderId, r.name, r.blob, true);
-      s.odReportHash = hash; s.odReportAt = Date.now();
+    await updateIndex(s);
+
+    // "סיום סקר": כשכל התמונות כבר בענן, מעלים אקסל ו-PDF לאותה תיקייה ומפנים את התמונות מהטאבלט
+    if (s.finishPending && allInCloud(s)) {
+      await uploadReport(s, { pdf: true });
+      s.finishPending = false; s.finished = true; s.finishedAt = Date.now();
       await DB.putSurvey(s);
+      await updateIndex(s);
+      await freeLocal(s);
+      emit();
     }
+  }
+
+  const allInCloud = s => s.trees.every(t => (t.photos || []).every(p => p.odId && (p.ver || 0) === (p.odVer || 0)));
+
+  // מפנה מקום בטאבלט: התמונות המלאות נמחקות (נשארת תמונה ממוזערת), והן נטענות מ-OneDrive כשצריך
+  async function freeLocal(s) {
+    const tgOn = !!(await DB.getKV('tgChat', ''));
+    for (const t of s.trees) for (const p of t.photos || []) {
+      if (!p.odId || (p.ver || 0) !== (p.odVer || 0)) continue;
+      if (tgOn && (!p.tgMsgId || (p.ver || 0) !== (p.tgVer || 0))) continue;
+      const d = await DB.getPhoto(p.id);
+      if (d && d.blob) await DB.putPhoto({ id: d.id, thumb: d.thumb, w: d.w, h: d.h, strokes: d.strokes, cloud: true });
+    }
+  }
+
+  function indexEntry(s) {
+    const n = s.trees.filter(Core.hasContent).length;
+    return { id: s.id, project: s.project || '', siteName: s.siteName || '', street: s.street || '', city: s.city || '', site: s.site || '',
+      code: s.code || '', manager: s.manager || '', date: s.date || '', trees: n, photos: s.trees.reduce((a, t) => a + (t.photos || []).length, 0),
+      folderId: s.odFolderId, dataId: s.odDataId || null, finished: !!s.finished };
+  }
+
+  async function rootFolder() {
+    const rootName = (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים';
+    return OD.folder(null, rootName);
+  }
+
+  async function updateIndex(s) {
+    if (!s.odDataId) return;
+    const e = indexEntry(s), key = JSON.stringify(e);
+    if (s.odIndexKey === key) return;
+    const r = await rootFolder();
+    const idx = (await OD.readJson(r, INDEX)) || { surveys: [] };
+    idx.surveys = (idx.surveys || []).filter(x => x.id !== s.id).concat([e]);
+    await OD.upload(r, INDEX, new Blob([JSON.stringify(idx)], { type: 'application/json' }), true);
+    s.odIndexKey = key;
+    await DB.putSurvey(s);
+  }
+
+  async function cloudIndex() {
+    const r = await rootFolder();
+    const idx = (await OD.readJson(r, INDEX)) || { surveys: [] };
+    return idx.surveys || [];
+  }
+
+  // אקסל (ואם ביקשו גם PDF) לתיקיית הסקר ב-OneDrive, באותו שם
+  async function uploadReport(s, opts) {
+    if (!s.odFolderId) await syncFolders(s);
+    const r = await root.App.buildReport(s);
+    await OD.upload(s.odFolderId, r.name, r.blob, true);
+    s.odReportHash = hashSurvey(s); s.odReportAt = Date.now();
+    if (opts && opts.pdf) await uploadPdf(s, await root.App.buildPdf(s));
+    await DB.putSurvey(s);
+  }
+  async function uploadPdf(s, pdf) {
+    if (!s.odFolderId) await syncFolders(s);
+    await OD.upload(s.odFolderId, pdf.name, pdf.blob, true);
+    s.odPdfAt = Date.now();
+    await DB.putSurvey(s);
   }
 
   function countPending(surveys, tgOn, odOn) {
@@ -150,6 +226,7 @@
         if (odOn && (!p.odId || (p.ver || 0) !== (p.odVer || 0))) od++;
       }
       if (odOn && s.trees.length && s.odDataHash !== hashSurvey(s)) od++;
+      if (odOn && s.finishPending) od++;
     }
     state.tgPending = tg; state.odPending = od;
   }
@@ -181,7 +258,6 @@
           }
         }
       }
-      forceReport = false;
       surveys = await DB.allSurveys();
       countPending(surveys, tgOn, odOn);
     } catch (e) {
@@ -205,7 +281,11 @@
 
   root.Sync = {
     kick, state,
-    now(opts) { if (opts && opts.report) forceReport = true; state.odNeedsLogin = false; schedule(0); },
+    now() { state.odNeedsLogin = false; schedule(0); },
+    // פעולות ידניות: עובדות על הסקר הפתוח ומחכות לסיום
+    async uploadReport(s) { await syncFolders(s); await uploadReport(s, { pdf: false }); },
+    async uploadPdf(s, pdf) { await syncFolders(s); await uploadPdf(s, pdf); },
+    cloudIndex, allInCloud, freeLocal,
     onChange(fn) { listeners.add(fn); fn(state); return () => listeners.delete(fn); },
     caption, photoFileName,
   };
