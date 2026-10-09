@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.9.1';
+  const APP_VERSION = '1.9.2';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -954,8 +954,8 @@
     const curTr = Construction.transplantOf(t);
     const trSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'היתכנות העתקה' }, Construction.TRANSPLANT.map(v =>
       h('button', { type: 'button', class: curTr === v ? 'on' : '', onclick: e => {
-        t.transplant = v; changed();
-        [...trSeg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget));
+        t.transplant = Construction.transplantOf(t) === v ? '' : v; changed();
+        [...trSeg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget && !!t.transplant));
       } }, v)));
     // מין העץ: כשנבחר שם מהרשימה, נשמר בדיוק כמו בתבנית
     spIn.addEventListener('change', () => { const c = Construction.canonSpecies(t.species); if (c !== t.species) { t.species = c; spIn.value = c; changed(); } showAuto(); });
@@ -1084,7 +1084,8 @@
     const t = treeById(curTreeId);
     if (!t) return;
     if (await DB.getKV('inAppCamera', true)) {
-      const annotate = await DB.getKV('annotateAfter', true);
+      // בסקר לבנייה לא צריך מסך סימון אחרי הצילום
+      const annotate = !Construction.isConstruction(cur) && await DB.getKV('annotateAfter', true);
       try {
         await Camera.open(blob => addPhoto(t, blob, annotate), { title: `עץ ${t.num || ''} ${t.species || ''}`.trim() });
         return;
@@ -1102,7 +1103,7 @@
       if (!t || !files.length) return;
       toast(files.length > 1 ? `שומר ${files.length} תמונות…` : 'שומר תמונה…', 1500);
       // אחרי צילום: מסך ציור (כמו בטלגרם) לפני שהתמונה נשמרת ונשלחת
-      const annotate = id === 'camInput' && files.length === 1 && await DB.getKV('annotateAfter', true);
+      const annotate = id === 'camInput' && files.length === 1 && !Construction.isConstruction(cur) && await DB.getKV('annotateAfter', true);
       for (const f of files) await addPhoto(t, f, annotate);
     });
   }
