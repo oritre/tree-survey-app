@@ -29,7 +29,7 @@
     { key: 'oliveCarob', cell: 'AM7', def: false, label: 'זית וחרוב בכל קוטר', help: 'זית אירופי וחרוב מצוי מקבלים שווי מהקוטר שנקבע כאן.' },
   ];
   const settingsOf = s => {
-    const st = Object.assign({}, ...SETTINGS.map(x => ({ [x.key]: x.def })), { oliveDiam: '' }, (s && s.cset) || {});
+    const st = Object.assign({}, ...SETTINGS.map(x => ({ [x.key]: x.def })), { oliveDiam: '', embedPhotos: true }, (s && s.cset) || {});
     return st;
   };
 
@@ -115,6 +115,66 @@
   // עמוד נוסף k (0..17) תופס את השורות 45+46k עד 90+46k, מוסתרות בתבנית
   const pagesFor = n => Math.min(18, Math.max(0, Math.ceil((n - 25) / 32)));
 
+  // ---------- נספח תמונות (עמודות BF:BK) ----------
+  // בכל עמוד 2 שורות של 6 משבצות. לכל משבצת: תווית (מספר העץ), תא תמונה ממוזג, ושרשרת נוסחאות
+  // (מספר -> נתיב Pictures -> העתק) שהמאקרו ReplacePathWithImage הופך לתמונה במחשב
+  const PHOTO_COLS = ['BF', 'BG', 'BH', 'BI', 'BJ', 'BK'];
+  const PHOTO_ROWS = [{ label: 4, img: 8, chain: [5, 6, 7] }, { label: 23, img: 24, chain: [41, 42, 43] }];
+  for (let k = 0; k < 18; k++) {
+    const b = 46 * k;
+    PHOTO_ROWS.push({ label: 50 + b, img: 51 + b, chain: [46 + b, 47 + b, 48 + b] }, { label: 68 + b, img: 69 + b, chain: [86 + b, 87 + b, 88 + b] });
+  }
+  const SLOT_CELLS = PHOTO_ROWS.flatMap(r => PHOTO_COLS.map(c => ({ label: c + r.label, img: c + r.img, chain: r.chain.map(x => c + x) })));
+  // תמונות שסומנו לדוח, לפי סדר העצים (כמו בסקר יציבות: פצל = משבצת לכל מספר בטווח)
+  function photoSlots(trees) {
+    const slots = [];
+    for (const t of Core.sortTrees(trees).filter(Core.hasContent).slice(0, TREE_ROWS.length)) {
+      const photos = (t.photos || []).filter(p => p.inReport);
+      if (Core.splitActive(t)) {
+        for (const n of Core.expandNum(t.num)) for (const p of photos.filter(x => x.sub === n)) slots.push({ tree: t, sub: n, label: String(n), photo: p });
+      } else {
+        for (const p of photos) slots.push({ tree: t, sub: null, label: String(t.num || t.species || ''), photo: p });
+      }
+    }
+    return slots.slice(0, SLOT_CELLS.length).map((x, i) => Object.assign(x, { index: i + 1 }));
+  }
+  // דף התבנית שמכיל את משבצת i (0 = עמוד ראשון), כדי לפתוח את השורות המוסתרות
+  const photoPagesFor = n => n <= 12 ? 0 : Math.min(18, Math.ceil((n - 12) / 12));
+
+  // תמונות בתוך התא: בתבנית כבר יש 2 ערכי rich (שגיאות של FILTER), מוסיפים אחריהם
+  const RD = 'http://schemas.microsoft.com/office/spreadsheetml/2017/richdata';
+  async function addCellImages(zip, images) {
+    if (!images.length) return;
+    const base = 2, n = images.length;
+    images.forEach((b, i) => zip.file(`xl/media/survey_photo_${i + 1}.jpg`, b));
+    let rv = await zip.file('xl/richData/rdrichvalue.xml').async('string');
+    const baseCount = +/count="(\d+)"/.exec(rv)[1];
+    if (baseCount !== base) throw new Error('מבנה התבנית השתנה (richData)');
+    rv = rv.replace(/count="\d+"/, `count="${base + n}"`).replace('</rvData>', images.map((_, i) => `<rv s="2"><v>${i}</v><v>5</v></rv>`).join('') + '</rvData>');
+    zip.file('xl/richData/rdrichvalue.xml', rv);
+    let st = await zip.file('xl/richData/rdrichvaluestructure.xml').async('string');
+    st = st.replace(/count="\d+"/, 'count="3"').replace('</rvStructures>', '<s t="_localImage"><k n="_rvRel:LocalImageIdentifier" t="i"/><k n="CalcOrigin" t="i"/></s></rvStructures>');
+    zip.file('xl/richData/rdrichvaluestructure.xml', st);
+    let md = await zip.file('xl/metadata.xml').async('string');
+    md = md.replace(/<futureMetadata name="XLRICHVALUE" count="\d+">([\s\S]*?)<\/futureMetadata>/, (m, inner) => `<futureMetadata name="XLRICHVALUE" count="${base + n}">` + inner +
+      images.map((_, i) => `<bk><extLst><ext uri="{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}"><xlrd:rvb i="${base + i}"/></ext></extLst></bk>`).join('') + '</futureMetadata>');
+    md = md.replace(/<valueMetadata count="\d+">([\s\S]*?)<\/valueMetadata>/, (m, inner) => `<valueMetadata count="${base + n}">` + inner +
+      images.map((_, i) => `<bk><rc t="2" v="${base + i}"/></bk>`).join('') + '</valueMetadata>');
+    zip.file('xl/metadata.xml', md);
+    zip.file('xl/richData/richValueRel.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<richValueRels xmlns="http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      images.map((_, i) => `<rel r:id="rId${i + 1}"/>`).join('') + '</richValueRels>');
+    zip.file('xl/richData/_rels/richValueRel.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      images.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/survey_photo_${i + 1}.jpg"/>`).join('') + '</Relationships>');
+    let rels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    rels = rels.replace('</Relationships>', '<Relationship Id="rIdRvr" Type="http://schemas.microsoft.com/office/2022/10/relationships/richValueRel" Target="richData/richValueRel.xml"/></Relationships>');
+    zip.file('xl/_rels/workbook.xml.rels', rels);
+    let ct = await zip.file('[Content_Types].xml').async('string');
+    if (!/Extension="jpg"/i.test(ct)) ct = ct.replace('<Default Extension="png"', '<Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="png"');
+    ct = ct.replace('</Types>', '<Override PartName="/xl/richData/richValueRel.xml" ContentType="application/vnd.ms-excel.richvaluerel+xml"/></Types>');
+    zip.file('[Content_Types].xml', ct);
+  }
+
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const colNum = l => { let n = 0; for (const ch of l) n = n * 26 + (ch.charCodeAt(0) - 64); return n; };
 
@@ -180,7 +240,8 @@
     return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
   }
 
-  async function buildWorkbook(templateBytes, survey) {
+  // getPhoto(id) -> Blob של התמונה (או null)
+  async function buildWorkbook(templateBytes, survey, getPhoto) {
     const zip = await JSZip.loadAsync(templateBytes);
     const st = settingsOf(survey);
     const sheet = new RowSheet(await zip.file('xl/worksheets/sheet1.xml').async('string'));   // סקר
@@ -210,7 +271,23 @@
       sheet.cached('I' + r, c.I); sheet.cached('L' + r, c.L); sheet.cached('N' + r, c.N);
       sheet.cached('O' + r, c.O); sheet.cached('P' + r, c.P);
     });
-    const pages = pagesFor(trees.length);
+    // נספח תמונות: תוויות לפי מספר העץ. עם "צרף תמונות" התמונות עצמן נכנסות לתאים,
+    // ובלי — נשארות נוסחאות הנתיב של התבנית (C:\\Users\\origr\\Pictures\\<מספר>.jpg) למאקרו במחשב
+    const slots = photoSlots(survey.trees);
+    const images = [];
+    if (st.embedPhotos) for (const c of SLOT_CELLS) { for (const x of c.chain) sheet.set(x, null); sheet.set(c.img, null); }
+    for (const slot of slots) {
+      const c = SLOT_CELLS[slot.index - 1];
+      sheet.set(c.label, numOrText(slot.label));
+      if (!st.embedPhotos || !getPhoto) continue;
+      const blob = await getPhoto(slot.photo.id);
+      if (!blob) continue;
+      images.push(blob);
+      const vm = 2 + images.length;
+      sheet.edit(c.img, s => `<c r="${c.img}"${s ? ` s="${s}"` : ''} t="e" vm="${vm}"><v>#VALUE!</v></c>`);
+    }
+    await addCellImages(zip, images);
+    const pages = Math.max(pagesFor(trees.length), photoPagesFor(slots.length));
     if (pages) for (let r = 45; r <= 90 + 46 * (pages - 1); r++) sheet.unhide(r);
 
     zip.file('xl/worksheets/sheet1.xml', sheet.toXml());
@@ -228,6 +305,6 @@
 
   root.Construction = {
     TYPES, typeOf, TRANSPLANT, transplantOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
-    compute, category, warnings, buildWorkbook, TREE_ROWS, pagesFor,
+    compute, category, warnings, buildWorkbook, TREE_ROWS, pagesFor, photoSlots, SLOT_CELLS,
   };
 })(this);

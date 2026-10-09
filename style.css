@@ -242,3 +242,10 @@ a.btn { text-decoration: none; color: inherit; }
 .badge.val-mid { background: var(--warn-soft); color: var(--warn); border-color: transparent; font-weight: 700; }
 .set-row { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; }
 .set-row input { width: 24px; height: 24px; flex: none; margin-top: 2px; }
+.combo { position: relative; }
+.combo-row { display: flex; gap: 6px; align-items: stretch; }
+.combo-row .in { flex: 1; min-width: 0; }
+.combo-btn { min-width: 48px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 20px; cursor: pointer; }
+.combo-menu { position: absolute; inset-inline: 0; top: 100%; margin-top: 4px; z-index: 30; max-height: 320px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.15); }
+.combo-opt { display: block; width: 100%; text-align: start; padding: 12px 14px; border: 0; border-bottom: 1px solid var(--border); background: none; font-size: 17px; cursor: pointer; }
+.combo-opt:hover, .combo-opt:focus { background: var(--surface-2); }
