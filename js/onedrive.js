@@ -117,6 +117,11 @@
       return last;
     },
 
+    // מחליף את התוכן של קובץ קיים (תמונה אחרי ציור), בלי לשנות את שמו
+    replaceContent(itemId, blob) {
+      return OD.api('PUT', `/me/drive/items/${itemId}/content`, blob, { 'Content-Type': blob.type || 'application/octet-stream' });
+    },
+
     rename(itemId, name) {
       return OD.api('PATCH', `/me/drive/items/${itemId}`, { name: decodeURIComponent(OD.seg(name)) });
     },

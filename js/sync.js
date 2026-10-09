@@ -56,8 +56,19 @@
             await TG.sendText(cfg.token, cfg.chat, '📋 סקר בטיחות עצים\n' + surveyLine(s));
             s.tgHeaderSent = true;
           }
+          const ver = p.ver || 0;
           p.tgMsgId = await TG.sendPhoto(cfg.token, cfg.chat, d.blob, cap);
-          p.tgCaption = cap;
+          p.tgCaption = cap; p.tgVer = ver;
+          dirty = true;
+          await DB.putSurvey(s);
+          emit();
+        } else if ((p.ver || 0) !== (p.tgVer || 0)) {
+          // ציירו על התמונה אחרי שנשלחה: מחליפים את התמונה באותה הודעה
+          const d = await DB.getPhoto(p.id);
+          if (!d) continue;
+          const ver = p.ver || 0;
+          const ok = await TG.editPhoto(cfg.token, cfg.chat, p.tgMsgId, d.blob, cap);
+          if (ok) { p.tgVer = ver; p.tgCaption = cap; } else { p.tgMsgId = null; p.tgCaption = null; }
           dirty = true;
           await DB.putSurvey(s);
           emit();
@@ -90,8 +101,20 @@
         if (!p.odId) {
           const d = await DB.getPhoto(p.id);
           if (!d) continue;
+          const ver = p.ver || 0;
           const item = await OD.upload(s.odPhotosId, name, d.blob, false);
-          p.odId = item.id; p.odName = name;
+          p.odId = item.id; p.odName = name; p.odVer = ver;
+          await DB.putSurvey(s);
+          emit();
+        } else if ((p.ver || 0) !== (p.odVer || 0)) {
+          // התמונה עודכנה (ציור): מחליפים את הקובץ ב-OneDrive
+          const d = await DB.getPhoto(p.id);
+          if (!d) continue;
+          const ver = p.ver || 0;
+          let item;
+          try { item = await OD.replaceContent(p.odId, d.blob); }
+          catch (_) { item = await OD.upload(s.odPhotosId, p.odName || name, d.blob, true); } // הקובץ נמחק ב-OneDrive
+          p.odId = item.id || p.odId; p.odVer = ver;
           await DB.putSurvey(s);
           emit();
         } else if (p.odName !== name) {
@@ -123,8 +146,8 @@
     for (const s0 of surveys) {
       const s = live(s0);
       for (const t of s.trees) for (const p of t.photos || []) {
-        if (tgOn && !p.tgMsgId) tg++;
-        if (odOn && !p.odId) od++;
+        if (tgOn && (!p.tgMsgId || (p.ver || 0) !== (p.tgVer || 0))) tg++;
+        if (odOn && (!p.odId || (p.ver || 0) !== (p.odVer || 0))) od++;
       }
       if (odOn && s.trees.length && s.odDataHash !== hashSurvey(s)) od++;
     }

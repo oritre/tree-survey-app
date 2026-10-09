@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.1.4';
+  const APP_VERSION = '1.2.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -66,6 +66,7 @@
         await saveNow();
         cur = await DB.getSurvey(m[1]);
         if (!cur) { location.hash = '#/'; return; }
+        migrateSite(cur);
         for (const t of cur.trees) { delete t._gpsBusy; Core.normalizePhotos(t); }
         refreshSuggestions();
       }
@@ -143,7 +144,8 @@
 
   async function newSurvey() {
     const project = projectFilter != null ? projectFilter : await DB.getKV('lastProject', '');
-    const s = { id: uid(), project, site: '', code: '', manager: '', date: today(), trees: [], created: Date.now() };
+    const s = { id: uid(), project, site: '', siteName: '', street: '', city: await DB.getKV('lastCity', ''), code: '', manager: '', date: today(), trees: [], created: Date.now() };
+    s.site = composeSite(s);
     await DB.putSurvey(s);
     go('#/s/' + s.id + '/details');
   }
@@ -163,6 +165,12 @@
     else renderTrees(body);
   }
 
+  // שם המוסד, רחוב ועיר נשמרים בנפרד, ובכותרת הדוח (F9) מופיעים יחד: "שם, רחוב, עיר"
+  const composeSite = s => [s.siteName, s.street, s.city].map(x => (x || '').trim()).filter(Boolean).join(', ');
+  function migrateSite(s) {
+    if (s.siteName == null && s.street == null && s.city == null) { s.siteName = s.site || ''; s.street = ''; s.city = ''; }
+  }
+
   function field(label, input) { return h('div', {}, h('label', { class: 'f' }, label), input); }
 
   function renderDetails(body) {
@@ -170,16 +178,32 @@
       class: 'in', value: cur[key] || '',
       oninput: e => {
         cur[key] = e.target.value; saveSoon();
-        if (key === 'site') $('.bar h1').textContent = cur.site || 'סקר חדש';
+        if (key === 'siteName' || key === 'street' || key === 'city') {
+          cur.site = composeSite(cur);
+          $('.bar h1').textContent = cur.site || 'סקר חדש';
+          const pv = $('#sitePreview'); if (pv) pv.textContent = cur.site || '—';
+          if (key === 'city') DB.setKV('lastCity', cur.city.trim());
+        }
         if (key === 'project') DB.setKV('lastProject', cur.project.trim());
       },
     }, attrs));
     const projList = h('datalist', { id: 'projectList' });
-    DB.allSurveys().then(all => projList.replaceChildren(...[...new Set(all.map(x => x.project).filter(Boolean))].map(p => h('option', { value: p }))));
+    const cityList = h('datalist', { id: 'cityList' });
+    const streetList = h('datalist', { id: 'streetList' });
+    const opts = (all, k) => [...new Set(all.map(x => (x[k] || '').trim()).filter(Boolean))].map(v => h('option', { value: v }));
+    DB.allSurveys().then(all => {
+      projList.replaceChildren(...opts(all, 'project'));
+      cityList.replaceChildren(...opts(all, 'city'));
+      streetList.replaceChildren(...opts(all, 'street'));
+    });
     body.append(h('div', { class: 'card stack', style: 'max-width:720px;margin:0 auto' },
-      projList,
+      projList, cityList, streetList,
       field('פרויקט (למשל: ירושלים)', inp('project', { list: 'projectList', placeholder: 'לניהול וסינון הסקרים, לא מופיע בדוח' })),
-      field('שם האתר / כתובת (מופיע בכותרת הדוח)', inp('site', { placeholder: 'למשל: גן חצב, רחוב הנרקיס 5' })),
+      field('שם המוסד / האתר', inp('siteName', { placeholder: 'למשל: גן חצב' })),
+      h('div', { class: 'row', style: 'align-items:stretch' },
+        h('div', { style: 'flex:2;min-width:200px' }, field('רחוב ומספר', inp('street', { list: 'streetList', placeholder: 'למשל: הנרקיס 5' }))),
+        h('div', { style: 'flex:1;min-width:160px' }, field('עיר', inp('city', { list: 'cityList', placeholder: 'למשל: ירושלים' })))),
+      h('div', { class: 'muted small' }, 'בכותרת הדוח יופיע: ', h('b', { id: 'sitePreview' }, cur.site || '—')),
       h('div', { class: 'row', style: 'align-items:stretch' },
         h('div', { style: 'flex:1;min-width:200px' }, field('סמל מוסד (אם יש)', inp('code', { inputmode: 'numeric' }))),
         h('div', { style: 'flex:1;min-width:200px' }, field('תאריך הסקר', inp('date', { type: 'date' })))),
@@ -431,10 +455,17 @@
       const t = cur && treeById(pickTarget);
       if (!t || !files.length) return;
       toast(files.length > 1 ? `שומר ${files.length} תמונות…` : 'שומר תמונה…', 1500);
+      // אחרי צילום: מסך ציור (כמו בטלגרם) לפני שהתמונה נשמרת ונשלחת
+      const annotate = id === 'camInput' && files.length === 1 && await DB.getKV('annotateAfter', true);
       for (const f of files) {
         try {
           const p = await processImage(f);
-          await DB.putPhoto({ id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h });
+          let rec = { id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h };
+          if (annotate) {
+            const strokes = await Annotate.open(p.blob, [], { saveLabel: 'שמור', cancelLabel: 'בלי סימון' });
+            if (strokes && strokes.length) rec = await applyStrokes(rec, p.blob, strokes);
+          }
+          await DB.putPhoto(rec);
           // בעץ מפוצל: התמונה עוברת למספר הראשון שעוד אין לו תמונה
           let sub = null;
           if (Core.splitActive(t)) {
@@ -479,6 +510,36 @@
     return { id: uid(), blob: big.blob, thumb: th.blob, w: big.w, h: big.h };
   }
 
+  async function makeThumb(blob) {
+    const src = await createImageBitmap(blob);
+    const s = Math.min(1, 320 / Math.max(src.width, src.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(src.width * s); c.height = Math.round(src.height * s);
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    return new Promise(r => c.toBlob(r, 'image/jpeg', 0.7));
+  }
+
+  // שומר את המקור בצד, ומחליף את התמונה בגרסה עם הסימונים (זו שנכנסת לדוח, לטלגרם ול-OneDrive)
+  async function applyStrokes(rec, orig, strokes) {
+    const blob = strokes.length ? await Annotate.flatten(orig, strokes) : orig;
+    return Object.assign({}, rec, { blob, orig: strokes.length ? orig : null, strokes, thumb: await makeThumb(blob) });
+  }
+
+  async function editPhoto(t, p) {
+    const rec = await DB.getPhoto(p.id);
+    if (!rec) return;
+    const orig = rec.orig || rec.blob;
+    const strokes = await Annotate.open(orig, rec.strokes || [], { saveLabel: 'שמור', cancelLabel: 'ביטול' });
+    if (!strokes) return;
+    await DB.putPhoto(await applyStrokes(rec, orig, strokes));
+    const old = thumbUrls.get(p.id);
+    if (old) { URL.revokeObjectURL(old); thumbUrls.delete(p.id); }
+    p.ver = (p.ver || 0) + 1; // מסמן שצריך להחליף את התמונה בטלגרם וב-OneDrive
+    await saveNow();
+    refreshRow(t); renderPhotos();
+    Sync.kick(true);
+  }
+
   async function renderPhotos() {
     const box = $('#photosBox');
     const t = treeById(curTreeId);
@@ -496,6 +557,7 @@
           h('span', { class: 'sync' },
             p.tgMsgId ? h('span', { class: 'tg', title: 'גובתה בטלגרם' }, 'TG ✓') : h('span', { class: 'tg pending', title: 'ממתינה לשליחה לטלגרם' }, 'TG …'),
             p.odId ? h('span', { class: 'od', title: 'נשמרה ב-OneDrive' }, 'OD ✓') : null),
+          h('button', { class: 'pen', title: 'סמן על התמונה', 'aria-label': 'סמן על התמונה', onclick: () => editPhoto(t, p) }, '✏️'),
           h('button', { class: 'del', title: 'מחק', 'aria-label': 'מחק תמונה', onclick: async () => {
             if (!confirm('למחוק את התמונה מהסקר? אם כבר נשלחה, היא נשארת בטלגרם.')) return;
             const key = Core.groupKey(t, p);
@@ -668,6 +730,8 @@
       h('input', { type: 'checkbox', style: 'width:24px;height:24px', checked: undefined, onchange: e => DB.setKV(key, e.target.checked), oncreate: null }), label);
     const autoGps = chk('autoGps', true, 'לקחת נ"צ אוטומטית בעץ חדש ובתמונה הראשונה');
     autoGps.firstChild.checked = await DB.getKV('autoGps', true);
+    const annotateAfter = chk('annotateAfter', true, 'אחרי צילום לפתוח מסך סימון על התמונה (קווים וחצים)');
+    annotateAfter.firstChild.checked = await DB.getKV('annotateAfter', true);
     const shareFiles = chk('shareFiles', false, 'במקום הורדה, לפתוח את תפריט השיתוף (לשליחה לדרייב, וואטסאפ וכו\')');
     shareFiles.firstChild.checked = await DB.getKV('shareFiles', false);
     const speciesTa = h('textarea', { class: 'in', style: 'min-height:140px' });
@@ -731,7 +795,7 @@
           odStatus),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'עבודה בשטח'),
-          autoGps, shareFiles),
+          autoGps, annotateAfter, shareFiles),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'רשימות בחירה'),
           h('div', { class: 'muted small' }, 'שורה לכל פריט. האפליקציה מוסיפה אוטומטית גם מה שכבר כתבת בסקרים.'),
@@ -760,7 +824,11 @@
     let n = 0;
     for (const s of surveys) for (const t of s.trees) for (const p of t.photos || []) {
       const d = await DB.getPhoto(p.id);
-      if (d) { zip.file('photos/' + p.id + '.jpg', d.blob); n++; }
+      if (d) {
+        zip.file('photos/' + p.id + '.jpg', d.blob); n++;
+        if (d.orig) zip.file('photos/' + p.id + '.orig.jpg', d.orig);
+        if (d.strokes && d.strokes.length) zip.file('photos/' + p.id + '.strokes.json', JSON.stringify(d.strokes));
+      }
     }
     const blob = await zip.generateAsync({ type: 'blob' });
     await deliver(blob, `גיבוי סקרי עצים ${fmtDate(today()).replace(/\//g, '.')}.zip`);
@@ -781,7 +849,10 @@
           const pf = zip.file('photos/' + p.id + '.jpg');
           if (!pf) continue;
           const blob = new Blob([await pf.async('uint8array')], { type: 'image/jpeg' });
-          await DB.putPhoto({ id: p.id, blob, thumb: null, w: p.w, h: p.h });
+          const of = zip.file('photos/' + p.id + '.orig.jpg'), sf = zip.file('photos/' + p.id + '.strokes.json');
+          const orig = of ? new Blob([await of.async('uint8array')], { type: 'image/jpeg' }) : null;
+          const strokes = sf ? JSON.parse(await sf.async('string')) : null;
+          await DB.putPhoto({ id: p.id, blob, orig, strokes, thumb: null, w: p.w, h: p.h });
         }
         await DB.putSurvey(s); added++;
       }
