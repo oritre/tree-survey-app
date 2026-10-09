@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.10.0';
+  const APP_VERSION = '1.11.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1230,6 +1230,10 @@
           Core.ensureReportPhoto(t, old);
           saveSoon(); renderPhotos(); Sync.kick();
         } }, nums.map(n => h('option', { value: n, selected: p.sub === n ? 'selected' : null }, 'עץ ' + n))) : null,
+        Construction.isConstruction(cur) && !split ? h('label', { class: 'row', style: 'gap:6px;align-items:center' },
+          h('span', { class: 'small', style: 'white-space:nowrap' }, 'עצים בתמונה'),
+          h('input', { class: 'in', style: 'min-width:0', value: p.trees || '', placeholder: String(t.num || ''), title: 'למשל 7-9 כשהתמונה מראה כמה עצים. ריק = מספר העץ',
+            oninput: e => { p.trees = e.target.value.trim(); saveSoon(); } })) : null,
         noteIn);
     }));
     const hint = h('div', { class: 'muted small', style: 'margin-top:6px' },
@@ -1455,7 +1459,7 @@
       // סקר לבנייה: שם הקובץ = מספר העץ, כמו הנתיב בתבנית (Pictures\<מספר>.jpg)
       const seenN = new Map();
       const constructionName = sl => {
-        const n = Core.firstNum(sl.label) != null ? String(Core.firstNum(sl.label)) : 'x';
+        const n = Construction.pictureName(sl.label).replace(/[\\/:*?"<>|]/g, '_') || 'x';
         const k = (seenN.get(n) || 0) + 1; seenN.set(n, k);
         return k === 1 ? n : `${n}_${k}`;
       };
