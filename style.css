@@ -229,3 +229,14 @@ a.btn { text-decoration: none; color: inherit; }
 .off-screen h2 { margin: 0; font-size: 26px; }
 .off-screen p { margin: 0; max-width: 460px; font-size: 17px; }
 .off-icon svg { width: 64px; height: 64px; color: var(--muted, #777); }
+
+/* סקר לבנייה */
+.type-badge { margin-inline-start: 8px; background: var(--warn-soft); color: var(--warn); border-color: transparent; font-weight: 700; vertical-align: middle; }
+.type-opt { display: block; width: 100%; text-align: start; padding: 14px 16px; }
+.editor .grid4 { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.editor .scores { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.seg.score button { min-height: 46px; font-size: 17px; }
+.value-box { padding: 10px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-size: 18px; }
+.value-box[data-cat="גבוהה מאוד"], .value-box[data-cat="גבוהה"] { background: var(--danger-soft); }
+.badge.rec-כריתה { background: var(--danger-soft); color: var(--danger); border-color: transparent; font-weight: 700; }
+.badge.rec-העתקה { background: var(--warn-soft); color: var(--warn); border-color: transparent; font-weight: 700; }
