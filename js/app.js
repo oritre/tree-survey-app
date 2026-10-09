@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.11.0';
+  const APP_VERSION = '1.11.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -928,12 +928,14 @@
   function speciesCombo(input, t) {
     input.removeAttribute('list');
     input.setAttribute('autocomplete', 'off');
-    const names = [...Construction.SPECIES.keys()].filter(n => n.trim() && n !== 'Unknown');
+    // Unknown ראשון, כמו ברשימה בתבנית
+    const names = [...Construction.SPECIES.keys()].filter(n => n.trim());
     const menu = h('div', { class: 'combo-menu hidden', role: 'listbox' });
     const show = all => {
-      const q = all ? '' : input.value.trim();
-      const list = q ? names.filter(n => n.includes(q)) : names;
-      menu.replaceChildren(...(list.length ? list.slice(0, 200).map(n => h('button', { type: 'button', class: 'combo-opt', role: 'option',
+      const norm = v => v.replace(/[\u00a0\s]+/g, ' ').trim().toLowerCase();
+      const q = all ? '' : norm(input.value);
+      const list = q ? names.filter(n => norm(n).includes(q)) : names;
+      menu.replaceChildren(...(list.length ? list.map(n => h('button', { type: 'button', class: 'combo-opt', role: 'option',
         onmousedown: e => e.preventDefault(),
         onclick: () => { input.value = n; t.species = n; hide(); input.dispatchEvent(new Event('change')); input.dispatchEvent(new Event('input')); } }, n.trim()))
         : [h('div', { class: 'muted small', style: 'padding:10px' }, 'אין מין כזה ברשימה')]));
