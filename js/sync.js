@@ -35,17 +35,12 @@
     return [s.project, s.site || 'סקר ללא שם', s.code ? 'סמל ' + s.code : '', fmtDate(s.date)].filter(Boolean).join(' · ');
   }
 
+  // כיתוב התמונה בטלגרם: רק ההערה שנכתבה לתמונה באפליקציה, בלי שום דבר נוסף.
+  // פרטי הסקר נשלחים פעם אחת בהודעה לפני התמונה הראשונה של הסקר
   function caption(s, t, p) {
-    const label = Core.photoLabel(t, p);
-    const lines = [
-      p.note ? '📝 ' + p.note : '',
-      ['עץ ' + label, t.species, t.urgency ? 'דחיפות ' + t.urgency : '', t.pines ? t.pines + ' אורנים' : '', p.inReport ? 'בדוח' : ''].filter(Boolean).join(' · '),
-      t.notes || '',
-      surveyLine(s),
-      t.lat != null ? `📍 https://maps.google.com/?q=${t.lat.toFixed(6)},${t.lon.toFixed(6)}` : '',
-    ];
-    return lines.filter(Boolean).join('\n').slice(0, 1000);
+    return (p.note || '').trim().slice(0, 1000);
   }
+
 
   function photoFileName(t, p, k) {
     const label = Core.photoLabel(t, p) || 'ללא מספר';
