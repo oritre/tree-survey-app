@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.11.1';
+  const APP_VERSION = '1.12.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -207,7 +207,13 @@
   let cleaning = false; const freedIds = new Set();
   async function cleanupOld(list) {
     if (cleaning) return; cleaning = true;
-    try { for (const s of list) if (!freedIds.has(s.id)) { await Sync.freeLocal(s); freedIds.add(s.id); } } catch (_) {} finally { cleaning = false; }
+    try {
+      for (const s of list) if (!freedIds.has(s.id)) {
+        await Sync.freeLocal(s); freedIds.add(s.id);
+        // ה-PDF השמור לצפייה ושליחה נמחק מהטאבלט אחרי שבוע (עותק שלו נמצא ב-OneDrive)
+        if (Date.now() - (s.updated || 0) > 7 * 864e5) await DB.delKV('pdf:' + s.id);
+      }
+    } catch (_) {} finally { cleaning = false; }
   }
 
   // חלון בחירה: מחזיר את value של הכפתור שנלחץ
@@ -1310,16 +1316,18 @@
           h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
             await saveNow();
             status.textContent = 'מפיק PDF…';
-            const pdf = await buildPdf(cur, (i, n) => { status.textContent = `מפיק PDF… עמוד ${i} מתוך ${n}`; });
-            await deliver(pdf.blob, pdf.name);
-            status.textContent = `✓ ה-PDF הורד (${pdf.pages} עמודים).`;
+            const s = cur;
+            const pdf = await buildPdf(s, (i, n) => { status.textContent = `מפיק PDF… עמוד ${i} מתוך ${n}`; });
+            status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים).`;
+            viewPdf(s, pdf);
             if (odOn) {
               status.textContent += ' מעלה ל-OneDrive…';
-              await Sync.uploadPdf(cur, pdf);
-              status.textContent = `✓ ה-PDF הורד (${pdf.pages} עמודים) ונשמר גם ב-OneDrive.`;
+              await Sync.uploadPdf(s, pdf);
+              status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים) ונשמר גם ב-OneDrive.`;
             }
           }) }, 'הפק PDF'),
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
+        pdfBox(cur),
         status),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'גיבוי וסנכרון'),
@@ -1448,7 +1456,77 @@
   async function buildPdf(s, onProgress) {
     if (Construction.isConstruction(s)) return null; // בסקר לבנייה יש רק אקסל
     const r = await ReportPrint.toPdf(s, id => photoBlob(s, id), onProgress);
-    return { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages };
+    const pdf = { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages };
+    // ה-PDF האחרון של כל סקר נשמר בטאבלט, כדי שאפשר יהיה לפתוח ולשלוח אותו מתוך האפליקציה
+    try { await DB.setKV('pdf:' + s.id, Object.assign({ at: Date.now(), hash: Sync.hashSurvey(s) }, pdf)); pdfChanged(s.id); } catch (_) {}
+    return pdf;
+  }
+  const pdfListeners = new Set();
+  function pdfChanged(id) { for (const f of [...pdfListeners]) f(id); }
+
+  // ---------- צפייה ב-PDF ושליחה ----------
+  // מייל / וואטסאפ: אתר לא יכול לצרף קובץ ישירות למייל או לוואטסאפ, אז נפתח חלון השיתוף של אנדרואיד עם הקובץ מצורף,
+  // ובוחרים בו את Gmail או את וואטסאפ. את הבחירה האחרונה אנדרואיד מציג ראשונה
+  async function sharePdf(s, pdf, via) {
+    const file = new File([pdf.blob], pdf.name, { type: 'application/pdf' });
+    const place = Core.placeOf(s);
+    const where = [place.name, place.address].filter(Boolean).join(', ') || s.site || '';
+    const subject = `סקר בטיחות עצים - ${where} - ${fmtDate(s.date)}`;
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      const data = { files: [file], title: subject };
+      if (via === 'mail') data.text = `מצורף דוח סקר בטיחות עצים: ${where}, ${fmtDate(s.date)}.`;
+      try { await navigator.share(data); return; }
+      catch (e) { if (e.name === 'AbortError') return; }
+    }
+    // אין שיתוף קבצים בדפדפן הזה: מורידים את הקובץ, ובמייל פותחים הודעה חדשה עם נושא (את הקובץ מצרפים מההורדות)
+    downloadFile(pdf.blob, pdf.name);
+    if (via === 'mail') location.href = 'mailto:?subject=' + encodeURIComponent(subject);
+    toast('הקובץ הורד. צרף אותו מתיקיית ההורדות.', 5000);
+  }
+  function downloadFile(blob, name) {
+    const a = h('a', { href: URL.createObjectURL(blob), download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  }
+
+  async function viewPdf(s, pdf) {
+    const pages = await ReportPrint.pdfPages(pdf.blob);
+    const urls = pages.map(b => URL.createObjectURL(b));
+    const close = () => { ov.remove(); urls.forEach(u => URL.revokeObjectURL(u)); window.removeEventListener('hashchange', close); };
+    window.addEventListener('hashchange', close);
+    const ov = h('div', { class: 'pdfv' },
+      h('div', { class: 'annot-bar' },
+        h('button', { class: 'txt', onclick: close }, 'סגור'),
+        h('span', { class: 'sp pdfv-title' }, `${pdf.pages} עמודים`),
+        h('button', { class: 'txt', onclick: () => sharePdf(s, pdf, 'mail') }, '✉ מייל'),
+        h('button', { class: 'txt', onclick: () => sharePdf(s, pdf, 'whatsapp') }, 'וואטסאפ'),
+        h('button', { class: 'txt', title: 'הורדה', 'aria-label': 'הורדה', onclick: () => downloadFile(pdf.blob, pdf.name) }, '⬇')),
+      h('div', { class: 'pdfv-pages' }, urls.map((u, i) => h('img', { src: u, alt: `עמוד ${i + 1}` }))));
+    document.body.append(ov);
+  }
+
+  // בלשונית הפקת דוח: ה-PDF האחרון של הסקר (גם זה שנוצר ב"סיום סקר"), עם צפייה ושליחה
+  function pdfBox(s) {
+    const box = h('div', { class: 'stack' });
+    let drawn = false;
+    const draw = async () => {
+      if (drawn && !box.isConnected) { pdfListeners.delete(onCh); return; }
+      drawn = true;
+      const pdf = await DB.getKV('pdf:' + s.id, null);
+      if (!pdf || !pdf.blob) { box.replaceChildren(); return; }
+      const hm = new Date(pdf.at).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const stale = pdf.hash !== Sync.hashSurvey(s);
+      box.replaceChildren(
+        h('div', { class: 'small' }, `PDF אחרון: ${hm}, ${pdf.pages} עמודים.`, stale ? h('span', { style: 'color:var(--danger)' }, ' הסקר השתנה מאז. לחץ "הפק PDF" כדי לעדכן.') : null),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary', onclick: () => viewPdf(s, pdf) }, '👁 הצג PDF'),
+          h('button', { class: 'btn', onclick: () => sharePdf(s, pdf, 'mail') }, '✉ שלח במייל'),
+          h('button', { class: 'btn', onclick: () => sharePdf(s, pdf, 'whatsapp') }, 'שלח בוואטסאפ')));
+    };
+    const onCh = id => { if (id === s.id) draw(); };
+    pdfListeners.add(onCh);
+    draw();
+    return box;
   }
 
   async function exportZip(status) {
