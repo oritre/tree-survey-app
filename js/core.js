@@ -179,7 +179,14 @@
     return w;
   }
 
-  const api = { TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, normNum, expandNum, firstNum, isPine, jValue, hasContent,
+  // שם המוסד (F9) וכתובת (D10) בדוח. סקר ישן עם שדה אתר אחד: הכול נכנס לשם
+  function placeOf(s) {
+    const t = x => (x || '').trim();
+    if (s.siteName == null && s.street == null && s.city == null) return { name: t(s.site), address: '' };
+    return { name: t(s.siteName), address: [t(s.street), t(s.city)].filter(Boolean).join(', ') };
+  }
+
+  const api = { placeOf, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, normNum, expandNum, firstNum, isPine, jValue, hasContent,
     sortTrees, splitActive, slotsOf, photoForSlot, groupKey, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
     nextNum, warnings };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;

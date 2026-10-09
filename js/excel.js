@@ -186,6 +186,72 @@
     };
   }
 
+  // תמונה בתוך התא (כמו "הכנס תמונה > מקם בתוך התא" באקסל): richData + metadata.
+  // התא מכיל #VALUE! עם vm שמפנה לתמונה. אקסל 365 (גם באנדרואיד) מציג אותה בתוך התא הממוזג
+  const RD = 'http://schemas.microsoft.com/office/spreadsheetml/2017/richdata';
+  async function openCellImages(zip) {
+    const imgs = [];
+    return {
+      // מחזיר פונקציית תא כמו strCell
+      add(slot, data) {
+        const media = `tree_photo_${slot.index}.jpg`;
+        zip.file('xl/media/' + media, data.bytes || data.blob);
+        imgs.push(media);
+        const vm = imgs.length; // 1-based
+        return (ref, s) => `<c r="${ref}"${s ? ` s="${s}"` : ''} t="e" vm="${vm}"><v>#VALUE!</v></c>`;
+      },
+      async save() {
+        if (!imgs.length) return;
+        const n = imgs.length;
+        const idx = imgs.map((_, i) => i);
+        zip.file('xl/metadata.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          `<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xlrd="${RD}">` +
+          '<metadataTypes count="1"><metadataType name="XLRICHVALUE" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1"/></metadataTypes>' +
+          `<futureMetadata name="XLRICHVALUE" count="${n}">` + idx.map(i => `<bk><extLst><ext uri="{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}"><xlrd:rvb i="${i}"/></ext></extLst></bk>`).join('') + '</futureMetadata>' +
+          `<valueMetadata count="${n}">` + idx.map(i => `<bk><rc t="1" v="${i}"/></bk>`).join('') + '</valueMetadata></metadata>');
+        zip.file('xl/richData/rdrichvalue.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          `<rvData xmlns="${RD}" count="${n}">` + idx.map(i => `<rv s="0"><v>${i}</v><v>5</v></rv>`).join('') + '</rvData>');
+        zip.file('xl/richData/rdrichvaluestructure.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          `<rvStructures xmlns="${RD}" count="1"><s t="_localImage"><k n="_rvRel:LocalImageIdentifier" t="i"/><k n="CalcOrigin" t="i"/></s></rvStructures>`);
+        zip.file('xl/richData/rdRichValueTypes.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<rvTypesInfo xmlns="http://schemas.microsoft.com/office/spreadsheetml/2017/richdata2" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x" xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><global><keyFlags>' +
+          '<key name="_Self"><flag name="ExcludeFromFile" value="1"/><flag name="ExcludeFromCalcComparison" value="1"/></key>' +
+          '<key name="_DisplayString"><flag name="ExcludeFromCalcComparison" value="1"/></key>' +
+          '<key name="_Flags"><flag name="ExcludeFromCalcComparison" value="1"/></key>' +
+          '<key name="_Format"><flag name="ExcludeFromCalcComparison" value="1"/></key>' +
+          '<key name="_SubLabel"><flag name="ExcludeFromCalcComparison" value="1"/></key>' +
+          '<key name="_Attribution"><flag name="ExcludeFromCalcComparison" value="1"/></key>' +
+          '<key name="_Icon"><flag name="ExcludeFromCalcComparison" value="1"/></key>' +
+          '<key name="_Display"><flag name="ExcludeFromCalcComparison" value="1"/></key>' +
+          '<key name="_CanonicalPropertyNames"><flag name="ExcludeFromCalcComparison" value="1"/></key>' +
+          '<key name="_ClassificationId"><flag name="ExcludeFromCalcComparison" value="1"/></key>' +
+          '</keyFlags></global></rvTypesInfo>');
+        zip.file('xl/richData/richValueRel.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          `<richValueRels xmlns="http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel" xmlns:r="${NS_R}">` + idx.map(i => `<rel r:id="rId${i + 1}"/>`).join('') + '</richValueRels>');
+        zip.file('xl/richData/_rels/richValueRel.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+          imgs.map((m, i) => `<Relationship Id="rId${i + 1}" Type="${REL_IMAGE}" Target="../media/${m}"/>`).join('') + '</Relationships>');
+        let wbRels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+        wbRels = wbRels.replace('</Relationships>',
+          '<Relationship Id="rIdMeta" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata" Target="metadata.xml"/>' +
+          '<Relationship Id="rIdRv" Type="http://schemas.microsoft.com/office/2017/06/relationships/rdRichValue" Target="richData/rdrichvalue.xml"/>' +
+          '<Relationship Id="rIdRvs" Type="http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueStructure" Target="richData/rdrichvaluestructure.xml"/>' +
+          '<Relationship Id="rIdRvt" Type="http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueTypes" Target="richData/rdRichValueTypes.xml"/>' +
+          '<Relationship Id="rIdRvr" Type="http://schemas.microsoft.com/office/2022/10/relationships/richValueRel" Target="richData/richValueRel.xml"/></Relationships>');
+        zip.file('xl/_rels/workbook.xml.rels', wbRels);
+        let ct = await zip.file('[Content_Types].xml').async('string');
+        if (!/Extension="jpg"/i.test(ct)) ct = ct.replace('<Default Extension="png"', '<Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="png"');
+        ct = ct.replace('</Types>',
+          '<Override PartName="/xl/metadata.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"/>' +
+          '<Override PartName="/xl/richData/rdrichvalue.xml" ContentType="application/vnd.ms-excel.rdrichvalue+xml"/>' +
+          '<Override PartName="/xl/richData/rdrichvaluestructure.xml" ContentType="application/vnd.ms-excel.rdrichvaluestructure+xml"/>' +
+          '<Override PartName="/xl/richData/rdRichValueTypes.xml" ContentType="application/vnd.ms-excel.rdrichvaluetypes+xml"/>' +
+          '<Override PartName="/xl/richData/richValueRel.xml" ContentType="application/vnd.ms-excel.richvaluerel+xml"/></Types>');
+        zip.file('[Content_Types].xml', ct);
+      },
+    };
+  }
+
   // גיליון שני: נ"צ ותמונות (לא מודפס בדוח)
   function fieldSheetXml(survey, slots) {
     const head = ['מספר העץ', 'מין עץ', 'דחיפות', 'אורנים', 'קו רוחב', 'קו אורך', 'דיוק (מ\')', 'מפה', 'תמונות שצולמו', 'תמונות בנספח', 'הערות', 'פרטי תמונות'];
@@ -242,7 +308,10 @@
     // כותרת
     if (survey.code) sheet.setCell('B5', valueCell(strings, survey.code));
     if (survey.manager) sheet.setCell('B6', strCell(strings, survey.manager));
-    if (survey.site) sheet.setCell('F9', strCell(strings, survey.site));
+    // F9 שם המוסד, D10 הכתובת ("רחוב, עיר"), כמו בדוחות במחשב
+    const place = Core.placeOf(survey);
+    if (place.name) sheet.setCell('F9', strCell(strings, place.name));
+    if (place.address) sheet.setCell('D10', strCell(strings, place.address));
     if (survey.date) sheet.setCell('F2', numCell(dateSerial(survey.date)));
 
     // עצים
@@ -267,17 +336,17 @@
       for (const st of SLOT_ROWS) for (const r of [st.label, st.num, st.path, st.copy, st.img]) {
         for (let c = COL_K; c < COL_K + 12; c++) sheet.setCell(colName(c) + r, emptyCell());
       }
-      const draw = await openDrawing(zip);
+      const cellImgs = await openCellImages(zip);
       for (const slot of slots) {
         const i = slot.index - 1;
         const cell = { block: Math.floor(i / 4), col: COL_K + (i % 4), printed: true };
         sheet.setCell(colName(cell.col) + SLOT_ROWS[cell.block].label, valueCell(strings, slot.label));
         const data = await getPhoto(slot.photo.id);
         if (!data) continue;
-        draw.add(slot, cell, data, slot.photo);
+        sheet.setCell(colName(cell.col) + SLOT_ROWS[cell.block].img, cellImgs.add(slot, data));
         placed.push({ index: slot.index, printed: true });
       }
-      await draw.save();
+      await cellImgs.save();
     } else {
       // מצב התבנית: הנוסחאות של התבנית קובעות את הנספח, התמונות מגיעות מתיקיית Pictures
       slots = Core.slotsOf(survey.trees);
@@ -286,6 +355,8 @@
       if (trees.length > 62 || pc === 'C') PAGE3_ROWS.forEach(r => sheet.unhideRow(r));
     }
 
+    // הפס התחתון עם פרטי הקשר (קיים בתבנית אבל לא מופעל בה, ובדוחות של אורי כן)
+    if (!/<oddFooter>/.test(sheet.xml)) sheet.xml = sheet.xml.replace('</oddHeader></headerFooter>', '</oddHeader><oddFooter>&amp;C&amp;G</oddFooter></headerFooter>');
     zip.file('xl/worksheets/sheet1.xml', sheet.xml);
     zip.file('xl/sharedStrings.xml', strings.toXml());
 
@@ -302,10 +373,12 @@
       .replace('</Types>', '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>');
     zip.file('[Content_Types].xml', ct);
 
+    // בלי רשומות תיקייה בקובץ, כמו בקבצים שאקסל עצמו שומר
+    for (const [p, f] of Object.entries(zip.files)) if (f.dir) delete zip.files[p];
     const out = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.ms-excel.sheet.macroEnabled.12' });
     return { bytes: out, slots, placed };
   }
 
-  const api = { buildWorkbook, slotCell, pageCase, dateSerial };
+  const api = { buildWorkbook, slotCell, pageCase, dateSerial, SLOT_ROWS, PAGE2_ROWS, PAGE3_ROWS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.SurveyExcel = api;
 })(typeof self !== 'undefined' ? self : this);
