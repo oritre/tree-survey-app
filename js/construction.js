@@ -37,9 +37,9 @@
   // מה שממלאים בשטח (העמודה בגיליון סקר בסוגריים). כל השאר מחושב
   const MEASURES = [['qty', 'כמות עצים', 'D'], ['height', "גובה עץ (מ')", 'E'], ['f1', 'גזע 1 (ס"מ)', 'F'], ['f2', 'גזע 2', 'G'], ['f3', 'גזע 3', 'H']];
   const SCORES = [['health', 'מצב בריאותי', 'J'], ['loc', 'מקום העץ', 'K'], ['canopy', 'חופת העץ', 'M']];
-  // היתכנות העתקה (Q): רק אחד מאלה, ברירת מחדל מקף
+  // היתכנות העתקה (Q): רק אחד מאלה, ברירת מחדל ריק
   const TRANSPLANT = ['נמוכה', 'בינונית', 'גבוהה', '-'];
-  const transplantOf = t => TRANSPLANT.includes(t.transplant) ? t.transplant : '-';
+  const transplantOf = t => TRANSPLANT.includes(t.transplant) ? t.transplant : '';
   const FIELDS = MEASURES.map(m => m[0]).concat(SCORES.map(s => s[0]), ['transplant']);
 
   const num = v => (v == null || v === '' || isNaN(+v)) ? null : Number(v);
@@ -205,7 +205,7 @@
       sheet.set('C' + r, c.name.trim() ? c.name : null);
       for (const [k, , col] of MEASURES) sheet.set(col + r, num(t[k]));
       for (const [k, , col] of SCORES) sheet.set(col + r, num(t[k]));
-      sheet.set('Q' + r, transplantOf(t));
+      sheet.set('Q' + r, transplantOf(t) || null);
       sheet.set('R' + r, (t.notes || '').trim() || null);
       sheet.cached('I' + r, c.I); sheet.cached('L' + r, c.L); sheet.cached('N' + r, c.N);
       sheet.cached('O' + r, c.O); sheet.cached('P' + r, c.P);
