@@ -1,7 +1,7 @@
 // חיבור ל-OneDrive דרך Microsoft Graph (התחברות PKCE, בלי שרת)
 (function (root) {
   'use strict';
-  const AUTH = 'https://login.microsoftonline.com/common/oauth2/v2.0';
+  const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
   const GRAPH = 'https://graph.microsoft.com/v1.0';
   const SCOPE = 'Files.ReadWrite offline_access User.Read';
   const CHUNK = 327680 * 16; // 5MB, כפולה של 320KB כמו ש-Graph דורש
