@@ -168,7 +168,7 @@
       if (isPine(t.species) && (t.pines == null || t.pines === '')) w.push(`${name}: אורן בלי כמות אורנים.`);
       if (t.split && !splitActive(t)) w.push(`${name}: סומן פצל אבל מספר העץ לא תקין לפיצול.`);
       if (!(t.photos || []).length) w.push(`${name}: אין תמונה.`);
-      if (t.lat == null) w.push(`${name}: אין נ"צ.`);
+      if (survey.warnGps && t.lat == null) w.push(`${name}: אין נ"צ.`);
     }
     for (const t of trees) {
       if (!splitActive(t)) continue;

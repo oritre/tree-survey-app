@@ -104,10 +104,13 @@
       const miss = SCORES.filter(([k]) => num(t[k]) == null).map(x => x[1]);
       if (miss.length) w.push(`${name}: חסר ניקוד ${miss.join(', ')}.`);
       if (!(t.photos || []).length && !covered.has(Core.firstNum(t.num))) w.push(`${name}: אין תמונה.`);
-      if (t.lat == null) w.push(`${name}: אין נ"צ.`);
+      if (s.warnGps && t.lat == null) w.push(`${name}: אין נ"צ.`);
     }
     return w;
   }
+
+  // שם התמונה בסקר לבנייה: שדה אחד לאקסל ולטלגרם (p.trees, ובתמונות ישנות ההערה p.note)
+  const photoName = p => String(p.trees || p.note || '').trim();
 
   // ---------- מילוי התבנית ----------
   // שורות העצים בגיליון סקר: עמוד 1 שורות 11-35, ואז 18 עמודים של 32 עצים (53-84, 99-130, ...)
@@ -136,7 +139,7 @@
         for (const n of Core.expandNum(t.num)) for (const p of photos.filter(x => x.sub === n)) slots.push({ tree: t, sub: n, label: String(n), photo: p });
       } else {
         // תמונה אחת לכמה עצים: "עצים בתמונה" (למשל 7-9) היא התווית בנספח
-        for (const p of photos) slots.push({ tree: t, sub: null, label: String((p.trees || '').trim() || t.num || t.species || ''), photo: p });
+        for (const p of photos) slots.push({ tree: t, sub: null, label: photoName(p) || String(t.num || t.species || ''), photo: p });
       }
     }
     return slots.slice(0, SLOT_CELLS.length).map((x, i) => Object.assign(x, { index: i + 1 }));
@@ -146,7 +149,7 @@
   // מספרי עצים שמופיעים בתמונה של עץ אחר ("עצים בתמונה")
   function coveredNums(trees) {
     const set = new Set();
-    for (const t of trees) for (const p of t.photos || []) if (p.inReport && (p.trees || '').trim()) for (const n of Core.expandNum(p.trees) || []) set.add(n);
+    for (const t of trees) for (const p of t.photos || []) if (p.inReport && photoName(p)) for (const n of Core.expandNum(pictureName(photoName(p))) || []) set.add(n);
     return set;
   }
   // דף התבנית שמכיל את משבצת i (0 = עמוד ראשון), כדי לפתוח את השורות המוסתרות
