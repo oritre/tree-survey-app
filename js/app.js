@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.12.0';
+  const APP_VERSION = '1.12.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -255,7 +255,7 @@
   async function copySurvey(old, withPhotos) {
     const keep = ['num', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS];
     const s = { id: uid(), type: Construction.typeOf(old), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
-      code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', cset: old.cset ? Object.assign({}, old.cset) : undefined, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
+      code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', cset: old.cset ? Object.assign({}, old.cset) : undefined, warnGps: !!old.warnGps, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
     for (const t of old.trees || []) {
       const nt = Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, t[k]])));
       if (withPhotos) for (const p of t.photos || []) {
@@ -700,6 +700,10 @@
         build ? null : h('div', { style: 'flex:1;min-width:200px' }, field('סמל מוסד (אם יש)', inp('code', { inputmode: 'numeric' }))),
         h('div', { style: 'flex:1;min-width:200px' }, field('תאריך הסקר', inp('date', { type: 'date' })))),
       build ? constructionDetails(inp) : field('מנהל/ת', inp('manager')),
+      // התראה על עצים בלי נ"צ בבדיקה לפני הפקה: לפי סקר, כבויה כברירת מחדל
+      h('label', { class: 'set-row' },
+        h('input', { type: 'checkbox', checked: !!cur.warnGps, onchange: e => { cur.warnGps = e.target.checked; saveSoon(); } }),
+        h('span', {}, h('b', {}, 'להתריע על עצים בלי נ"צ'), h('div', { class: 'muted small' }, 'בבדיקה לפני הפקה תופיע הערה לכל עץ שאין לו נ"צ.'))),
       h('div', { class: 'row' },
         h('button', { class: 'btn primary big', onclick: () => go(`#/s/${cur.id}/trees`) }, 'המשך לעצים'),
         h('span', { style: 'flex:1' }),
@@ -1211,8 +1215,13 @@
     if (!t.photos.length) { box.replaceChildren(h('div', { class: 'muted' }, 'אין תמונות לעץ הזה')); return; }
     const items = await Promise.all(t.photos.map(async p => {
       const url = await thumbUrl(p.id);
-      const noteIn = h('input', { class: 'in note-in', value: p.note || '', placeholder: 'שם / פרטים (לטלגרם בלבד)',
-        oninput: e => { p.note = e.target.value; saveSoon(); Sync.kick(); } });
+      // סקר לבנייה: שדה אחד לתמונה, גם לאקסל (התווית בנספח, למשל 7-9) וגם לטלגרם
+      const shared = Construction.isConstruction(cur) && !split;
+      const noteIn = shared
+        ? h('input', { class: 'in note-in', value: p.trees || p.note || '', placeholder: `שם התמונה לאקסל ולטלגרם (ריק = ${t.num || 'מספר העץ'}, למשל 7-9)`,
+            oninput: e => { p.trees = p.note = e.target.value.trim(); saveSoon(); Sync.kick(); } })
+        : h('input', { class: 'in note-in', value: p.note || '', placeholder: 'שם / פרטים (לטלגרם בלבד)',
+            oninput: e => { p.note = e.target.value; saveSoon(); Sync.kick(); } });
       return h('div', { class: 'ph-card' + (p.inReport ? ' in-report' : '') },
         h('div', { class: 'ph' },
           h('img', { src: url, alt: 'תמונה של עץ ' + Core.photoLabel(t, p), onclick: () => openPhoto(p.id) }),
@@ -1238,10 +1247,6 @@
           Core.ensureReportPhoto(t, old);
           saveSoon(); renderPhotos(); Sync.kick();
         } }, nums.map(n => h('option', { value: n, selected: p.sub === n ? 'selected' : null }, 'עץ ' + n))) : null,
-        Construction.isConstruction(cur) && !split ? h('label', { class: 'row', style: 'gap:6px;align-items:center' },
-          h('span', { class: 'small', style: 'white-space:nowrap' }, 'עצים בתמונה'),
-          h('input', { class: 'in', style: 'min-width:0', value: p.trees || '', placeholder: String(t.num || ''), title: 'למשל 7-9 כשהתמונה מראה כמה עצים. ריק = מספר העץ',
-            oninput: e => { p.trees = e.target.value.trim(); saveSoon(); } })) : null,
         noteIn);
     }));
     const hint = h('div', { class: 'muted small', style: 'margin-top:6px' },
