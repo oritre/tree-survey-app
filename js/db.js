@@ -42,7 +42,8 @@
       const db = await open();
       return req2p(db.transaction('surveys').objectStore('surveys').get(id));
     },
-    putSurvey(s) { s.updated = Date.now(); return tx('surveys', 'readwrite', st => { st.put(s); }); },
+    // touch=false: שמירה של הגיבוי עצמו (מספרי הודעות, מזהי קבצים), לא עריכה של הסקר, ולכן זמן העדכון לא משתנה
+    putSurvey(s, touch) { if (touch !== false) s.updated = Date.now(); return tx('surveys', 'readwrite', st => { st.put(s); }); },
     deleteSurvey(id) { return tx('surveys', 'readwrite', st => { st.delete(id); }); },
     putPhoto(p) { return tx('photos', 'readwrite', st => { st.put(p); }); },
     async getPhoto(id) {

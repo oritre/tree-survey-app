@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.12.1';
+  const APP_VERSION = '1.13.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -156,7 +156,8 @@
     // סקרים קודמים נמצאים ב"חיפוש סקרים בענן"
     const all = (await DB.allSurveys()).sort((a, b) => (b.updated || 0) - (a.updated || 0));
     const odOn = await OD.connected();
-    const surveys = all.filter(s => dayOf(s.updated || s.created) === today() || !inCloud(s, odOn));
+    // סקר שעוד לא לחצו בו "סיום סקר" נשאר במסך הבית גם בימים הבאים (ממשיכים אותו מכאן), והתמונות שלו נשארות בטאבלט
+    const surveys = all.filter(s => dayOf(s.updated || s.created) === today() || !inCloud(s, odOn) || !s.finished);
     const hiddenN = all.length - surveys.length;
     cleanupOld(all.filter(s => !surveys.includes(s)));
     const projects = [...new Set(surveys.map(s => s.project || ''))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b, 'he'));
@@ -168,7 +169,7 @@
         h('div', { style: 'flex:1;min-width:0' },
           h('div', { class: 't' }, s.site || 'סקר ללא שם', Construction.isConstruction(s) ? h('span', { class: 'badge type-badge' }, 'לבנייה') : null),
           h('div', { class: 'muted small' }, [s.code ? 'סמל ' + s.code : null, fmtDate(s.date)].filter(Boolean).join(' · ')),
-          h('div', { class: 'small' }, `${n} עצים · ${ph} תמונות` + (s.finished ? ' · ✓ הסתיים, בענן' : s.finishPending ? ' · ממתין להעלאה' : ''))),
+          h('div', { class: 'small' }, `${n} עצים · ${ph} תמונות` + (s.finished ? ' · ✓ הסתיים, בענן' : s.finishPending ? ' · ממתין להעלאה' : dayOf(s.updated || s.created) !== today() ? ' · בתהליך' : ''))),
         h('span', { class: 'muted', 'aria-hidden': 'true' }, '←'));
     };
     const shown = projectFilter == null ? projects : [projectFilter];
@@ -245,9 +246,10 @@
       }
       s.dateAskedDay = t;
     }
-    // עריכה ביום אחר מהעריכה האחרונה: הגרסה שבענן נשמרת קודם כגרסה קודמת
-    if (s.updated && dayOf(s.updated) !== t && s.odDataId && !s.snapshotFrom) s.snapshotFrom = dayOf(s.updated);
-    await DB.putSurvey(s);
+    // פתיחה ביום אחר מהיום שבו הסקר נוצר: לפני העריכה של היום, הגרסה שבענן (נתונים, אקסל, PDF) נשמרת ב"גרסאות קודמות".
+    // פעם אחת בכל יום, בלי קשר לזמן העדכון האחרון (שמשתנה גם מהגיבוי עצמו)
+    if (s.odDataId && dayOf(s.created) !== t && s.snapDay !== t && !s.snapshotFrom) { s.snapshotFrom = t; s.snapDay = t; }
+    await DB.putSurvey(s, false);
     return s;
   }
 
@@ -451,13 +453,54 @@
         h('div', { class: 'small' }, `${e.trees} עצים · ${e.photos} תמונות` + (e.finished ? ' · ✓ הסתיים' : '')),
         h('div', { class: 'row' },
           h('button', { class: 'btn primary', onclick: ev => fromCloud(e, true, ev.currentTarget) }, 'סקר חדש על בסיסו'),
-          h('button', { class: 'btn', onclick: ev => local.has(e.id) ? go('#/s/' + e.id) : fromCloud(e, false, ev.currentTarget) }, local.has(e.id) ? 'פתח (נמצא בטאבלט)' : 'פתח את הסקר הזה')))));
+          h('button', { class: 'btn', onclick: ev => local.has(e.id) ? go('#/s/' + e.id) : fromCloud(e, false, ev.currentTarget) }, local.has(e.id) ? 'פתח (נמצא בטאבלט)' : 'פתח את הסקר הזה'),
+          e.folderId ? h('button', { class: 'btn', onclick: ev => showVersions(e, ev.currentTarget) }, 'גרסאות קודמות') : null))));
     };
     q.addEventListener('input', draw);
     draw();
     msg.textContent = 'טוען מהענן…';
     try { cloudCache = await Sync.cloudIndex(); draw(); setTimeout(() => q.focus(), 50); }
     catch (e) { msg.textContent = (e instanceof OD.AuthError ? 'צריך להתחבר מחדש ל-OneDrive בהגדרות. ' : 'הטעינה נכשלה: ') + e.message; }
+  }
+
+  // גרסאות קודמות של סקר (נשמרות לפני עריכה ביום אחר): שחזור כסקר נפרד, או הורדה של האקסל/PDF הישן
+  async function showVersions(e, btn) {
+    const card = btn.closest('.card');
+    let box = card.querySelector('.versions');
+    if (box) { box.remove(); return; }
+    box = h('div', { class: 'versions stack small' }, 'טוען…');
+    card.append(box);
+    try {
+      const kids = await OD.api('GET', `/me/drive/items/${e.folderId}/children?$select=id,name,folder&$top=200`);
+      const vf = ((kids && kids.value) || []).find(x => x.folder && x.name === 'גרסאות קודמות');
+      const files = vf ? (((await OD.api('GET', `/me/drive/items/${vf.id}/children?$select=id,name,file&$top=200`)) || {}).value || []).filter(f => f.file) : [];
+      if (!files.length) { box.replaceChildren('אין גרסאות קודמות לסקר הזה.'); return; }
+      files.sort((a, b) => b.name.localeCompare(a.name, 'he'));
+      box.replaceChildren(...files.map(f => h('div', { class: 'row', style: 'align-items:center' },
+        h('span', { style: 'flex:1;min-width:0;overflow-wrap:anywhere' }, f.name),
+        /\.json$/i.test(f.name)
+          ? h('button', { class: 'btn', onclick: ev => restoreVersion(f, ev.currentTarget) }, 'שחזר כסקר נפרד')
+          : h('button', { class: 'btn', onclick: async ev => {
+            ev.currentTarget.disabled = true;
+            try { const b = await OD.download(f.id); if (b) downloadFile(b, f.name); } catch (err) { toast('נכשל: ' + err.message, 4000); }
+            finally { ev.currentTarget.disabled = false; }
+          } }, 'הורד'))));
+    } catch (err) { box.replaceChildren('הטעינה נכשלה: ' + err.message); }
+  }
+  // הגרסה הישנה נפתחת כסקר נוסף, עם התאריך והתמונות שלה. הסקר הנוכחי לא משתנה
+  async function restoreVersion(f, btn) {
+    btn.disabled = true;
+    try {
+      const b = await OD.download(f.id);
+      if (!b) throw new Error('הקובץ לא נמצא');
+      const old = JSON.parse(await b.text());
+      const s = await copySurvey(old, true);
+      s.date = old.date || s.date; s.restoredFrom = { id: old.id, file: f.name }; s.dateAskedDay = today(); // בלי השאלה על עדכון התאריך
+      await DB.putSurvey(s);
+      toast(`הגרסה שוחזרה כסקר נפרד מ-${fmtDate(s.date)}. הסקר הנוכחי לא השתנה.`, 5000);
+      go('#/s/' + s.id + '/trees');
+    } catch (err) { toast('השחזור נכשל: ' + err.message, 5000); }
+    finally { btn.disabled = false; }
   }
 
   // asNew=true: סקר חדש עם אותם פרטי מוסד ואותם עצים (מספר, מין, הערות, אורנים, נ"צ), בתאריך של היום ובלי תמונות

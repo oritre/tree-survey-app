@@ -72,7 +72,7 @@
           p.tgMsgId = await TG.sendPhoto(cfg.token, cfg.chat, d.blob, cap);
           p.tgCaption = cap; p.tgVer = ver;
           dirty = true;
-          await DB.putSurvey(s);
+          await DB.putSurvey(s, false);
           emit();
         } else if ((p.ver || 0) !== (p.tgVer || 0)) {
           // ציירו על התמונה אחרי שנשלחה: מחליפים את התמונה באותה הודעה
@@ -82,13 +82,13 @@
           const ok = await TG.editPhoto(cfg.token, cfg.chat, p.tgMsgId, d.blob, cap);
           if (ok) { p.tgVer = ver; p.tgCaption = cap; } else { p.tgMsgId = null; p.tgCaption = null; }
           dirty = true;
-          await DB.putSurvey(s);
+          await DB.putSurvey(s, false);
           emit();
         } else if (p.tgCaption !== cap) {
           const ok = await TG.editCaption(cfg.token, cfg.chat, p.tgMsgId, cap);
           if (ok) p.tgCaption = cap; else { p.tgMsgId = null; p.tgCaption = null; } // ההודעה נמחקה בטלגרם: תישלח שוב
           dirty = true;
-          await DB.putSurvey(s);
+          await DB.putSurvey(s, false);
         }
       }
     }
@@ -116,7 +116,7 @@
         const d = await DB.getPhoto(p.id);
         if (d && d.blob) { p.odId = null; p.odName = null; }
       }
-      await DB.putSurvey(s);
+      await DB.putSurvey(s, false);
     }
     if (!s.odFolderId) {
       const proj = await OD.folder(await backupRoot(), s.project || 'ללא פרויקט');
@@ -126,16 +126,16 @@
         const other = await OD.readJson(id, 'נתוני סקר.json');
         if (!other || other.id === s.id) { s.odFolderId = id; s.odFolderK = k; break; }
       }
-      await DB.putSurvey(s);
+      await DB.putSurvey(s, false);
     }
-    if (!s.odPhotosId) { s.odPhotosId = await OD.folder(s.odFolderId, 'תמונות'); await DB.putSurvey(s); }
+    if (!s.odPhotosId) { s.odPhotosId = await OD.folder(s.odFolderId, 'תמונות'); await DB.putSurvey(s, false); }
   }
 
   // בתיקיית הדוחות: תיקייה לכל פרויקט, וכל קבצי הסקרים ישירות בתוכה (בלי תיקייה לכל סקר)
   async function reportFolder(s) {
     if (!s.odReportDir) {
       s.odReportDir = await OD.folder(await reportRoot(), s.project || 'ללא פרויקט');
-      await DB.putSurvey(s);
+      await DB.putSurvey(s, false);
     }
     return s.odReportDir;
   }
@@ -166,12 +166,20 @@
         const blob = await OD.download(s.odDataId);
         if (blob) {
           const vf = await OD.folder(s.odFolderId, 'גרסאות קודמות');
-          await OD.upload(vf, `נתוני סקר - עד ${s.snapshotFrom}.json`, blob, true);
-          log('info', `נשמרה גרסה קודמת של הסקר (עד ${s.snapshotFrom})`, s);
+          const tag = `לפני עריכה ${s.snapshotFrom.split("-").reverse().join(".")}`;
+          await OD.upload(vf, `נתוני סקר - ${tag}.json`, blob, true);
+          // גם האקסל וה-PDF שכבר הופקו, כי "סיום סקר" הבא ידרוס אותם באותו שם
+          try {
+            const kids = await OD.api('GET', `/me/drive/items/${s.odFolderId}/children?$select=id,name,file&$top=200`);
+            for (const it of (kids && kids.value) || []) {
+              if (it.file && /\.(xlsm|pdf)$/i.test(it.name)) await OD.copy(it.id, vf, `${tag} - ${it.name}`);
+            }
+          } catch (e) { log('error', 'העתקת האקסל/PDF לגרסאות קודמות נכשלה: ' + e.message, s); }
+          log('info', `נשמרה גרסה קודמת של הסקר (${tag})`, s);
         }
       }
       s.snapshotFrom = null;
-      await DB.putSurvey(s);
+      await DB.putSurvey(s, false);
     }
 
     // תמונות: כל אחת עולה פעם אחת, ומשנה שם אם השם/הפרטים השתנו
@@ -184,9 +192,9 @@
           if (!d || !d.blob) continue;
           const ver = p.ver || 0;
           const item = await OD.upload(s.odPhotosId, name, d.blob, false);
-          if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s); throw new Error('תיקיית הגיבוי ב-OneDrive נמחקה, יוצר אותה מחדש'); }
+          if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי ב-OneDrive נמחקה, יוצר אותה מחדש'); }
           p.odId = item.id; p.odName = name; p.odVer = ver;
-          await DB.putSurvey(s);
+          await DB.putSurvey(s, false);
           emit();
         } else if ((p.ver || 0) !== (p.odVer || 0)) {
           // התמונה עודכנה (ציור): מחליפים את הקובץ ב-OneDrive
@@ -197,12 +205,12 @@
           try { item = await OD.replaceContent(p.odId, d.blob); }
           catch (_) { item = await OD.upload(s.odPhotosId, p.odName || name, d.blob, true); } // הקובץ נמחק ב-OneDrive
           p.odId = item.id || p.odId; p.odVer = ver;
-          await DB.putSurvey(s);
+          await DB.putSurvey(s, false);
           emit();
         } else if (p.odName !== name) {
           try { await OD.rename(p.odId, name); } catch (_) { /* שם תפוס: משאירים */ }
           p.odName = name;
-          await DB.putSurvey(s);
+          await DB.putSurvey(s, false);
         }
       }
     }
@@ -212,10 +220,10 @@
     if (s.odDataHash !== hash) {
       const item = await OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([JSON.stringify(s, null, 1)], { type: 'application/json' }), true);
       await OD.upload(s.odFolderId, 'שכבת עצים.geojson', new Blob([root.Gis.geojson([s])], { type: 'application/geo+json' }), true);
-      if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s); throw new Error('תיקיית הגיבוי ב-OneDrive נמחקה, יוצר אותה מחדש'); }
+      if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי ב-OneDrive נמחקה, יוצר אותה מחדש'); }
       if (item.id) s.odDataId = item.id;
       s.odDataHash = hash;
-      await DB.putSurvey(s);
+      await DB.putSurvey(s, false);
     }
     await updateIndex(s);
 
@@ -223,7 +231,7 @@
     if (s.finishPending && allInCloud(s)) {
       await uploadReport(s, { pdf: true });
       s.finishPending = false; s.finished = true; s.finishedAt = Date.now();
-      await DB.putSurvey(s);
+      await DB.putSurvey(s, false);
       await updateIndex(s);
       await freeLocal(s);
       log('ok', 'סיום סקר: אקסל ו-PDF נשמרו ב-OneDrive, והתמונות פונו מהטאבלט', s);
@@ -265,7 +273,7 @@
     idx.surveys = (idx.surveys || []).filter(x => x.id !== s.id).concat([e]);
     await OD.upload(r, INDEX, new Blob([JSON.stringify(idx)], { type: 'application/json' }), true);
     s.odIndexKey = key;
-    await DB.putSurvey(s);
+    await DB.putSurvey(s, false);
   }
 
   // הגדרות משותפות לכל המכשירים (טוקן הטלגרם והצ'אט), בקובץ בתיקיית הגיבוי ב-OneDrive.
@@ -310,14 +318,14 @@
     log('ok', 'האקסל נשמר ב-OneDrive', s);
     const pdf = opts && opts.pdf ? await root.App.buildPdf(s) : null;
     if (pdf) await uploadPdf(s, pdf);
-    await DB.putSurvey(s);
+    await DB.putSurvey(s, false);
   }
   async function uploadPdf(s, pdf) {
     await syncFolders(s);
     await putReportFile(s, pdf.name, pdf.blob);
     s.odPdfAt = Date.now();
     log('ok', 'ה-PDF נשמר ב-OneDrive', s);
-    await DB.putSurvey(s);
+    await DB.putSurvey(s, false);
   }
 
   function countPending(surveys, tgOn, odOn) {
