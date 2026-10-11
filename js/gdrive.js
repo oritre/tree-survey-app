@@ -115,8 +115,9 @@
       }
     },
 
-    async _list(query, extra) {
-      const out = [];
+    // maxPages: לעצור אחרי כמה עמודים (בחיפוש לא צריך את כל התוצאות)
+    async _list(query, extra, maxPages) {
+      const out = []; let pages = 0;
       let token = '';
       do {
         const p = new URLSearchParams(Object.assign({ q: query, fields: `nextPageToken,files(${FIELDS})`, pageSize: '1000', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true' }, extra || {}));
@@ -125,7 +126,7 @@
         if (!j) break;
         out.push(...(j.files || []));
         token = j.nextPageToken || '';
-      } while (token);
+      } while (token && (!maxPages || ++pages < maxPages));
       return out;
     },
     async _find(parentId, name, folder) {
@@ -213,44 +214,62 @@
     },
 
     // חיפוש קובצי אקסל בכל הדרייב (שם הקובץ, וגם תוכן הקובץ כמו סמל מוסד), החדשים קודם
-    // rootId: רק בתוך התיקייה הזו ובתתי התיקיות שלה (null = כל הדרייב)
+    // rootId: רק בתוך התיקייה הזו ובתתי התיקיות שלה (null = כל הדרייב). עמוד תוצאות אחד בלבד, כדי שיהיה מהיר
     async searchExcel(text, rootId) {
       const t = q(text.trim());
       const types = ['application/vnd.ms-excel.sheet.macroEnabled.12', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].map(m => `mimeType = '${m}'`).join(' or ');
-      let files = await OD._list(`(name contains ${t} or fullText contains ${t}) and (${types}) and trashed = false`, { pageSize: '200', orderBy: 'modifiedTime desc' });
-      if (rootId) {
-        const inside = await OD.subfolders(rootId);
-        files = files.filter(f => (f.parents || []).some(p => inside.has(p)));
-      }
+      const [found, tree] = await Promise.all([
+        OD._list(`(name contains ${t} or fullText contains ${t}) and (${types}) and trashed = false`, { pageSize: rootId ? '1000' : '150', orderBy: 'modifiedTime desc', fields: 'nextPageToken,files(id,name,parents,modifiedTime,mimeType,size)' }, 1),
+        rootId ? OD.folderTree(rootId) : null]);
+      let files = found;
+      if (tree) files = files.filter(f => (f.parents || []).some(p => tree.has(p)));
       return files.slice(0, 60).map(shape);
     },
-    // מזהי התיקייה וכל תתי התיקיות שלה (נשמר לכמה דקות, כדי שחיפוש נוסף יהיה מהיר)
-    async subfolders(rootId) {
-      const c = OD._sub;
-      if (c && c.root === rootId && Date.now() - c.at < 10 * 60 * 1000) return c.ids;
-      const ids = new Set([rootId]);
-      let level = [rootId];
-      while (level.length) {
-        const next = [];
-        // כמה תיקיות בבקשה אחת
-        for (let i = 0; i < level.length; i += 40) {
-          const parents = level.slice(i, i + 40).map(id => `${q(id)} in parents`).join(' or ');
-          const subs = await OD._list(`(${parents}) and mimeType = '${FOLDER}' and trashed = false`, { fields: 'nextPageToken,files(id)' });
-          for (const f of subs) if (!ids.has(f.id)) { ids.add(f.id); next.push(f.id); }
+    // כל התיקיות בתוך תיקיית הארכיון: מזהה -> {שם, תיקיית אב}. נשמר בטאבלט ליום, ומתעדכן ברקע אחרי שעה
+    async folderTree(rootId) {
+      const KEY = 'gdTree';
+      const mem = OD._tree;
+      if (mem && mem.root === rootId && Date.now() - mem.at < 60 * 60 * 1000) return mem.map;
+      const saved = mem && mem.root === rootId ? mem : await DB.getKV(KEY, null).then(x => x && x.root === rootId ? { root: x.root, at: x.at, map: new Map(x.list) } : null).catch(() => null);
+      const load = async () => {
+        const root = await OD.api('GET', `/files/${rootId}?fields=id,name,parents`);
+        const map = new Map([[rootId, { name: root ? root.name : '', parent: root && root.parents ? root.parents[0] : null }]]);
+        let level = [rootId];
+        while (level.length) {
+          const chunks = [];
+          for (let i = 0; i < level.length; i += 40) chunks.push(level.slice(i, i + 40));
+          // כמה תיקיות בבקשה אחת, וכמה בקשות במקביל
+          const res = await Promise.all(chunks.map(c => OD._list(`(${c.map(id => `${q(id)} in parents`).join(' or ')}) and mimeType = '${FOLDER}' and trashed = false`, { fields: 'nextPageToken,files(id,name,parents)' })));
+          const next = [];
+          for (const f of res.flat()) if (!map.has(f.id)) { map.set(f.id, { name: f.name, parent: (f.parents || [])[0] }); next.push(f.id); }
+          level = next;
         }
-        level = next;
+        OD._tree = { root: rootId, at: Date.now(), map };
+        DB.setKV(KEY, { root: rootId, at: Date.now(), list: [...map] }).catch(() => {});
+        return map;
+      };
+      if (saved && Date.now() - saved.at < 24 * 60 * 60 * 1000) {
+        OD._tree = saved;
+        if (Date.now() - saved.at > 60 * 60 * 1000 && !OD._treeLoading) OD._treeLoading = load().catch(() => {}).finally(() => { OD._treeLoading = null; });
+        return saved.map;
       }
-      OD._sub = { root: rootId, ids, at: Date.now() };
-      return ids;
+      return load();
     },
-    // שם תיקייה (ותיקיית האב שלה) להצגה בתוצאות
+    async subfolders(rootId) { return new Set((await OD.folderTree(rootId)).keys()); },
+    // שם תיקייה (ותיקיות האב שלה) להצגה בתוצאות. כל תיקייה נקראת מגוגל פעם אחת בלבד
     async folderPath(id, depth) {
       const names = [];
+      const tree = OD._tree && OD._tree.map;
+      OD._fcache = OD._fcache || new Map();
       for (let i = 0; id && i < (depth || 2); i++) {
-        const f = await OD.api('GET', `/files/${id}?fields=id,name,parents`);
-        if (!f || !f.parents) break;
+        let f = tree && tree.get(id);
+        if (!f) {
+          if (!OD._fcache.has(id)) OD._fcache.set(id, OD.api('GET', `/files/${id}?fields=id,name,parents`).then(x => x && { name: x.name, parent: x.parents ? x.parents[0] : null }).catch(() => null));
+          f = await OD._fcache.get(id);
+        }
+        if (!f || !f.parent) break;
         names.unshift(f.name);
-        id = f.parents[0];
+        id = f.parent;
       }
       return names;
     },
