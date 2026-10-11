@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.16.6';
+  const APP_VERSION = '1.17.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -395,23 +395,87 @@
 
   // ---------- דיוק נ"צ במפה ----------
   let leafletP = null;
-  function loadLeaflet() {
-    if (window.L) return Promise.resolve();
-    return leafletP || (leafletP = new Promise((res, rej) => {
-      document.head.append(h('link', { rel: 'stylesheet', href: 'vendor/leaflet/leaflet.css' }));
-      const sc = h('script', { src: 'vendor/leaflet/leaflet.js' });
-      sc.onload = res; sc.onerror = () => { leafletP = null; rej(new Error('טעינת המפה נכשלה')); };
+  // proj4: המרה לרשת ישראל החדשה (לתצלום של עיריית ירושלים)
+  let proj4P = null;
+  function loadProj4() {
+    if (window.proj4) return Promise.resolve();
+    return proj4P || (proj4P = new Promise((res, rej) => {
+      const sc = h('script', { src: 'vendor/proj4.min.js' });
+      sc.onload = res; sc.onerror = () => { proj4P = null; rej(new Error('proj4')); };
       document.head.append(sc);
     }));
   }
+  function loadLeaflet() {
+    if (window.L) return loadProj4().catch(() => {});
+    return leafletP || (leafletP = new Promise((res, rej) => {
+      document.head.append(h('link', { rel: 'stylesheet', href: 'vendor/leaflet/leaflet.css' }));
+      const sc = h('script', { src: 'vendor/leaflet/leaflet.js' });
+      sc.onload = () => loadProj4().catch(() => {}).then(res); sc.onerror = () => { leafletP = null; rej(new Error('טעינת המפה נכשלה')); };
+      document.head.append(sc);
+    }));
+  }
+  const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+  // תצלומי אוויר של עיריות (חדים מאוד, רק בתחום העיר). מחוץ לתחום רואים את Esri מתחת
+  const CITY_ORTHO = [
+    ['https://gisn.tel-aviv.gov.il/arcgis/rest/services/WM/IView2Ortho2026WM/MapServer/tile/{z}/{y}/{x}', [[32.0265, 34.6711], [32.1484, 34.9179]], '© עיריית תל אביב-יפו'],
+    ['https://tiles.arcgis.com/tiles/BtqYDIRT3FCK6rgL/arcgis/rest/services/city_ortho/MapServer/tile/{z}/{y}/{x}', [[29.4864, 34.8992], [29.6014, 34.9801]], '© עיריית אילת'],
+    ['https://tiles.arcgis.com/tiles/7gJtYYpezyRvI0Jk/arcgis/rest/services/OldJerusalem20062024WML21/MapServer/tile/{z}/{y}/{x}', [[31.7665, 35.2148], [31.7952, 35.2535]], '© רשות העתיקות'],
+  ];
+  // עיריית ירושלים: תצלום אוויר 05/2026, עד 3 ס"מ לפיקסל, ברשת ישראל החדשה (ITM). כל אריח של המפה מצויר מאריחי ITM
+  const JLM = { url: 'https://gisviewer.jerusalem.muni.il/arcgis/rest/services/Ortho052026/MapServer/tile/', ox: 205000, oy: 645000,
+    res: [67.73346880027094, 33.86673440013547, 16.933367200067735, 8.466683600033868, 4.233341800016934, 2.116670900008467, 1.0583354500042335, 0.5291677250021167, 0.26458386250105836, 0.13229193125052918, 0.06614596562526459, 0.033072982812632296],
+    bounds: [[31.5877, 35.0253], [32.0723, 35.5393]] };
+  const ITM = '+proj=tmerc +lat_0=31.7343936111111 +lon_0=35.2045169444444 +k=1.0000067 +x_0=219529.584 +y_0=626907.39 +ellps=GRS80 +towgs84=-24.0024,-17.1032,-17.8444,-0.33077,-1.85269,1.66969,5.4248 +units=m +no_defs';
+  function itmLayer(L) {
+    return L.GridLayer.extend({
+      createTile(c, done) {
+        const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+        const map = this._map, P = ll => window.proj4('WGS84', ITM, [ll.lng, ll.lat]);
+        const px = c.scaleBy(L.point(256, 256));
+        const tl = P(map.unproject(px, c.z)), tr = P(map.unproject(px.add([256, 0]), c.z)), bl = P(map.unproject(px.add([0, 256]), c.z)), br = P(map.unproject(px.add([256, 256]), c.z));
+        // ITM -> פיקסלים באריח (מטריצה הפוכה של שני צלעות האריח)
+        const ux = tr[0] - tl[0], uy = tr[1] - tl[1], vx = bl[0] - tl[0], vy = bl[1] - tl[1], det = ux * vy - vx * uy;
+        const m11 = 256 * vy / det, m12 = -256 * vx / det, m21 = -256 * uy / det, m22 = 256 * ux / det;
+        const need = Math.hypot(ux, uy) / 256; // מטר לפיקסל במפה
+        let lv = JLM.res.findIndex(r => r <= need * 1.15); if (lv < 0) lv = JLM.res.length - 1;
+        const r = JLM.res[lv], S = r * 256;
+        const xs = [tl[0], tr[0], bl[0], br[0]], ys = [tl[1], tr[1], bl[1], br[1]];
+        const c0 = Math.floor((Math.min(...xs) - JLM.ox) / S), c1 = Math.floor((Math.max(...xs) - JLM.ox) / S);
+        const r0 = Math.floor((JLM.oy - Math.max(...ys)) / S), r1 = Math.floor((JLM.oy - Math.min(...ys)) / S);
+        const ctx = cv.getContext('2d'); let left = 0;
+        const finish = () => { if (--left <= 0) done(null, cv); };
+        for (let row = r0; row <= r1; row++) for (let col = c0; col <= c1; col++) {
+          if (row < 0 || col < 0) continue;
+          left++;
+          const img = new Image();
+          img.onload = () => {
+            const dx = JLM.ox + col * S - tl[0], dy = JLM.oy - row * S - tl[1];
+            ctx.setTransform(m11 * r, m21 * r, -m12 * r, -m22 * r, m11 * dx + m12 * dy, m21 * dx + m22 * dy);
+            ctx.drawImage(img, 0, 0, 256.6, 256.6); // חפיפה קטנה, בלי קווים דקים בין האריחים
+            finish();
+          };
+          img.onerror = finish;
+          img.src = JLM.url + lv + '/' + row + '/' + col;
+        }
+        if (!left) setTimeout(() => done(null, cv), 0);
+        return cv;
+      },
+    });
+  }
+  const EMPTY_TILE = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
   // תצלומי אוויר: גוגל (הכי חד בישראל) ו-Bing (ב-zoom עמוק ממשיך להגדיל את התמונה האחרונה במקום להיעלם)
   const LAYERS = {
     'גוגל – לוויין': ['https://mt{s}.google.com/vt/lyrs=y&hl=iw&x={x}&y={y}&z={z}', { subdomains: '0123', maxZoom: 22, maxNativeZoom: 21, attribution: '© Google' }],
     'Bing – תצלום אוויר': ['bing', { maxZoom: 22, maxNativeZoom: 19, attribution: '© Microsoft' }],
+    'Esri – תצלום אוויר': [ESRI, { maxZoom: 22, maxNativeZoom: 19, attribution: '© Esri, Vantor' }],
+    'עירייה – תצלום אוויר': ['city', { maxZoom: 22 }],
     'גוגל – מפה': ['https://mt{s}.google.com/vt/lyrs=m&hl=iw&x={x}&y={y}&z={z}', { subdomains: '0123', maxZoom: 22, maxNativeZoom: 21, attribution: '© Google' }],
   };
   function tileLayer(url, o) {
     const L = window.L;
+    if (url === 'city') return L.layerGroup([L.tileLayer(ESRI, { maxZoom: 22, maxNativeZoom: 19, attribution: '© Esri, Vantor' }),
+      ...CITY_ORTHO.map(([u, b, a]) => L.tileLayer(u, { bounds: b, maxZoom: 22, maxNativeZoom: 21, minZoom: 12, errorTileUrl: EMPTY_TILE, attribution: a })),
+      ...(window.proj4 ? [new (itmLayer(L))({ bounds: JLM.bounds, minZoom: 13, maxZoom: 22, attribution: '© עיריית ירושלים' })] : [])]);
     if (url !== 'bing') return L.tileLayer(url, o);
     const quad = (x, y, z) => { let q = ''; for (let i = z; i > 0; i--) { const m = 1 << (i - 1); q += ((x & m) ? 1 : 0) + ((y & m) ? 2 : 0); } return q; };
     const Bing = L.TileLayer.extend({ getTileUrl: c => `https://ecn.t${(c.x + c.y) % 4}.tiles.virtualearth.net/tiles/a${quad(c.x, c.y, c.z)}.jpeg?g=1` });

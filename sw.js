@@ -1,7 +1,7 @@
 // עבודה בלי קליטה: שומר את קבצי האפליקציה במטמון
-const CACHE = 'tree-survey-v1.16.6';
+const CACHE = 'tree-survey-v1.17.0';
 const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'vendor/jszip.min.js', 'js/core.js', 'js/excel.js',
-  'js/db.js', 'js/telegram.js', 'js/gis.js', 'js/gdrive.js', 'js/sync.js', 'js/annotate.js', 'js/print.js', 'js/camera.js', 'js/reports.js', 'js/importer.js', 'js/construction-data.js', 'js/construction.js', 'template/construction.xltm', 'js/app.js', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css', 'template/survey.xltm', 'template/layout.json', 'template/letterhead.png', 'template/footer.png', 'template/stamp.png', 'fonts/arimo-hebrew-400-normal.woff2', 'fonts/arimo-hebrew-700-normal.woff2', 'fonts/arimo-latin-400-normal.woff2', 'fonts/arimo-latin-700-normal.woff2', 'icons/icon-192.png', 'icons/icon-512.png'];
+  'js/db.js', 'js/telegram.js', 'js/gis.js', 'js/gdrive.js', 'js/sync.js', 'js/annotate.js', 'js/print.js', 'js/camera.js', 'js/reports.js', 'js/importer.js', 'js/construction-data.js', 'js/construction.js', 'template/construction.xltm', 'js/app.js', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css', 'vendor/proj4.min.js', 'template/survey.xltm', 'template/layout.json', 'template/letterhead.png', 'template/footer.png', 'template/stamp.png', 'fonts/arimo-hebrew-400-normal.woff2', 'fonts/arimo-hebrew-700-normal.woff2', 'fonts/arimo-latin-400-normal.woff2', 'fonts/arimo-latin-700-normal.woff2', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
