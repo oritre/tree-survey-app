@@ -77,14 +77,18 @@
     const cJ = cUrg + 1;
     const maxRow = Math.max(...byRow.keys());
     const trees = [];
-    for (let i = 0; i < heads.length; i++) {
-      const end = i + 1 < heads.length ? heads[i + 1] : maxRow + 1;
-      for (let r = heads[i] + 1; r < end; r++) {
+    // התבנית הרגילה (כותרות בשורות 22, 61, 115): רק שורות העצים שלה, כי בשורות אחרות יש טקסט קבוע (המלצות, חתימה)
+    const std = heads[0] === 22 && cNum === 1;
+    const rows = [];
+    if (std) rows.push(...Core.TREE_ROWS);
+    else for (let i = 0; i < heads.length; i++) { const end = i + 1 < heads.length ? heads[i + 1] : maxRow + 1; for (let r = heads[i] + 1; r < end; r++) rows.push(r); }
+    {
+      for (const r of rows) {
         const at = c => main.cells.get(colName(c) + r);
         const num = numText(at(cNum)), species = clean(at(cSp));
         if (!num && !species) continue;
         if (num && !isTreeNum(num)) continue; // שורת טקסט (חתימה, הערה כללית)
-        if (!num && (species.length > 40 || !at(cNotes) && !at(cUrg))) continue;
+        if (!num && (species.length > 40 || (!std && !at(cNotes) && !at(cUrg)))) continue;
         const jv = clean(at(cJ));
         const pm = /(\d+(?:\.\d+)?)/.exec(jv);
         trees.push({ num, species, notes: clean(at(cNotes)), urgency: clean(at(cUrg)), pines: pm ? pm[1] : '', split: /פצל/.test(jv) });
