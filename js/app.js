@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.15.1';
+  const APP_VERSION = '1.15.2';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1065,14 +1065,11 @@
 
   async function suggestions() {
     const all = await DB.allSurveys();
-    const sp = new Map(), ph = new Map();
-    for (const s of all) for (const t of s.trees) {
+    const sp = new Map();
+    // לומדים רק מסקרי בטיחות: ההערות והמינים של סקרי בנייה לא נכנסים להצעות
+    for (const s of all.filter(x => !Construction.isConstruction(x))) for (const t of s.trees) {
       const k = (t.species || '').trim();
       if (k) sp.set(k, (sp.get(k) || 0) + 1);
-      for (const part of (t.notes || '').split(/[,.;\n]+/)) {
-        const p = part.trim();
-        if (p.length > 2) ph.set(p, (ph.get(p) || 0) + 1);
-      }
     }
     const custom = await DB.getKV('species', null);
     const phrases = await DB.getKV('phrases', null);
@@ -1081,7 +1078,8 @@
     return {
       speciesAll: uniq(top(sp).concat(custom || SPECIES_SEED)),
       speciesTop: uniq(top(sp).concat(custom || SPECIES_SEED)).slice(0, 10),
-      phrasesTop: uniq(top(ph).filter(p => ph.get(p) > 1).concat(phrases || PHRASE_SEED)).slice(0, 16),
+      // הערות: רק הרשימה הקבועה מההגדרות, בלי למידה מהסקרים
+      phrasesTop: phrases || PHRASE_SEED,
       constructionNotes: (await DB.getKV('constructionNotes', null)) || CONSTRUCTION_NOTES_SEED,
     };
   }
@@ -1927,9 +1925,9 @@
           inAppCamera, annotateAfter, shareFiles),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'רשימות בחירה'),
-          h('div', { class: 'muted small' }, 'שורה לכל פריט. האפליקציה מוסיפה אוטומטית גם מה שכבר כתבת בסקרים.'),
+          h('div', { class: 'muted small' }, 'שורה לכל פריט. ההערות מתחת לשדה ההערות הן רק מה שכתוב כאן (בלי למידה מהסקרים). למיני העצים האפליקציה מוסיפה גם מינים שכבר כתבת בסקרי בטיחות.'),
           field('מיני עצים', speciesTa),
-          field('משפטי טיפול', phrasesTa),
+          field('הערות וטיפול מומלץ בסקר בטיחות (כפתורים מתחת להערות)', phrasesTa),
           field('הערות בסקר לבנייה (כפתורים מתחת להערות)', cNotesTa),
           h('button', { class: 'btn primary', onclick: async () => {
             const lines = ta => ta.value.split('\n').map(s => s.trim()).filter(Boolean);
