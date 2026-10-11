@@ -130,6 +130,7 @@ const Bing=L.TileLayer.extend({getTileUrl(c){return 'https://ecn.t'+((c.x+c.y)%4
 const base={
  'תצלום אוויר (גוגל)':L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&hl=iw&x={x}&y={y}&z={z}',{subdomains:'0123',maxZoom:21,attribution:'© Google'}),
  'תצלום אוויר (Bing)':new Bing('',{maxZoom:21,maxNativeZoom:19,attribution:'© Microsoft'}),
+ 'תצלום אוויר (Esri)':L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:21,maxNativeZoom:19,attribution:'© Esri, Vantor'}),
  'מפת רחובות (גוגל)':L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&hl=iw&x={x}&y={y}&z={z}',{subdomains:'0123',maxZoom:21,attribution:'© Google'})};
 base['תצלום אוויר (גוגל)'].addTo(map);
 L.control.layers(base,null,{position:'topleft'}).addTo(map);
