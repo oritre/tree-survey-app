@@ -280,17 +280,50 @@
   async function reportRoot() { return OD.folder(null, (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים'); }
   const rootFolder = backupRoot;
 
+  // האינדקס נקרא ונכתב כולו, אז כתיבות לא רצות במקביל (גיבוי רגיל וייבוא) כדי שרשומות לא ילכו לאיבוד
+  let indexLock = Promise.resolve();
+  function withIndex(fn) { const p = indexLock.then(fn); indexLock = p.catch(() => {}); return p; }
+  async function writeIndexEntries(entries) {
+    const r = await rootFolder();
+    const idx = (await OD.readJson(r, INDEX)) || { surveys: [] };
+    const ids = new Set(entries.map(e => e.id));
+    idx.surveys = (idx.surveys || []).filter(x => !ids.has(x.id)).concat(entries);
+    await OD.upload(r, INDEX, new Blob([JSON.stringify(idx)], { type: 'application/json' }), true);
+  }
   async function updateIndex(s) {
     if (!s.odDataId) return;
     const e = indexEntry(s), key = JSON.stringify(e);
     if (s.odIndexKey === key) return;
-    const r = await rootFolder();
-    const idx = (await OD.readJson(r, INDEX)) || { surveys: [] };
-    idx.surveys = (idx.surveys || []).filter(x => x.id !== s.id).concat([e]);
-    await OD.upload(r, INDEX, new Blob([JSON.stringify(idx)], { type: 'application/json' }), true);
+    await withIndex(() => writeIndexEntries([e]));
     s.odIndexKey = key;
     await DB.putSurvey(s, false);
   }
+
+  // ייבוא סקר ישן ישר לגיבוי ב-OneDrive, בלי לשמור אותו בטאבלט (אלפי סקרים לא נכנסים לזיכרון של הדפדפן).
+  // src: {blob} קובץ מהמחשב, או {odId} קובץ שכבר נמצא ב-OneDrive (מועתק שם, בלי הורדה נוספת).
+  // מחזיר את הרשומה לאינדקס; האינדקס עצמו נכתב בקבוצות (flushImported)
+  const projCache = new Map();
+  async function importSurvey(s, src) {
+    const pk = s.project || 'ללא פרויקט';
+    if (!projCache.has(pk)) projCache.set(pk, await OD.folder(await backupRoot(), pk));
+    const proj = projCache.get(pk);
+    for (let k = 1; ; k++) {
+      const id = await OD.folder(proj, k > 1 ? `${folderBase(s)} - ${k}` : folderBase(s));
+      const other = await OD.readJson(id, 'נתוני סקר.json');
+      if (!other || other.id === s.id) { s.odFolderId = id; s.odFolderK = k; break; }
+    }
+    const name = src.name || 'קובץ מקורי.xlsx';
+    if (src.blob) await OD.upload(s.odFolderId, name, src.blob, true);
+    else if (src.odId) await OD.copy(src.odId, s.odFolderId, name);
+    s.odSrcCopied = true;
+    const item = await OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([JSON.stringify(s, null, 1)], { type: 'application/json' }), true);
+    if (!item || !item.id) throw new Error('שמירת נתוני הסקר ב-OneDrive נכשלה');
+    s.odDataId = item.id;
+    if (s.trees.some(t => t.lat)) await OD.upload(s.odFolderId, 'שכבת עצים.geojson', new Blob([root.Gis.geojson([s])], { type: 'application/geo+json' }), true);
+    s.odDataHash = hashSurvey(s);
+    return indexEntry(s);
+  }
+  function flushImported(entries) { return entries.length ? withIndex(() => writeIndexEntries(entries)) : Promise.resolve(); }
 
   // הגדרות משותפות לכל המכשירים (טוקן הטלגרם והצ'אט), בקובץ בתיקיית הגיבוי ב-OneDrive.
   // מה שעודכן אחרון (בטאבלט או בענן) הוא שקובע
@@ -414,7 +447,7 @@
   window.addEventListener('offline', () => { state.offline = true; emit(); });
   setInterval(() => { if (!running) run(); }, 3 * 60 * 1000);
 
-  root.Sync = { stop,
+  root.Sync = { stop, importSurvey, flushImported,
     kick, state,
     now() { state.odNeedsLogin = false; schedule(0); },
     // פעולות ידניות: עובדות על הסקר הפתוח ומחכות לסיום
