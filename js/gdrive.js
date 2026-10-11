@@ -19,6 +19,10 @@
   const shape = f => f && Object.assign({ id: f.id, name: f.name, size: +f.size || 0, lastModifiedDateTime: f.modifiedTime, parents: f.parents },
     f.mimeType === FOLDER ? { folder: {} } : { file: { mimeType: f.mimeType } });
 
+  // מזהה הלקוח "Tree Survey Web" בגוגל (ציבורי), מובנה כדי שכל מכשיר יתחבר בלי להקליד אותו.
+  // הסוד (Client secret) לא נשמר בקוד, כי המאגר ציבורי: מקלידים אותו פעם אחת בכל מכשיר
+  const DEFAULT_ID = '59129286840-gdjk14sc5kja0ls0s76lmr472hlbhi9v.apps.googleusercontent.com';
+
   class AuthError extends Error {}
 
   const OD = {
@@ -26,7 +30,8 @@
     provider: 'gdrive',
     name: 'גוגל דרייב',
 
-    async clientId() { return (await DB.getKV('gdClientId', '')).trim(); },
+    defaultClientId: DEFAULT_ID,
+    async clientId() { return (await DB.getKV('gdClientId', '')).trim() || DEFAULT_ID; },
     async clientSecret() { return (await DB.getKV('gdClientSecret', '')).trim(); },
 
     async beginLogin() {
@@ -208,11 +213,35 @@
     },
 
     // חיפוש קובצי אקסל בכל הדרייב (שם הקובץ, וגם תוכן הקובץ כמו סמל מוסד), החדשים קודם
-    async searchExcel(text) {
+    // rootId: רק בתוך התיקייה הזו ובתתי התיקיות שלה (null = כל הדרייב)
+    async searchExcel(text, rootId) {
       const t = q(text.trim());
       const types = ['application/vnd.ms-excel.sheet.macroEnabled.12', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].map(m => `mimeType = '${m}'`).join(' or ');
-      const files = await OD._list(`(name contains ${t} or fullText contains ${t}) and (${types}) and trashed = false`, { pageSize: '60', orderBy: 'modifiedTime desc' });
+      let files = await OD._list(`(name contains ${t} or fullText contains ${t}) and (${types}) and trashed = false`, { pageSize: '200', orderBy: 'modifiedTime desc' });
+      if (rootId) {
+        const inside = await OD.subfolders(rootId);
+        files = files.filter(f => (f.parents || []).some(p => inside.has(p)));
+      }
       return files.slice(0, 60).map(shape);
+    },
+    // מזהי התיקייה וכל תתי התיקיות שלה (נשמר לכמה דקות, כדי שחיפוש נוסף יהיה מהיר)
+    async subfolders(rootId) {
+      const c = OD._sub;
+      if (c && c.root === rootId && Date.now() - c.at < 10 * 60 * 1000) return c.ids;
+      const ids = new Set([rootId]);
+      let level = [rootId];
+      while (level.length) {
+        const next = [];
+        // כמה תיקיות בבקשה אחת
+        for (let i = 0; i < level.length; i += 40) {
+          const parents = level.slice(i, i + 40).map(id => `${q(id)} in parents`).join(' or ');
+          const subs = await OD._list(`(${parents}) and mimeType = '${FOLDER}' and trashed = false`, { fields: 'nextPageToken,files(id)' });
+          for (const f of subs) if (!ids.has(f.id)) { ids.add(f.id); next.push(f.id); }
+        }
+        level = next;
+      }
+      OD._sub = { root: rootId, ids, at: Date.now() };
+      return ids;
     },
     // שם תיקייה (ותיקיית האב שלה) להצגה בתוצאות
     async folderPath(id, depth) {
