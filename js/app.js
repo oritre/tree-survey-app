@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.16.1';
+  const APP_VERSION = '1.16.2';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -462,9 +462,12 @@
     const msg = h('div', { class: 'muted small', role: 'status' });
     const arch = h('div', { class: 'stack' });
     const archBtn = h('button', { class: 'btn primary', onclick: () => searchArchive(q.value, arch, archBtn) }, '🔎 חפש גם בארכיון בגוגל דרייב (קובצי אקסל)');
+    const archive = await DB.getKV('gdArchive', null);
+    const archWhere = h('div', { class: 'muted small' }, 'הארכיון: ' + (archive ? 'התיקייה "' + archive.name + '" ותתי התיקיות שלה' : 'כל הדרייב') + ' · ',
+      h('a', { href: '#/settings' }, 'שינוי בהגדרות'));
     q.addEventListener('keydown', e => { if (e.key === 'Enter') searchArchive(q.value, arch, archBtn); });
     app.replaceChildren(bar('חיפוש סקרים בענן', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' }, q,
-      h('div', { class: 'row' }, archBtn, h('button', { class: 'btn', onclick: () => go('#/import') }, '📥 ייבוא סקרים ישנים מאקסל')), arch, msg, list));
+      h('div', { class: 'row' }, archBtn, h('button', { class: 'btn', onclick: () => go('#/import') }, '📥 ייבוא סקרים ישנים מאקסל')), archWhere, arch, msg, list));
     if (!(await OD.connected())) { msg.textContent = 'צריך לחבר את גוגל דרייב בהגדרות כדי לחפש בענן.'; return; }
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
     const draw = () => {
@@ -505,7 +508,8 @@
     btn.disabled = true;
     box.replaceChildren(h('div', { class: 'muted small' }, 'מחפש בארכיון…'));
     try {
-      const files = await OD.searchExcel(text);
+      const archive = await DB.getKV('gdArchive', null);
+      const files = await OD.searchExcel(text, archive && archive.id);
       const rows = [];
       for (const f of files) {
         const path = await pathOf(f);
@@ -517,8 +521,9 @@
           h('div', { class: 't', style: 'font-weight:600;overflow-wrap:anywhere' }, '📄 ' + f.name.replace(/\.xls[xm]$/i, '')),
           h('div', { class: 'muted small' }, [path.join(' / '), f.lastModifiedDateTime ? fmtDate(f.lastModifiedDateTime.slice(0, 10)) : ''].filter(Boolean).join(' · ')),
           h('div', { class: 'row' },
-            h('button', { class: 'btn primary', onclick: ev => fromArchive(f, path, ev.currentTarget) }, 'סקר חדש להיום (עם התמונות)'),
-            h('button', { class: 'btn', onclick: async ev => { ev.currentTarget.disabled = true; try { const b = await OD.download(f.id); if (b) downloadFile(b, f.name); } catch (err) { toast('נכשל: ' + err.message, 4000); } } }, 'הורד את האקסל')))));
+            h('button', { class: 'btn primary', onclick: ev => fromArchive(f, path, ev.currentTarget) }, '📂 פתח באפליקציה (סקר חדש להיום עם העצים והתמונות)'),
+            // הורדה אחרי המתנה לרשת נחסמת בדפדפן בטלפון, אז פותחים את הקובץ בגוגל דרייב (משם אפשר להוריד)
+            h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(f.id) + '/view', target: '_blank', rel: 'noopener' }, 'הצג את האקסל בדרייב')))));
     } catch (e) { box.replaceChildren(h('div', {}, (e instanceof OD.AuthError ? 'צריך להתחבר מחדש לגוגל דרייב בהגדרות. ' : 'החיפוש נכשל: ') + e.message)); }
     finally { btn.disabled = false; }
   }
@@ -1856,6 +1861,38 @@
     if (via === 'mail') location.href = 'mailto:?subject=' + encodeURIComponent(subject);
     toast('הקובץ הורד. צרף אותו מתיקיית ההורדות.', 5000);
   }
+  // בחירת תיקייה בגוגל דרייב לחיפוש בארכיון: נכנסים לתיקיות ובוחרים
+  async function pickDriveFolder() {
+    if (!navigator.onLine) { toast('אין קליטה'); return; }
+    const stack = [{ id: null, name: 'הדרייב שלי' }];
+    const list = h('div', { class: 'stack', style: 'max-height:55vh;overflow:auto' });
+    const title = h('b', {});
+    const close = () => ov.remove();
+    const choose = h('button', { class: 'btn primary', onclick: async () => {
+      const cur = stack[stack.length - 1];
+      await DB.setKV('gdArchive', cur.id ? { id: cur.id, name: stack.slice(1).map(x => x.name).join(' / ') } : null);
+      close(); renderSettings();
+    } }, 'בחר את התיקייה הזו');
+    const draw = async () => {
+      const cur = stack[stack.length - 1];
+      title.textContent = stack.map(x => x.name).join(' / ');
+      list.replaceChildren(h('div', { class: 'muted small' }, 'טוען…'));
+      try {
+        const folders = (await OD.children(cur.id)).filter(x => x.folder);
+        list.replaceChildren(...[
+          stack.length > 1 ? h('button', { class: 'btn', onclick: () => { stack.pop(); draw(); } }, '⬆ חזרה') : null,
+          ...folders.map(x => h('button', { class: 'btn', style: 'justify-content:flex-start', onclick: () => { stack.push({ id: x.id, name: x.name }); draw(); } }, '📁 ' + x.name)),
+          folders.length ? null : h('div', { class: 'muted small' }, 'אין כאן תתי תיקיות')].filter(Boolean));
+      } catch (e) { list.replaceChildren(h('div', {}, (e instanceof OD.AuthError ? 'צריך להתחבר לגוגל דרייב. ' : 'נכשל: ') + e.message)); }
+    };
+    const ov = h('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px' },
+      h('div', { class: 'card stack', style: 'width:min(560px,100%)' },
+        h('div', { class: 'muted small' }, 'הסקרים הישנים יחופשו רק בתיקייה שתבחר ובכל התיקיות שבתוכה'),
+        title, list, h('div', { class: 'row' }, choose, h('button', { class: 'btn', onclick: close }, 'ביטול'))));
+    document.body.append(ov);
+    draw();
+  }
+
   function downloadFile(blob, name) {
     const a = h('a', { href: URL.createObjectURL(blob), download: name });
     document.body.append(a); a.click(); a.remove();
@@ -1966,6 +2003,19 @@
     const backupStatus = h('div', { class: 'small', role: 'status' });
     const odClientIn = h('input', { class: 'in', value: await OD.clientId(), dir: 'ltr', placeholder: '1234567890-xxxx.apps.googleusercontent.com', autocomplete: 'off' });
     const odSecretIn = h('input', { class: 'in', value: await OD.clientSecret(), dir: 'ltr', placeholder: 'GOCSPX-…', autocomplete: 'off' });
+    const hasSecret = !!(await OD.clientSecret());
+    // פרטי החיבור לגוגל מוסתרים; נפתחים רק בלחיצה על "החלף" (או כשעוד אין סוד במכשיר הזה)
+    const credBox = h('div', { class: 'stack', hidden: hasSecret },
+      field('מזהה הלקוח מגוגל (Client ID). מובנה באפליקציה, משנים רק אם יוצרים לקוח חדש', odClientIn),
+      field('הסוד מגוגל (Client secret). מקלידים פעם אחת בכל מכשיר', odSecretIn));
+    const credLine = h('div', { class: 'row small' },
+      h('span', {}, 'פרטי החיבור לגוגל: ' + (hasSecret ? 'שמורים במכשיר' : 'חסר הסוד (Client secret)')),
+      h('button', { class: 'btn', onclick: () => { credBox.hidden = !credBox.hidden; } }, 'החלף'));
+    const archive = await DB.getKV('gdArchive', null);
+    const archLine = h('div', { class: 'row small' },
+      h('span', {}, 'תיקיית הארכיון לחיפוש סקרים ישנים: ', h('b', {}, archive ? archive.name : 'כל הדרייב')),
+      h('button', { class: 'btn', onclick: () => pickDriveFolder() }, 'בחר תיקייה'),
+      archive ? h('button', { class: 'btn', onclick: async () => { await DB.setKV('gdArchive', null); renderSettings(); } }, 'כל הדרייב') : null);
     const odRootIn = h('input', { class: 'in', value: await DB.getKV('odRoot', 'סקרי עצים') });
     const odConnected = await OD.connected();
     const odUser = await DB.getKV('odUser', '');
@@ -2011,21 +2061,23 @@
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'גוגל דרייב'),
           h('div', { class: 'muted small' }, 'אקסל ו-PDF נשמרים בתיקיית הדוחות, תיקייה לכל פרויקט. הנתונים, התמונות וההגדרות המשותפות נשמרים בתיקייה "גיבוי אפליקציית סקרי עצים".'),
-          h('div', { class: 'muted small' }, 'כתובת החזרה (Redirect URI) שצריך לרשום בגוגל: ', h('b', { dir: 'ltr' }, location.origin + location.pathname)),
-          field('מזהה הלקוח מגוגל (Client ID)', odClientIn),
-          field('הסוד מגוגל (Client secret)', odSecretIn),
+          odStatus,
+          credLine, credBox,
+          archLine,
           field('תיקיית הדוחות בגוגל דרייב (אקסל ו-PDF; הגיבוי נשמר בנפרד ב"גיבוי אפליקציית סקרי עצים")', odRootIn),
           h('div', { class: 'row' },
             h('button', { class: 'btn primary', onclick: async () => {
-              await DB.setKV('gdClientId', odClientIn.value.trim()); await DB.setKV('gdClientSecret', odSecretIn.value.trim()); await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים');
+              // מזהה זהה למובנה לא נשמר, כדי שעדכון של המזהה המובנה יגיע לכל המכשירים
+              const cid = odClientIn.value.trim();
+              await DB.setKV('gdClientId', cid === OD.defaultClientId ? '' : cid); await DB.setKV('gdClientSecret', odSecretIn.value.trim());
+              if (!odSecretIn.value.trim()) { credBox.hidden = false; odSecretIn.focus(); odStatus.textContent = 'הדבק את הסוד (Client secret) מגוגל ולחץ שוב.'; return; } await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים');
 
               if (!navigator.onLine) { odStatus.textContent = 'צריך קליטה כדי להתחבר.'; return; }
               await saveNow();
               try { await OD.beginLogin(); } catch (e) { odStatus.textContent = e.message; }
             } }, odConnected && !Sync.state.odNeedsLogin ? 'התחבר מחדש' : 'התחבר לגוגל דרייב'),
             odConnected ? h('button', { class: 'btn', onclick: async () => { await OD.logout(); renderSettings(); } }, 'נתק') : null,
-            h('button', { class: 'btn', onclick: async () => { await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים'); toast('נשמר'); } }, 'שמור תיקייה')),
-          odStatus),
+            h('button', { class: 'btn', onclick: async () => { await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים'); toast('נשמר'); } }, 'שמור תיקייה'))),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'עבודה בשטח'),
           inAppCamera, annotateAfter, shareFiles),
