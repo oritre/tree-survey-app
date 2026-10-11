@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.13.0';
+  const APP_VERSION = '1.14.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -103,6 +103,7 @@
     if (hash.startsWith('#/cloud')) return renderCloud();
     if (hash.startsWith('#/health')) return renderHealth();
     if (hash.startsWith('#/summary')) return renderSummary();
+    if (hash.startsWith('#/import')) return renderImport();
     if (hash.startsWith('#/settings')) return renderSettings();
     return renderHome();
   }
@@ -157,7 +158,8 @@
     const all = (await DB.allSurveys()).sort((a, b) => (b.updated || 0) - (a.updated || 0));
     const odOn = await OD.connected();
     // סקר שעוד לא לחצו בו "סיום סקר" נשאר במסך הבית גם בימים הבאים (ממשיכים אותו מכאן), והתמונות שלו נשארות בטאבלט
-    const surveys = all.filter(s => dayOf(s.updated || s.created) === today() || !inCloud(s, odOn) || !s.finished);
+    // סקרים שיובאו מאקסל ישן לא מוצגים כאן (הם בחיפוש בענן), אלא אם עבדו עליהם היום
+    const surveys = all.filter(s => dayOf(s.updated || s.created) === today() || (!s.imported && (!inCloud(s, odOn) || !s.finished)));
     const hiddenN = all.length - surveys.length;
     cleanupOld(all.filter(s => !surveys.includes(s)));
     const projects = [...new Set(surveys.map(s => s.project || ''))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b, 'he'));
@@ -438,7 +440,8 @@
     const q = h('input', { class: 'in', type: 'search', placeholder: 'סמל מוסד, שם, רחוב, עיר או פרויקט', style: 'font-size:18px' });
     const list = h('div', { class: 'stack' });
     const msg = h('div', { class: 'muted small', role: 'status' });
-    app.replaceChildren(bar('חיפוש סקרים בענן', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' }, q, msg, list));
+    app.replaceChildren(bar('חיפוש סקרים בענן', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' }, q,
+      h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => go('#/import') }, '📥 ייבוא סקרים ישנים מאקסל')), msg, list));
     if (!(await OD.connected())) { msg.textContent = 'צריך לחבר את OneDrive בהגדרות כדי לחפש בענן.'; return; }
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
     const draw = () => {
@@ -501,6 +504,102 @@
       go('#/s/' + s.id + '/trees');
     } catch (err) { toast('השחזור נכשל: ' + err.message, 5000); }
     finally { btn.disabled = false; }
+  }
+
+  // ---------- ייבוא סקרים ישנים מאקסל ----------
+  // בוחרים תיקייה ב-OneDrive (למשל הסקרים משנים קודמות), האפליקציה מוצאת בה את קובצי הסקר, קוראת אותם
+  // ויוצרת מהם סקרים בגיבוי, עם עותק של הקובץ המקורי. אחר כך הם מופיעים בחיפוש בענן כמו כל סקר
+  async function renderImport() {
+    const app = $('#app');
+    const main = h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' });
+    app.replaceChildren(bar('ייבוא סקרים ישנים', '#/cloud'), main);
+    if (!(await OD.connected())) { main.append(h('div', { class: 'card' }, 'צריך לחבר את OneDrive בהגדרות.')); return; }
+    const trail = [{ id: null, name: 'OneDrive' }];
+    const intro = h('div', { class: 'card small' }, 'בחר את התיקייה ב-OneDrive שבה שמורים הסקרים הישנים (אפשר תיקייה עם תתי-תיקיות), ולחץ "סרוק". כל קובץ אקסל של סקר בטיחות עצים ייקרא ויישמר בגיבוי של האפליקציה, עם עותק של הקובץ המקורי. הקבצים במקום הנוכחי לא משתנים. כדאי לעשות את זה מהמחשב או בוויי-פיי, כי כל קובץ יורד פעם אחת לקריאה.');
+    const box = h('div', { class: 'stack' });
+    main.append(intro, box);
+    const browse = async () => {
+      const here = trail[trail.length - 1];
+      box.replaceChildren(h('div', { class: 'muted small' }, 'טוען…'));
+      let items;
+      try { items = await OD.children(here.id); } catch (e) { box.replaceChildren(h('div', {}, 'הטעינה נכשלה: ' + e.message)); return; }
+      const dirs = items.filter(x => x.folder).sort((a, b) => a.name.localeCompare(b.name, 'he'));
+      const xl = items.filter(x => x.file && /\.xls[xm]$/i.test(x.name)).length;
+      box.replaceChildren(
+        h('div', { class: 'card stack' },
+          h('div', { class: 'row', style: 'align-items:center;flex-wrap:wrap;gap:4px' }, ...trail.map((t, i) => h('button', { class: 'chip' + (i === trail.length - 1 ? ' on' : ''), onclick: () => { trail.length = i + 1; browse(); } }, t.name))),
+          h('div', { class: 'muted small' }, `${dirs.length} תיקיות${xl ? `, ${xl} קובצי אקסל` : ''} כאן`),
+          here.id ? h('button', { class: 'btn primary big', onclick: () => scan(here) }, `🔎 סרוק את "${here.name}"`) : null),
+        h('div', { class: 'stack' }, dirs.map(d => h('button', { class: 'btn', style: 'justify-content:flex-start', onclick: () => { trail.push({ id: d.id, name: d.name }); browse(); } }, '📁 ' + d.name))));
+    };
+    // סריקה: כל קובצי האקסל בתיקייה ובתתי-התיקיות שלה
+    const scan = async here => {
+      const status = h('div', { class: 'small', role: 'status' }, 'סורק…');
+      box.replaceChildren(h('div', { class: 'card stack' }, status));
+      const files = [];
+      const walk = async (id, path, depth) => {
+        const items = await OD.children(id);
+        for (const it of items) {
+          if (it.folder && depth < 6) await walk(it.id, path.concat(it.name), depth + 1);
+          else if (it.file && /\.xls[xm]$/i.test(it.name) && !/^~\$/.test(it.name)) files.push(Object.assign(it, { path }));
+        }
+        status.textContent = `סורק… נמצאו ${files.length} קובצי אקסל`;
+      };
+      try { await walk(here.id, [], 0); } catch (e) { status.textContent = 'הסריקה נכשלה: ' + e.message; return; }
+      const done = await DB.getKV('importedSrc', {});
+      const projectOf = f => f.path.length ? f.path[0] : here.name;
+      const sel = new Set(files.filter(f => !done[f.id]).map(f => f.id));
+      const proj = h('input', { class: 'in', placeholder: 'פרויקט לכל הקבצים (ריק = לפי שם התיקייה)' });
+      const list = h('div', { class: 'stack small' });
+      const go1 = h('button', { class: 'btn primary big' });
+      const draw = () => {
+        go1.textContent = `📥 ייבא ${sel.size} קבצים`; go1.disabled = !sel.size;
+        list.replaceChildren(...files.map(f => h('label', { class: 'row', style: 'gap:8px;align-items:flex-start' },
+          h('input', { type: 'checkbox', checked: sel.has(f.id), onchange: e => { e.target.checked ? sel.add(f.id) : sel.delete(f.id); draw(); } }),
+          h('span', { style: 'overflow-wrap:anywhere' }, h('b', {}, f.name), ` · ${[...f.path].join(' / ') || here.name} · ${(f.size / 1048576).toFixed(1)} MB`,
+            done[f.id] ? h('span', { class: 'muted' }, ' · יובא כבר') : null, /\.xls$/i.test(f.name) ? h('span', { style: 'color:var(--danger)' }, ' · פורמט ישן, לא נתמך') : null))));
+      };
+      files.filter(f => /\.xls$/i.test(f.name)).forEach(f => sel.delete(f.id));
+      status.textContent = `נמצאו ${files.length} קובצי אקסל ב"${here.name}". קבצים שכבר יובאו לא מסומנים.`;
+      go1.onclick = () => runImport(files.filter(f => sel.has(f.id)), f => proj.value.trim() || projectOf(f));
+      box.firstChild.append(proj, go1, list);
+      draw();
+    };
+    const runImport = async (files, projectOf) => {
+      const status = h('div', { class: 'small', role: 'status' });
+      const results = h('div', { class: 'stack small' });
+      box.replaceChildren(h('div', { class: 'card stack' }, status, results));
+      const done = await DB.getKV('importedSrc', {});
+      let ok = 0, bad = 0, i = 0;
+      for (const f of files) {
+        status.textContent = `קורא קובץ ${++i} מתוך ${files.length}…`;
+        let line;
+        try {
+          const blob = await OD.download(f.id);
+          if (!blob) throw new Error('הקובץ לא נמצא');
+          const r = await Importer.parse(await blob.arrayBuffer());
+          if (!r) throw new Error('לא נמצאה בקובץ טבלת עצים של סקר בטיחות');
+          const when = f.lastModifiedDateTime ? new Date(f.lastModifiedDateTime).getTime() : Date.now();
+          const s = Object.assign({ id: uid(), project: projectOf(f), date: '' }, r.survey);
+          if (!s.date) s.date = dayOf(when);
+          s.site = composeSite(s);
+          s.trees = r.trees.map(t => Object.assign({ id: uid(), photos: [], created: when }, t));
+          Object.assign(s, { created: when, odLayout: 2, finished: true, finishedAt: when, imported: { file: f.name, path: f.path.join('/') }, odSrcId: f.id, odSrcName: f.name, updated: Math.min(when, new Date(s.date + 'T12:00').getTime() || when) });
+          await DB.putSurvey(s, false);
+          done[f.id] = s.id; await DB.setKV('importedSrc', done);
+          ok++;
+          line = h('div', {}, '✓ ', h('b', {}, s.siteName || f.name), ` · ${fmtDate(s.date)} · ${s.trees.length} עצים` + (s.code ? ` · סמל ${s.code}` : '') + ` · ${s.project}`);
+        } catch (e) {
+          bad++;
+          line = h('div', { style: 'color:var(--danger)' }, `✗ ${f.name}: ${e.message}`);
+        }
+        results.append(line);
+      }
+      Sync.log(bad ? 'error' : 'ok', `ייבוא סקרים ישנים: ${ok} יובאו` + (bad ? `, ${bad} נכשלו` : ''));
+      status.textContent = `✓ יובאו ${ok} סקרים` + (bad ? `, ${bad} קבצים לא נקראו` : '') + '. הם עולים עכשיו לגיבוי ב-OneDrive, ואחרי זה יופיעו בחיפוש בענן.';
+      Sync.now();
+    };
+    browse();
   }
 
   // asNew=true: סקר חדש עם אותם פרטי מוסד ואותם עצים (מספר, מין, הערות, אורנים, נ"צ), בתאריך של היום ובלי תמונות

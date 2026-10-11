@@ -101,6 +101,19 @@
       return j;
     },
 
+    // כל מה שבתוך תיקייה (null = השורש), כולל המשך רשימה ארוכה
+    async children(itemId) {
+      const out = [];
+      let url = `${itemId ? '/me/drive/items/' + itemId : '/me/drive/root'}/children?$select=id,name,size,folder,file,lastModifiedDateTime&$top=200`;
+      while (url) {
+        const j = await OD.api('GET', url);
+        if (!j) break;
+        out.push(...(j.value || []));
+        url = j['@odata.nextLink'] || null;
+      }
+      return out;
+    },
+
     seg: name => encodeURIComponent(String(name).replace(/[\\/:*?"<>|#%]+/g, ' ').replace(/\s+/g, ' ').trim() || 'ללא שם'),
 
     // תיקייה בתוך תיקייה (או בשורש), נוצרת אם אינה קיימת

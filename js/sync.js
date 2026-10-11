@@ -142,6 +142,14 @@
 
   // קובץ דוח: נשמר בתיקיית הגיבוי, ועותק שלו (העתקה בתוך OneDrive, בלי גלישה נוספת) בתיקיית הדוחות
   async function putReportFile(s, name, blob) {
+    // PDF: רק בתיקיית הדוחות. בגיבוי של האפליקציה נשמר רק האקסל (מהנתונים שבו אפשר להפיק את ה-PDF מחדש)
+    if (/\.pdf$/i.test(name)) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (await OD.upload(await reportFolder(s), name, blob, true)) return;
+        s.odReportDir = null; // תיקיית הדוחות נמחקה: יוצרים מחדש
+      }
+      throw new Error('לא ניתן לשמור בתיקיית הדוחות');
+    }
     const item = await OD.upload(s.odFolderId, name, blob, true);
     if (!item) { s.odFolderId = null; s.odPhotosId = null; await syncFolders(s); return putReportFile(s, name, blob); } // תיקיית הגיבוי נמחקה
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -160,6 +168,14 @@
   async function syncOneDrive(s) {
     await syncFolders(s);
 
+    // סקר שיובא מקובץ אקסל ישן: עותק של הקובץ המקורי נשמר בתיקיית הגיבוי שלו (העתקה בתוך OneDrive)
+    if (s.odSrcId && !s.odSrcCopied) {
+      try { await OD.copy(s.odSrcId, s.odFolderId, s.odSrcName || 'קובץ מקורי.xlsm'); }
+      catch (e) { log('error', 'העתקת הקובץ המקורי לגיבוי נכשלה: ' + e.message, s); }
+      s.odSrcCopied = true;
+      await DB.putSurvey(s, false);
+    }
+
     // הסקר נפתח ביום אחר: שומרים קודם את הגרסה הקודמת מהענן, כדי שלא תידרס
     if (s.snapshotFrom) {
       if (s.odDataId) {
@@ -172,7 +188,7 @@
           try {
             const kids = await OD.api('GET', `/me/drive/items/${s.odFolderId}/children?$select=id,name,file&$top=200`);
             for (const it of (kids && kids.value) || []) {
-              if (it.file && /\.(xlsm|pdf)$/i.test(it.name)) await OD.copy(it.id, vf, `${tag} - ${it.name}`);
+              if (it.file && /\.(xlsm|xlsx)$/i.test(it.name)) await OD.copy(it.id, vf, `${tag} - ${it.name}`);
             }
           } catch (e) { log('error', 'העתקת האקסל/PDF לגרסאות קודמות נכשלה: ' + e.message, s); }
           log('info', `נשמרה גרסה קודמת של הסקר (${tag})`, s);
