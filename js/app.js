@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.16.0';
+  const APP_VERSION = '1.16.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1552,6 +1552,10 @@
     const old = thumbUrls.get(p.id);
     if (old) { URL.revokeObjectURL(old); thumbUrls.delete(p.id); }
     p.ver = (p.ver || 0) + 1; // מסמן שצריך להחליף את התמונה בטלגרם ובגוגל דרייב
+    // תמונה מהסקר הקודם ששונתה: הופכת לתמונה של הסקר הזה. נשלחת לטלגרם כתמונה חדשה ונשמרת בתיקייה של הסקר הזה,
+    // והתמונה הישנה (בטלגרם ובקובץ של הסקר הקודם) לא משתנה
+    if (p.fromOld) { delete p.fromOld; delete p.tgMsgId; delete p.tgVer; }
+    if (p.odShared) { delete p.odShared; delete p.odId; delete p.odName; delete p.odVer; }
     await saveNow();
     refreshRow(t); renderPhotos();
     Sync.kick(true);
@@ -1577,7 +1581,7 @@
         h('div', { class: 'ph' },
           h('img', { src: url, alt: 'תמונה של עץ ' + Core.photoLabel(t, p), onclick: () => openPhoto(p.id) }),
           h('span', { class: 'sync' },
-            p.fromOld ? h('span', { class: 'tg', title: 'תמונה מהסקר הקודם' }, '📅 ' + fmtDate(p.fromOld)) : p.tgMsgId ? h('span', { class: 'tg', title: 'גובתה בטלגרם' }, 'TG ✓') : h('span', { class: 'tg pending', title: 'ממתינה לשליחה לטלגרם' }, 'TG …'),
+            p.fromOld ? null : p.tgMsgId ? h('span', { class: 'tg', title: 'גובתה בטלגרם' }, 'TG ✓') : h('span', { class: 'tg pending', title: 'ממתינה לשליחה לטלגרם' }, 'TG …'),
             p.odId ? h('span', { class: 'od', title: 'נשמרה בגוגל דרייב' }, 'GD ✓') : null),
           h('button', { class: 'pen', title: 'סמן על התמונה', 'aria-label': 'סמן על התמונה', onclick: () => editPhoto(t, p) }, '✏️'),
           h('button', { class: 'del', title: 'מחק', 'aria-label': 'מחק תמונה', onclick: async () => {
