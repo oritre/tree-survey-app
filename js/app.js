@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.16.4';
+  const APP_VERSION = '1.16.5';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -39,7 +39,7 @@
     setTimeout(() => t.remove(), ms || 2600);
   }
   function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
-  const safeName = s => String(s || '').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const safeName = s => String(s || '').replace(/(\S)"(?=\S)/g, '$1\u05F4').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
 
   // ---------- מצב ----------
   let cur = null; // הסקר הפתוח
@@ -1802,8 +1802,21 @@
   function fileBase(s) {
     s = s || cur;
     // שני סקרים עם אותו שם ותאריך (באותה תיקיית פרויקט) מקבלים שמות קבצים שונים
-    const kind = Construction.isConstruction(s) ? 'סקר עצים לבנייה' : 'סקר בטיחות עצים';
-    return safeName(`${kind} - ${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${(s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : ''}`);
+    const k = (s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : '';
+    if (Construction.isConstruction(s)) return safeName(`סקר עצים לבנייה - ${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${k}`);
+    // סקר בטיחות (כללים של ori):
+    // עריכה של קובץ מהארכיון / סקר ישן שיובא: אותו שם כמו בדרייב
+    const orig = (s.source && s.source.file) || (s.imported && s.odSrcName);
+    if (orig) return safeName(orig.replace(/\.xls[xm]?$/i, ''));
+    const proj = s.project || '';
+    // ויצו: סמל_התאריך בעוד שנה מיום הסקר_26
+    if (/ויצ"?ו/.test(proj) && s.code) {
+      const d = new Date((s.date || today()) + 'T12:00'); d.setFullYear(d.getFullYear() + 1);
+      return safeName(`${s.code}_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}_26`) + k;
+    }
+    // ירושלים: סמל מוסד, שם מוסד וכתובת בלי עיר. אחרים: שם מוסד, כתובת ועיר
+    const parts = /ירושלים/.test(proj) ? [s.code, s.siteName, s.street] : [s.siteName, s.street, s.city];
+    return safeName(parts.filter(Boolean).join(' ') || s.site || 'סקר בטיחות עצים') + k;
   }
 
   async function deliver(blob, name) {
