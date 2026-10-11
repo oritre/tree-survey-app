@@ -198,36 +198,43 @@
       await DB.putSurvey(s, false);
     }
 
-    // תמונות: כל אחת עולה פעם אחת, ומשנה שם אם השם/הפרטים השתנו
-    for (const t of Core.sortTrees(s.trees)) {
-      let k = 1;
-      for (const p of t.photos || []) {
-        const name = photoFileName(t, p, k++);
-        if (!p.odId) {
-          const d = await DB.getPhoto(p.id);
-          if (!d || !d.blob) continue;
-          const ver = p.ver || 0;
-          const item = await OD.upload(s.odPhotosId, name, d.blob, false);
-          if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי ב-OneDrive נמחקה, יוצר אותה מחדש'); }
-          p.odId = item.id; p.odName = name; p.odVer = ver;
-          await DB.putSurvey(s, false);
-          emit();
-        } else if ((p.ver || 0) !== (p.odVer || 0)) {
-          // התמונה עודכנה (ציור): מחליפים את הקובץ ב-OneDrive
-          const d = await DB.getPhoto(p.id);
-          if (!d || !d.blob) continue;
-          const ver = p.ver || 0;
-          let item;
-          try { item = await OD.replaceContent(p.odId, d.blob); }
-          catch (_) { item = await OD.upload(s.odPhotosId, p.odName || name, d.blob, true); } // הקובץ נמחק ב-OneDrive
-          p.odId = item.id || p.odId; p.odVer = ver;
-          await DB.putSurvey(s, false);
-          emit();
-        } else if (p.odName !== name) {
-          try { await OD.rename(p.odId, name); } catch (_) { /* שם תפוס: משאירים */ }
-          p.odName = name;
-          await DB.putSurvey(s, false);
-        }
+    // תמונות: כל אחת עולה פעם אחת, ומשנה שם אם השם/הפרטים השתנו. תמונות חדשות עולות 3 במקביל (מהיר יותר בקליטה חלשה)
+    const jobs = [];
+    for (const t of Core.sortTrees(s.trees)) { let k = 1; for (const p of t.photos || []) jobs.push({ t, p, name: photoFileName(t, p, k++) }); }
+    let lost = false;
+    const uploadNew = async ({ p, name }) => {
+      if (lost || p.odId) return;
+      const d = await DB.getPhoto(p.id);
+      if (!d || !d.blob) return;
+      const ver = p.ver || 0;
+      const item = await OD.upload(s.odPhotosId, name, d.blob, false);
+      if (!item) { lost = true; return; }
+      p.odId = item.id; p.odName = name; p.odVer = ver;
+      await DB.putSurvey(s, false);
+      emit();
+    };
+    const fresh = jobs.filter(j => !j.p.odId);
+    let nextJob = 0;
+    const worker = async () => { while (nextJob < fresh.length) await uploadNew(fresh[nextJob++]); };
+    await Promise.all([worker(), worker(), worker()]);
+    if (lost) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי ב-OneDrive נמחקה, יוצר אותה מחדש'); }
+    for (const { p, name } of jobs) {
+      if (!p.odId) continue;
+      if ((p.ver || 0) !== (p.odVer || 0)) {
+        // התמונה עודכנה (ציור): מחליפים את הקובץ ב-OneDrive
+        const d = await DB.getPhoto(p.id);
+        if (!d || !d.blob) continue;
+        const ver = p.ver || 0;
+        let item;
+        try { item = await OD.replaceContent(p.odId, d.blob); }
+        catch (_) { item = await OD.upload(s.odPhotosId, p.odName || name, d.blob, true); } // הקובץ נמחק ב-OneDrive
+        p.odId = item.id || p.odId; p.odVer = ver;
+        await DB.putSurvey(s, false);
+        emit();
+      } else if (p.odName !== name) {
+        try { await OD.rename(p.odId, name); } catch (_) { /* שם תפוס: משאירים */ }
+        p.odName = name;
+        await DB.putSurvey(s, false);
       }
     }
 
@@ -244,7 +251,8 @@
     await updateIndex(s);
 
     // "סיום סקר": כשכל התמונות כבר בענן, מעלים אקסל ו-PDF לאותה תיקייה ומפנים את התמונות מהטאבלט
-    if (s.finishPending && allInCloud(s)) {
+    // (אם האקסל וה-PDF עוד מוכנים בטאבלט אחרי הלחיצה, מחכים להם במקום לבנות אותם פעם שנייה)
+    if (s.finishPending && allInCloud(s) && !preparing.has(s.id)) {
       await uploadReport(s, { pdf: true });
       s.finishPending = false; s.finished = true; s.finishedAt = Date.now();
       await DB.putSurvey(s, false);
@@ -255,6 +263,7 @@
     }
   }
 
+  const preparing = new Set(); // סקרים שהאקסל וה-PDF שלהם נבנים עכשיו אחרי "סיום סקר"
   const allInCloud = s => s.trees.every(t => (t.photos || []).every(p => p.odId && (p.ver || 0) === (p.odVer || 0)));
 
   // מפנה מקום בטאבלט: התמונות המלאות נמחקות (נשארת תמונה ממוזערת), והן נטענות מ-OneDrive כשצריך
@@ -361,11 +370,19 @@
   // אקסל (ואם ביקשו גם PDF) לתיקיית הסקר ב-OneDrive, באותו שם
   async function uploadReport(s, opts) {
     await syncFolders(s);
-    const r = await root.App.buildReport(s);
+    // האקסל וה-PDF שהוכנו כבר בלחיצה על "סיום סקר" (בזמן שהתמונות עלו), אם הסקר לא השתנה מאז
+    const hash = hashSurvey(s);
+    const ready = await DB.getKV('xlsm:' + s.id, null);
+    const r = ready && ready.hash === hash && ready.blob ? ready : await root.App.buildReport(s);
     await putReportFile(s, r.name, r.blob);
+    DB.delKV('xlsm:' + s.id).catch(() => {});
     s.odReportHash = hashSurvey(s); s.odReportAt = Date.now();
     log('ok', 'האקסל נשמר ב-OneDrive', s);
-    const pdf = opts && opts.pdf ? await root.App.buildPdf(s) : null;
+    let pdf = null;
+    if (opts && opts.pdf) {
+      const last = await DB.getKV('pdf:' + s.id, null);
+      pdf = last && last.hash === hash && last.blob ? last : await root.App.buildPdf(s);
+    }
     if (pdf) await uploadPdf(s, pdf);
     await DB.putSurvey(s, false);
   }
@@ -412,17 +429,19 @@
       surveys.sort((a, b) => (live(b) !== b) - (live(a) !== a) || (b.updated || 0) - (a.updated || 0));
       for (const s0 of surveys) {
         const s = live(s0);
-        if (tgOn) {
-          try { await syncTelegram(s, { token, chat }); }
-          catch (e) { state.error = 'טלגרם: ' + e.message; log('error', state.error, s); }
-        }
-        if (odOn && !state.odNeedsLogin) {
-          try { await syncOneDrive(s); }
-          catch (e) {
-            if (e instanceof OD.AuthError) { state.odNeedsLogin = true; log('error', 'OneDrive: צריך להתחבר מחדש', s); }
-            else { state.error = 'OneDrive: ' + e.message; log('error', state.error, s); }
-          }
-        }
+        // טלגרם ו-OneDrive במקביל: "סיום סקר" לא מחכה שכל התמונות יישלחו קודם לטלגרם
+        await Promise.all([
+          tgOn && (async () => {
+            try { await syncTelegram(s, { token, chat }); }
+            catch (e) { state.error = 'טלגרם: ' + e.message; log('error', state.error, s); }
+          })(),
+          odOn && !state.odNeedsLogin && (async () => {
+            try { await syncOneDrive(s); }
+            catch (e) {
+              if (e instanceof OD.AuthError) { state.odNeedsLogin = true; log('error', 'OneDrive: צריך להתחבר מחדש', s); }
+              else { state.error = 'OneDrive: ' + e.message; log('error', state.error, s); }
+            }
+          })()]);
       }
       surveys = await DB.allSurveys();
       countPending(surveys, tgOn, odOn);
@@ -447,7 +466,7 @@
   window.addEventListener('offline', () => { state.offline = true; emit(); });
   setInterval(() => { if (!running) run(); }, 3 * 60 * 1000);
 
-  root.Sync = { stop, importSurvey, flushImported,
+  root.Sync = { stop, importSurvey, flushImported, preparing,
     kick, state,
     now() { state.odNeedsLogin = false; schedule(0); },
     // פעולות ידניות: עובדות על הסקר הפתוח ומחכות לסיום

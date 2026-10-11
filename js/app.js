@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.15.0';
+  const APP_VERSION = '1.15.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1553,11 +1553,24 @@
         finishBox,
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', onclick: async e => {
+            const btn = e.currentTarget;
             if (!odOn) { toast('צריך לחבר את OneDrive בהגדרות', 4000); return; }
             if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
             cur.finishPending = true; cur.finished = false;
+            const sid = cur.id; Sync.preparing.add(sid);
             await saveNow(); Sync.now(); drawSync();
-            toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה ל-OneDrive…', 3000);
+            // האקסל וה-PDF מוכנים כבר עכשיו בטאבלט, בזמן שהתמונות עולות. ה-PDF נפתח מיד לצפייה ולשליחה
+            btn.disabled = true;
+            try {
+              const s = cur;
+              status.textContent = 'מכין אקסל…';
+              const x = await buildReport(s);
+              await DB.setKV('xlsm:' + s.id, { hash: Sync.hashSurvey(s), blob: x.blob, name: x.name });
+              const pdf = await buildPdf(s, (i, n) => { status.textContent = `מכין PDF… עמוד ${i} מתוך ${n}`; });
+              status.textContent = Sync.state.offline ? '✓ האקסל וה-PDF מוכנים. יעלו ל-OneDrive כשהקליטה תחזור.' : '✓ האקסל וה-PDF מוכנים, ועולים עכשיו ל-OneDrive יחד עם התמונות.';
+              if (pdf) viewPdf(s, pdf);
+            } catch (err) { console.error(err); status.textContent = 'הכנת הקבצים נכשלה, הם יוכנו בזמן ההעלאה: ' + err.message; }
+            finally { Sync.preparing.delete(sid); Sync.now(); btn.disabled = false; drawSync(); }
           } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'),
           h('button', { class: 'btn big', onclick: e => busy(e.currentTarget, async () => {
             if (!odOn) throw new Error('OneDrive לא מחובר');
