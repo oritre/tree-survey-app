@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.16.5';
+  const APP_VERSION = '1.16.6';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1812,7 +1812,7 @@
     // ויצו: סמל_התאריך בעוד שנה מיום הסקר_26
     if (/ויצ"?ו/.test(proj) && s.code) {
       const d = new Date((s.date || today()) + 'T12:00'); d.setFullYear(d.getFullYear() + 1);
-      return safeName(`${s.code}_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}_26`) + k;
+      return safeName(`${s.code}_${d.getFullYear()}_${String(d.getMonth() + 1).padStart(2, '0')}_${String(d.getDate()).padStart(2, '0')}_26`) + k;
     }
     // ירושלים: סמל מוסד, שם מוסד וכתובת בלי עיר. אחרים: שם מוסד, כתובת ועיר
     const parts = /ירושלים/.test(proj) ? [s.code, s.siteName, s.street] : [s.siteName, s.street, s.city];
