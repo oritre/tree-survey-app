@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.16.2';
+  const APP_VERSION = '1.16.3';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -521,13 +521,15 @@
           h('div', { class: 't', style: 'font-weight:600;overflow-wrap:anywhere' }, '📄 ' + f.name.replace(/\.xls[xm]$/i, '')),
           h('div', { class: 'muted small' }, [path.join(' / '), f.lastModifiedDateTime ? fmtDate(f.lastModifiedDateTime.slice(0, 10)) : ''].filter(Boolean).join(' · ')),
           h('div', { class: 'row' },
-            h('button', { class: 'btn primary', onclick: ev => fromArchive(f, path, ev.currentTarget) }, '📂 פתח באפליקציה (סקר חדש להיום עם העצים והתמונות)'),
+            h('button', { class: 'btn primary', onclick: ev => fromArchive(f, path, ev.currentTarget) }, '📂 סקר חדש מהיום (עם העצים והתמונות)'),
+            h('button', { class: 'btn', onclick: ev => fromArchive(f, path, ev.currentTarget, true) }, '✏️ ערוך את הסקר המקורי (בתאריך שלו)'),
             // הורדה אחרי המתנה לרשת נחסמת בדפדפן בטלפון, אז פותחים את הקובץ בגוגל דרייב (משם אפשר להוריד)
             h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(f.id) + '/view', target: '_blank', rel: 'noopener' }, 'הצג את האקסל בדרייב')))));
     } catch (e) { box.replaceChildren(h('div', {}, (e instanceof OD.AuthError ? 'צריך להתחבר מחדש לגוגל דרייב בהגדרות. ' : 'החיפוש נכשל: ') + e.message)); }
     finally { btn.disabled = false; }
   }
-  async function fromArchive(f, path, btn) {
+  // keepDate: עריכה של הסקר המקורי בתאריך שלו (הקובץ בארכיון לא משתנה; הסקר נשמר כקובץ של האפליקציה בתאריך המקורי)
+  async function fromArchive(f, path, btn, keepDate) {
     btn.disabled = true; const label = btn.textContent;
     try {
       btn.textContent = 'מוריד…';
@@ -540,11 +542,13 @@
       const old = Object.assign({}, r.survey, { id: 'file', project: (yi >= 0 && path[yi + 1]) || path[path.length - 1] || '', date: r.survey.date || (f.lastModifiedDateTime || '').slice(0, 10) });
       old.trees = r.trees.map(t => Object.assign({ id: uid(), photos: [] }, t));
       const s = await copySurvey(old, false);
-      s.prev = { file: f.name, fileId: f.id, date: old.date };
+      if (keepDate) { delete s.prev; s.date = old.date || s.date; s.source = { file: f.name, fileId: f.id }; s.dateAskedDay = today(); } // בלי השאלה על עדכון התאריך
+      else s.prev = { file: f.name, fileId: f.id, date: old.date };
       btn.textContent = 'מוסיף את התמונות…';
       const n = await addOldPhotos(s, r.trees, old.date);
       const w = r.warnings.filter(x => !/^עץ בלי מספר/.test(x));
-      toast(`נפתח סקר חדש להיום על בסיס ${f.name} (${fmtDate(old.date)}): ${s.trees.length} עצים, ${n} תמונות.` + (w.length ? ' ' + w.join('; ') : ''), 6000);
+      toast((keepDate ? `נפתח הסקר המקורי ${f.name} בתאריך ${fmtDate(s.date)}: ${s.trees.length} עצים, ${n} תמונות. הקובץ בארכיון לא משתנה.`
+        : `נפתח סקר חדש להיום על בסיס ${f.name} (${fmtDate(old.date)}): ${s.trees.length} עצים, ${n} תמונות.`) + (w.length ? ' ' + w.join('; ') : ''), 6000);
       go('#/s/' + s.id + '/details');
     } catch (e) { toast('נכשל: ' + e.message, 5000); btn.textContent = label; btn.disabled = false; }
   }
