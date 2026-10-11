@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.15.2';
+  const APP_VERSION = '1.15.3';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1060,6 +1060,15 @@
     await saveNow();
   }
 
+  // השלמה אוטומטית של מין העץ בסקר בטיחות: כל המינים מרשימת סקר הבנייה, רק המילה הראשונה (איקליפטוס המקור → איקליפטוס)
+  let safetySpeciesCache = null;
+  function safetySpecies() {
+    if (!safetySpeciesCache) safetySpeciesCache = [...new Set([...Construction.SPECIES.keys()]
+      .map(n => n.replace(/\u00a0/g, ' ').trim().split(/\s+/)[0].replace(/-$/, ''))
+      .filter(w => /[\u0590-\u05ff]/.test(w)))].sort((a, b) => a.localeCompare(b, 'he'));
+    return safetySpeciesCache;
+  }
+
   let sugCache = { speciesAll: SPECIES_SEED, speciesTop: SPECIES_SEED.slice(0, 10), phrasesTop: PHRASE_SEED, constructionNotes: CONSTRUCTION_NOTES_SEED };
   function refreshSuggestions() { suggestions().then(s => { sugCache = s; }).catch(() => {}); }
 
@@ -1162,7 +1171,7 @@
     const build = Construction.isConstruction(cur) ? constructionFields(t, changed, spIn) : null;
 
     pane.replaceChildren(
-      h('datalist', { id: 'speciesList' }, (build ? [...Construction.SPECIES.keys()] : sug.speciesAll).map(s => h('option', { value: s }))),
+      h('datalist', { id: 'speciesList' }, (build ? [...Construction.SPECIES.keys()] : safetySpecies()).map(s => h('option', { value: s }))),
       h('div', { class: 'card stack' },
         h('div', { class: 'grid2' },
           h('div', {}, field('מספר העץ', numIn), splitWrap),
