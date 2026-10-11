@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.15.3';
+  const APP_VERSION = '1.16.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -49,7 +49,7 @@
   const saveSoon = debounce(() => { if (cur) { DB.putSurvey(cur); Sync.kick(); } }, 400);
   const saveNow = () => cur && DB.putSurvey(cur);
 
-  // תמונה מלאה: מהטאבלט, ואם כבר פונתה אחרי "סיום סקר" — מ-OneDrive
+  // תמונה מלאה: מהטאבלט, ואם כבר פונתה אחרי "סיום סקר" — מגוגל דרייב
   async function photoBlob(s, id) {
     const d = await DB.getPhoto(id);
     if (d && d.blob) return d.blob;
@@ -131,10 +131,10 @@
     return b;
   }
 
-  // מצב הגיבוי בפינה: כמה ממתינות לטלגרם / OneDrive
+  // מצב הגיבוי בפינה: כמה ממתינות לטלגרם / גוגל דרייב
   function syncText() {
     const st = Sync.state;
-    if (st.odNeedsLogin) return '☁ OneDrive: להתחבר מחדש';
+    if (st.odNeedsLogin) return '☁ גוגל דרייב: להתחבר מחדש';
     if (st.offline) return (st.tgPending + st.odPending) ? `⏸ אין קליטה · ${st.tgPending + st.odPending} ממתינים` : '⏸ אין קליטה';
     if (st.busy) return '⟳ מגבה…';
     if (st.error) return '⚠ ' + st.error.slice(0, 40);
@@ -193,14 +193,14 @@
         chips, list,
         hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} סקרים מימים קודמים שמורים בענן. `,
           h('a', { href: '#/cloud' }, 'לחיפוש סקרים בענן')) : null,
-        h('p', { class: 'muted small', style: 'text-align:center', id: 'homeFoot' }, 'סקר פתוח נשמר בטאבלט (כדי לעבוד גם בלי קליטה) ומגובה לטלגרם ול-OneDrive. אחרי "סיום סקר" התמונות מפונות מהטאבלט ונשארות בענן. גרסה ' + APP_VERSION)));
+        h('p', { class: 'muted small', style: 'text-align:center', id: 'homeFoot' }, 'סקר פתוח נשמר בטאבלט (כדי לעבוד גם בלי קליטה) ומגובה לטלגרם ולגוגל דרייב. אחרי "סיום סקר" התמונות מפונות מהטאבלט ונשארות בענן. גרסה ' + APP_VERSION)));
     if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => {
       const el = $('#homeFoot'); if (el && e.usage != null) el.append(` · בשימוש בטאבלט: ${(e.usage / 1048576).toFixed(0)} MB`);
     }).catch(() => {});
   }
 
   const dayOf = t => { const d = new Date(t || 0); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-  // הסקר כולו בענן: נתונים ותמונות ב-OneDrive (ובטלגרם אם מחובר), בלי "סיום סקר" שממתין
+  // הסקר כולו בענן: נתונים ותמונות בגוגל דרייב (ובטלגרם אם מחובר), בלי "סיום סקר" שממתין
   function inCloud(s, odOn) {
     if (!odOn) return false;
     if (s.finishPending || s.odDataHash !== Sync.hashSurvey(s)) return false;
@@ -213,7 +213,7 @@
     try {
       for (const s of list) if (!freedIds.has(s.id)) {
         await Sync.freeLocal(s); freedIds.add(s.id);
-        // ה-PDF השמור לצפייה ושליחה נמחק מהטאבלט אחרי שבוע (עותק שלו נמצא ב-OneDrive)
+        // ה-PDF השמור לצפייה ושליחה נמחק מהטאבלט אחרי שבוע (עותק שלו נמצא בגוגל דרייב)
         if (Date.now() - (s.updated || 0) > 7 * 864e5) await DB.delKV('pdf:' + s.id);
       }
     } catch (_) {} finally { cleaning = false; }
@@ -238,11 +238,10 @@
     if (s.date && s.date !== t && s.dateAskedDay !== t) {
       const choice = await askChoice('לעדכן את תאריך הסקר להיום?', `הסקר מתאריך ${fmtDate(s.date)}. הסקר הקודם לא יידרס בשום מקרה.`, [
         { value: 'keep', label: `לא, להמשיך את הסקר מ-${fmtDate(s.date)}`, hint: 'הגרסה הקודמת נשמרת בענן לפני העריכה' },
-        { value: 'new', primary: true, label: `כן, סקר חדש בתאריך ${fmtDate(t)}`, hint: 'העצים מועתקים בלי התמונות (למשל סקר חוזר)' },
-        { value: 'newPhotos', label: `כן, סקר חדש בתאריך ${fmtDate(t)} עם התמונות` },
+        { value: 'new', primary: true, label: `כן, סקר חדש בתאריך ${fmtDate(t)}`, hint: 'העצים, ההערות והתמונות מועתקים (סקר חוזר)' },
       ]);
       if (choice !== 'keep') {
-        const n = await copySurvey(s, choice === 'newPhotos');
+        const n = await copySurvey(s, true);
         toast(`נפתח סקר חדש בתאריך ${fmtDate(t)}. הסקר מ-${fmtDate(s.date)} נשאר כמו שהוא.`, 4000);
         return n;
       }
@@ -255,7 +254,7 @@
     return s;
   }
 
-  // סקר חדש להיום על בסיס סקר קיים. withPhotos: התמונות מועתקות (בטאבלט, או קישור לקובץ שכבר ב-OneDrive)
+  // סקר חדש להיום על בסיס סקר קיים. withPhotos: התמונות מועתקות (בטאבלט, או קישור לקובץ שכבר בגוגל דרייב)
   async function copySurvey(old, withPhotos) {
     const keep = ['num', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS];
     const s = { id: uid(), type: Construction.typeOf(old), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
@@ -263,11 +262,12 @@
     for (const t of old.trees || []) {
       const nt = Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, t[k]])));
       if (withPhotos) for (const p of t.photos || []) {
-        const np = Object.assign({}, p, { id: uid() });
-        delete np.odName; // שם הקובץ בתיקייה החדשה ייקבע מחדש
+        // תמונה מהסקר הקודם: מסומנת בתאריך שלו, לא נשלחת שוב לטלגרם, ונכנסת לדוח עד שמצלמים תמונה חדשה לאותו עץ
+        const np = Object.assign({}, p, { id: uid(), fromOld: p.fromOld || old.date || '' });
+        delete np.odName; delete np.tgMsgId; delete np.tgVer;
         const d = await DB.getPhoto(p.id);
-        if (d && d.blob) { delete np.odId; delete np.odVer; await DB.putPhoto(Object.assign({}, d, { id: np.id })); } // יעלה לתיקיית הסקר החדש
-        else if (p.odId) await DB.putPhoto({ id: np.id, thumb: d && d.thumb, w: p.w, h: p.h, cloud: true }); // נשאר בענן, נטען כשצריך
+        if (d && d.blob) { delete np.odId; delete np.odVer; delete np.odShared; await DB.putPhoto(Object.assign({}, d, { id: np.id })); } // יעלה לתיקיית הסקר החדש
+        else if (p.odId) { np.odShared = true; await DB.putPhoto({ id: np.id, thumb: d && d.thumb, w: p.w, h: p.h, cloud: true }); } // נשאר בקובץ של הסקר הקודם בענן, נטען כשצריך
         else continue;
         nt.photos.push(np);
       }
@@ -276,6 +276,26 @@
     s.site = composeSite(s);
     await DB.putSurvey(s);
     return s;
+  }
+
+  // תמונות שהוצאו מקובץ אקסל ישן (Importer.parse עם photos) -> לעצים של הסקר החדש, לפי מספר העץ (או המין בעץ בלי מספר)
+  async function addOldPhotos(s, parsedTrees, oldDate) {
+    let n = 0;
+    for (const pt of parsedTrees) {
+      if (!pt.images || !pt.images.length) continue;
+      const t = s.trees.find(x => pt.num ? x.num === pt.num : (!x.num && x.species === pt.species));
+      if (!t) continue;
+      for (const im of pt.images) {
+        const p = await processImage(im.blob);
+        await DB.putPhoto({ id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h });
+        const sub = im.sub != null && Core.splitActive(t) ? im.sub : null;
+        const np = { id: p.id, w: p.w, h: p.h, sub, inReport: false, note: '', taken: Date.now(), fromOld: oldDate || '' };
+        np.inReport = !t.photos.some(x => Core.groupKey(t, x) === Core.groupKey(t, np));
+        t.photos.push(np); n++;
+      }
+    }
+    await DB.putSurvey(s);
+    return n;
   }
 
   // ---------- בקרת גיבוי ----------
@@ -288,8 +308,8 @@
     const st = Sync.state;
     const ago = t => { if (!t) return 'אף פעם'; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'עכשיו' : m < 60 ? `לפני ${m} דק'` : new Date(t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); };
     const checks = [
-      [odOn, odOn ? 'OneDrive מחובר' : 'OneDrive לא מחובר: הסקרים לא מגובים לענן'],
-      [!st.odNeedsLogin, st.odNeedsLogin ? 'OneDrive: צריך להתחבר מחדש (בהגדרות)' : 'ההתחברות ל-OneDrive תקפה'],
+      [odOn, odOn ? 'גוגל דרייב מחובר' : 'גוגל דרייב לא מחובר: הסקרים לא מגובים לענן'],
+      [!st.odNeedsLogin, st.odNeedsLogin ? 'גוגל דרייב: צריך להתחבר מחדש (בהגדרות)' : 'ההתחברות לגוגל דרייב תקפה'],
       [tgOn, tgOn ? 'טלגרם מחובר' : 'טלגרם לא מחובר: התמונות לא מגובות לטלגרם'],
       [!st.offline, st.offline ? 'אין קליטה כרגע: הכל נשמר בטאבלט ויעלה כשתחזור' : 'יש קליטה'],
       [!st.error, st.error ? 'שגיאה אחרונה: ' + st.error : 'אין שגיאות בגיבוי האחרון'],
@@ -309,7 +329,7 @@
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'סקרים בטאבלט'),
           surveys.length ? h('table', { class: 'htable' },
-            h('tr', {}, h('th', {}, 'סקר'), h('th', {}, 'נתונים בענן'), h('th', {}, 'תמונות ב-OneDrive'), h('th', {}, 'תמונות בטלגרם'), h('th', {}, 'אקסל / PDF')),
+            h('tr', {}, h('th', {}, 'סקר'), h('th', {}, 'נתונים בענן'), h('th', {}, 'תמונות בגוגל דרייב'), h('th', {}, 'תמונות בטלגרם'), h('th', {}, 'אקסל / PDF')),
             surveys.map(s => {
               const p = Sync.pendingOf(s, tgOn, odOn);
               const mark = (ok, txt) => h('td', { class: ok ? 'ok' : 'bad' }, txt);
@@ -433,16 +453,19 @@
   }
 
   // ---------- חיפוש סקרים בענן ----------
-  // כל הסקרים שעלו ל-OneDrive, מכל מכשיר. אפשר לפתוח סקר כמו שהוא, או להתחיל ממנו סקר חדש (למשל בשנה הבאה)
+  // כל הסקרים שעלו לגוגל דרייב, מכל מכשיר. אפשר לפתוח סקר כמו שהוא, או להתחיל ממנו סקר חדש (למשל בשנה הבאה)
   let cloudCache = null;
   async function renderCloud() {
     const app = $('#app');
     const q = h('input', { class: 'in', type: 'search', placeholder: 'סמל מוסד, שם, רחוב, עיר או פרויקט', style: 'font-size:18px' });
     const list = h('div', { class: 'stack' });
     const msg = h('div', { class: 'muted small', role: 'status' });
+    const arch = h('div', { class: 'stack' });
+    const archBtn = h('button', { class: 'btn primary', onclick: () => searchArchive(q.value, arch, archBtn) }, '🔎 חפש גם בארכיון בגוגל דרייב (קובצי אקסל)');
+    q.addEventListener('keydown', e => { if (e.key === 'Enter') searchArchive(q.value, arch, archBtn); });
     app.replaceChildren(bar('חיפוש סקרים בענן', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' }, q,
-      h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => go('#/import') }, '📥 ייבוא סקרים ישנים מאקסל')), msg, list));
-    if (!(await OD.connected())) { msg.textContent = 'צריך לחבר את OneDrive בהגדרות כדי לחפש בענן.'; return; }
+      h('div', { class: 'row' }, archBtn, h('button', { class: 'btn', onclick: () => go('#/import') }, '📥 ייבוא סקרים ישנים מאקסל')), arch, msg, list));
+    if (!(await OD.connected())) { msg.textContent = 'צריך לחבר את גוגל דרייב בהגדרות כדי לחפש בענן.'; return; }
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
     const draw = () => {
       const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -463,7 +486,62 @@
     draw();
     msg.textContent = 'טוען מהענן…';
     try { cloudCache = await Sync.cloudIndex(); draw(); setTimeout(() => q.focus(), 50); }
-    catch (e) { msg.textContent = (e instanceof OD.AuthError ? 'צריך להתחבר מחדש ל-OneDrive בהגדרות. ' : 'הטעינה נכשלה: ') + e.message; }
+    catch (e) { msg.textContent = (e instanceof OD.AuthError ? 'צריך להתחבר מחדש לגוגל דרייב בהגדרות. ' : 'הטעינה נכשלה: ') + e.message; }
+  }
+
+  // ---------- הארכיון בגוגל דרייב: כל קובצי האקסל של הסקרים (גם מהתוכנה במחשב) ----------
+  // חיפוש לפי שם הקובץ או תוכן (שם מוסד, סמל), ופתיחה כסקר חדש להיום עם העצים, ההערות והתמונות מהקובץ
+  const pathCache = new Map();
+  async function pathOf(f) {
+    const pid = f.parents && f.parents[0];
+    if (!pid) return [];
+    if (!pathCache.has(pid)) pathCache.set(pid, OD.folderPath(pid, 5).catch(() => []));
+    return pathCache.get(pid);
+  }
+  async function searchArchive(text, box, btn) {
+    text = text.trim();
+    if (!text) { toast('כתוב שם מוסד, סמל או רחוב'); return; }
+    if (!navigator.onLine) { toast('אין קליטה'); return; }
+    btn.disabled = true;
+    box.replaceChildren(h('div', { class: 'muted small' }, 'מחפש בארכיון…'));
+    try {
+      const files = await OD.searchExcel(text);
+      const rows = [];
+      for (const f of files) {
+        const path = await pathOf(f);
+        if (path.some(n => /^גיבוי אפליקציית סקרי עצים$/.test(n))) continue; // עותקים של האפליקציה עצמה מופיעים למעלה
+        rows.push({ f, path });
+      }
+      box.replaceChildren(h('div', { class: 'muted small' }, rows.length ? `${rows.length} קבצים בארכיון` : 'לא נמצאו קבצים בארכיון'),
+        ...rows.slice(0, 40).map(({ f, path }) => h('div', { class: 'card stack' },
+          h('div', { class: 't', style: 'font-weight:600;overflow-wrap:anywhere' }, '📄 ' + f.name.replace(/\.xls[xm]$/i, '')),
+          h('div', { class: 'muted small' }, [path.join(' / '), f.lastModifiedDateTime ? fmtDate(f.lastModifiedDateTime.slice(0, 10)) : ''].filter(Boolean).join(' · ')),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary', onclick: ev => fromArchive(f, path, ev.currentTarget) }, 'סקר חדש להיום (עם התמונות)'),
+            h('button', { class: 'btn', onclick: async ev => { ev.currentTarget.disabled = true; try { const b = await OD.download(f.id); if (b) downloadFile(b, f.name); } catch (err) { toast('נכשל: ' + err.message, 4000); } } }, 'הורד את האקסל')))));
+    } catch (e) { box.replaceChildren(h('div', {}, (e instanceof OD.AuthError ? 'צריך להתחבר מחדש לגוגל דרייב בהגדרות. ' : 'החיפוש נכשל: ') + e.message)); }
+    finally { btn.disabled = false; }
+  }
+  async function fromArchive(f, path, btn) {
+    btn.disabled = true; const label = btn.textContent;
+    try {
+      btn.textContent = 'מוריד…';
+      const b = await OD.download(f.id);
+      if (!b) throw new Error('הקובץ לא נמצא');
+      btn.textContent = 'קורא את הקובץ…';
+      const r = await Importer.parse(await b.arrayBuffer(), f.name, { photos: true });
+      if (!r) throw new Error('הקובץ לא נראה כמו סקר בטיחות עצים');
+      const yi = path.findIndex(n => /^\s*(19|20)\d\d\s*$/.test(n));
+      const old = Object.assign({}, r.survey, { id: 'file', project: (yi >= 0 && path[yi + 1]) || path[path.length - 1] || '', date: r.survey.date || (f.lastModifiedDateTime || '').slice(0, 10) });
+      old.trees = r.trees.map(t => Object.assign({ id: uid(), photos: [] }, t));
+      const s = await copySurvey(old, false);
+      s.prev = { file: f.name, fileId: f.id, date: old.date };
+      btn.textContent = 'מוסיף את התמונות…';
+      const n = await addOldPhotos(s, r.trees, old.date);
+      const w = r.warnings.filter(x => !/^עץ בלי מספר/.test(x));
+      toast(`נפתח סקר חדש להיום על בסיס ${f.name} (${fmtDate(old.date)}): ${s.trees.length} עצים, ${n} תמונות.` + (w.length ? ' ' + w.join('; ') : ''), 6000);
+      go('#/s/' + s.id + '/details');
+    } catch (e) { toast('נכשל: ' + e.message, 5000); btn.textContent = label; btn.disabled = false; }
   }
 
   // גרסאות קודמות של סקר (נשמרות לפני עריכה ביום אחר): שחזור כסקר נפרד, או הורדה של האקסל/PDF הישן
@@ -474,9 +552,9 @@
     box = h('div', { class: 'versions stack small' }, 'טוען…');
     card.append(box);
     try {
-      const kids = await OD.api('GET', `/me/drive/items/${e.folderId}/children?$select=id,name,folder&$top=200`);
-      const vf = ((kids && kids.value) || []).find(x => x.folder && x.name === 'גרסאות קודמות');
-      const files = vf ? (((await OD.api('GET', `/me/drive/items/${vf.id}/children?$select=id,name,file&$top=200`)) || {}).value || []).filter(f => f.file) : [];
+      const kids = await OD.children(e.folderId);
+      const vf = kids.find(x => x.folder && x.name === 'גרסאות קודמות');
+      const files = vf ? (await OD.children(vf.id)).filter(f => f.file) : [];
       if (!files.length) { box.replaceChildren('אין גרסאות קודמות לסקר הזה.'); return; }
       files.sort((a, b) => b.name.localeCompare(a.name, 'he'));
       box.replaceChildren(...files.map(f => h('div', { class: 'row', style: 'align-items:center' },
@@ -507,8 +585,8 @@
   }
 
   // ---------- ייבוא סקרים ישנים מאקסל ----------
-  // מקור: תיקייה במחשב (למשל גוגל דרייב), או תיקייה ב-OneDrive. רק קובצי אקסל נקראים, ובתיקייה המקורית לא משתנה כלום.
-  // כל סקר נשמר ישר בגיבוי ב-OneDrive (נתונים + עותק של האקסל המקורי, עם התמונות שבתוכו), בלי להישאר בטאבלט,
+  // מקור: תיקייה במחשב (למשל גוגל דרייב), או תיקייה בגוגל דרייב. רק קובצי אקסל נקראים, ובתיקייה המקורית לא משתנה כלום.
+  // כל סקר נשמר ישר בגיבוי בגוגל דרייב (נתונים + עותק של האקסל המקורי, עם התמונות שבתוכו), בלי להישאר בטאבלט,
   // ואחר כך מופיע בחיפוש בענן. בסוף: דוח בקרה (מה יובא, מה עם אזהרות ומה נכשל ולמה), שנשמר וגם יורד כאקסל
   const XL = /\.xls[xm]$/i;
   // מזהה קבוע לכל קובץ מקור: ייבוא חוזר של אותו קובץ מעדכן את אותו סקר ולא יוצר כפול
@@ -524,7 +602,7 @@
     const app = $('#app');
     const main = h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' });
     app.replaceChildren(bar('ייבוא סקרים ישנים', '#/cloud'), main);
-    if (!(await OD.connected())) { main.append(h('div', { class: 'card' }, 'צריך לחבר את OneDrive בהגדרות.')); return; }
+    if (!(await OD.connected())) { main.append(h('div', { class: 'card' }, 'צריך לחבר את גוגל דרייב בהגדרות.')); return; }
     const box = h('div', { class: 'stack' });
     const last = await DB.getKV('importLog', null);
     // תיקייה במחשב: הדפדפן נותן רק לקרוא את הקבצים, אין לו גישה לשנות בה משהו
@@ -547,12 +625,12 @@
         h('div', { class: 'small' }, 'בכרום במחשב: בוחרים תיקייה (למשל "יציבות עצים" או תיקייה של שנה אחת). נקראים רק קובצי האקסל, כולל בתתי-התיקיות. קובצי PDF ושאר הקבצים לא נקראים, ובתיקייה לא משתנה כלום. כרום ישאל אם לאשר "העלאה" של הקבצים לאתר: זו רק קריאה שלהם בתוך האפליקציה.'),
         h('button', { class: 'btn primary big', onclick: () => pick.click() }, '📂 בחר תיקייה במחשב'), pick),
       h('div', { class: 'card stack' },
-        h('b', {}, '☁️ מתיקייה ב-OneDrive'),
-        h('button', { class: 'btn big', onclick: () => browse() }, 'בחר תיקייה ב-OneDrive')),
+        h('b', {}, '☁️ מתיקייה בגוגל דרייב'),
+        h('button', { class: 'btn big', onclick: () => browse() }, 'בחר תיקייה בגוגל דרייב')),
       last ? h('button', { class: 'btn', onclick: () => showReport(last) }, `📋 דוח הבקרה של הייבוא האחרון (${new Date(last.at).toLocaleDateString('he-IL')})`) : null,
       box);
 
-    const trail = [{ id: null, name: 'OneDrive' }];
+    const trail = [{ id: null, name: 'גוגל דרייב' }];
     const browse = async () => {
       const here = trail[trail.length - 1];
       box.replaceChildren(h('div', { class: 'muted small' }, 'טוען…'));
@@ -652,7 +730,7 @@
           const dk = (s.siteName + '|' + s.date).trim();
           if (s.siteName && seen.has(dk)) warn.push('ייתכן שזה אותו סקר כמו ' + seen.get(dk));
           seen.set(dk, f.path.concat(f.name).join(' / '));
-          // OneDrive עמוס: מחכים ומנסים שוב
+          // גוגל דרייב עמוס: מחכים ומנסים שוב
           for (let a = 0; ; a++) {
             try { pending.push(await Sync.importSurvey(s, f.src())); break; }
             catch (e) { lastErr = e; if (a >= 4 || !/עמוס|נסה שוב|Failed to fetch|NetworkError/i.test(e.message)) throw e; await new Promise(res => setTimeout(res, 5000 * (a + 1))); }
@@ -708,7 +786,7 @@
       box.replaceChildren(h('div', { class: 'card stack' },
         h('b', {}, `דוח בקרה · ${new Date(log.at).toLocaleString('he-IL')}`),
         h('div', {}, `✓ ${c.ok} יובאו תקין · ⚠️ ${c.warn} יובאו עם אזהרה · ✗ ${c.fail} נכשלו` + (log.stopped ? ` · נעצר אחרי ${log.items.length} מתוך ${log.total}` : '')),
-        c.ok + c.warn ? h('div', { class: 'muted small' }, 'הסקרים שיובאו נמצאים בגיבוי ב-OneDrive ומופיעים בחיפוש בענן. כדאי לעבור על האזהרות (למשל שם או תאריך שלא נמצאו) ולבדוק את הסקר בחיפוש.') : null,
+        c.ok + c.warn ? h('div', { class: 'muted small' }, 'הסקרים שיובאו נמצאים בגיבוי בגוגל דרייב ומופיעים בחיפוש בענן. כדאי לעבור על האזהרות (למשל שם או תאריך שלא נמצאו) ולבדוק את הסקר בחיפוש.') : null,
         h('button', { class: 'btn', onclick: dl }, '⬇️ הורד את הדוח כאקסל'), chips, list));
       draw();
     }
@@ -720,7 +798,7 @@
     try {
       if (!e.dataId) throw new Error('לסקר הזה אין עדיין נתונים בענן');
       const blob = await OD.download(e.dataId);
-      if (!blob) throw new Error('קובץ נתוני הסקר לא נמצא ב-OneDrive');
+      if (!blob) throw new Error('קובץ נתוני הסקר לא נמצא בגוגל דרייב');
       const old = JSON.parse(await blob.text());
       if (!asNew) {
         // פתיחת אותו סקר: הנתונים יורדים לטאבלט, והתמונות נשארות בענן ונטענות כשצריך
@@ -731,21 +809,30 @@
         go('#/s/' + old.id);
         return;
       }
-      const s = await copySurvey(old, false);
-      toast(`נפתח סקר חדש על בסיס הסקר מ-${fmtDate(old.date)}. עדכן את העצים והוסף תמונות.`, 5000);
+      const s = await copySurvey(old, true);
+      // סקר שיובא מאקסל ישן: התמונות נמצאות רק בתוך קובץ האקסל המקורי שבתיקיית הגיבוי
+      if (old.imported && old.odFolderId && old.odSrcName && !s.trees.some(t => t.photos.length)) {
+        btn.textContent = 'מוציא את התמונות מהאקסל…';
+        try {
+          const f = await OD.findFile(old.odFolderId, old.odSrcName);
+          const b = f && await OD.download(f.id);
+          if (b) await addOldPhotos(s, (await Importer.parse(await b.arrayBuffer(), old.odSrcName, { photos: true })).trees, old.date);
+        } catch (err) { toast('התמונות מהאקסל הישן לא נקראו: ' + err.message, 5000); }
+      }
+      toast(`נפתח סקר חדש על בסיס הסקר מ-${fmtDate(old.date)}, עם התמונות שלו. עדכן את העצים והוסף תמונות חדשות.`, 5000);
       go('#/s/' + s.id + '/details');
     } catch (err) { toast('נכשל: ' + err.message, 5000); }
     finally { btn.disabled = false; }
   }
 
   // ---------- אורנים ומפות: סיכום על פני כמה סקרים ----------
-  // תמונה ממוזערת לעץ במפה: מהטאבלט אם יש, אחרת מ-OneDrive
+  // תמונה ממוזערת לעץ במפה: מהטאבלט אם יש, אחרת מגוגל דרייב
   async function mapThumb(s, p) {
     const rec = await DB.getPhoto(p.id);
     if (rec && (rec.thumb || rec.blob)) return rec.thumb || await makeThumb(rec.blob);
     return p.odId && navigator.onLine && await OD.connected() ? OD.thumb(p.odId) : null;
   }
-  // מפה כדף אינטרנט אחד: מורידים/משתפים, ונשמרת גם בתיקיית הפרויקט ב-OneDrive. מחזיר הודעה למשתמש
+  // מפה כדף אינטרנט אחד: מורידים/משתפים, ונשמרת גם בתיקיית הפרויקט בגוגל דרייב. מחזיר הודעה למשתמש
   async function shareMap(surveys, title, onProgress) {
     const r = await Reports.mapHtml(surveys, title, mapThumb);
     if (!r.points) throw new Error('אין עצים עם נ"צ בסקרים שנבחרו');
@@ -753,10 +840,10 @@
     await deliver(r.blob, name);
     let msg = `✓ המפה הורדה: ${r.points} עצים` + (r.noGps ? ` (${r.noGps} עצים בלי נ"צ לא מופיעים)` : '') + '. אפשר לשלוח את הקובץ בוואטסאפ או במייל, והוא נפתח בכל דפדפן.';
     const saved = await saveSummaryToCloud(surveys, name, r.blob);
-    if (saved) msg += ` נשמרה גם ב-OneDrive: ${saved}.`;
+    if (saved) msg += ` נשמרה גם בגוגל דרייב: ${saved}.`;
     return msg;
   }
-  // קובץ סיכום לתיקיית הדוחות ב-OneDrive (תיקיית הפרויקט אם כולם מאותו פרויקט)
+  // קובץ סיכום לתיקיית הדוחות בגוגל דרייב (תיקיית הפרויקט אם כולם מאותו פרויקט)
   async function saveSummaryToCloud(surveys, name, blob) {
     try {
       if (!navigator.onLine || !(await OD.connected())) return '';
@@ -765,9 +852,9 @@
       const dir = projects.length === 1 ? await OD.folder(root, projects[0]) : root;
       await OD.upload(dir, name, blob, true);
       const path = ((await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים') + (projects.length === 1 ? '/' + projects[0] : '');
-      Sync.log('ok', 'קובץ סיכום נשמר ב-OneDrive: ' + name);
+      Sync.log('ok', 'קובץ סיכום נשמר בגוגל דרייב: ' + name);
       return path;
-    } catch (e) { Sync.log('error', 'שמירת קובץ סיכום ב-OneDrive נכשלה: ' + e.message); return ''; }
+    } catch (e) { Sync.log('error', 'שמירת קובץ סיכום בגוגל דרייב נכשלה: ' + e.message); return ''; }
   }
 
   async function renderSummary() {
@@ -857,7 +944,7 @@
       const tot = rows[rows.length - 1];
       let m = `✓ האקסל הורד: ${list.length} מוסדות, ${tot[5]} אורנים` + (tot[6] ? ` (${tot[6]} עצי אורן בלי כמות)` : '') + '.';
       const saved = await saveSummaryToCloud(list, name, blob);
-      if (saved) m += ` נשמר גם ב-OneDrive: ${saved}.`;
+      if (saved) m += ` נשמר גם בגוגל דרייב: ${saved}.`;
       return m;
     });
     btnM.onclick = run(btnM, async () => {
@@ -1370,7 +1457,10 @@
       }
       const np = { id: p.id, w: p.w, h: p.h, sub, inReport: false, note: '', taken: Date.now() };
       // הראשונה בקבוצה נכנסת לדוח, השאר לא (אפשר לשנות)
-      np.inReport = !t.photos.some(x => Core.groupKey(t, x) === Core.groupKey(t, np));
+      // תמונה חדשה בעץ שיש בו רק תמונות מהסקר הקודם: החדשה נכנסת לדוח במקומן
+      const group = t.photos.filter(x => Core.groupKey(t, x) === Core.groupKey(t, np));
+      np.inReport = !group.some(x => !x.fromOld);
+      if (np.inReport) group.forEach(x => { x.inReport = false; });
       t.photos.push(np);
       await saveNow(); // כל תמונה נרשמת בסקר מיד, גם אם האפליקציה תיסגר באמצע
       refreshRow(t);
@@ -1442,7 +1532,7 @@
     return new Promise(r => c.toBlob(r, 'image/jpeg', 0.7));
   }
 
-  // שומר את המקור בצד, ומחליף את התמונה בגרסה עם הסימונים (זו שנכנסת לדוח, לטלגרם ול-OneDrive)
+  // שומר את המקור בצד, ומחליף את התמונה בגרסה עם הסימונים (זו שנכנסת לדוח, לטלגרם ולגוגל דרייב)
   async function applyStrokes(rec, orig, strokes) {
     const blob = strokes.length ? await Annotate.flatten(orig, strokes) : orig;
     return Object.assign({}, rec, { blob, orig: strokes.length ? orig : null, strokes, thumb: await makeThumb(blob) });
@@ -1451,8 +1541,8 @@
   async function editPhoto(t, p) {
     const rec = await DB.getPhoto(p.id);
     if (!rec) return;
-    if (!rec.blob) { // התמונה פונתה מהטאבלט: מורידים אותה מ-OneDrive
-      try { rec.blob = await photoBlob(cur, p.id); } catch (e) { toast('לא ניתן לטעון את התמונה מ-OneDrive: ' + e.message, 4000); return; }
+    if (!rec.blob) { // התמונה פונתה מהטאבלט: מורידים אותה מגוגל דרייב
+      try { rec.blob = await photoBlob(cur, p.id); } catch (e) { toast('לא ניתן לטעון את התמונה מגוגל דרייב: ' + e.message, 4000); return; }
       if (!rec.blob) return;
     }
     const orig = rec.orig || rec.blob;
@@ -1461,7 +1551,7 @@
     await DB.putPhoto(await applyStrokes(rec, orig, strokes));
     const old = thumbUrls.get(p.id);
     if (old) { URL.revokeObjectURL(old); thumbUrls.delete(p.id); }
-    p.ver = (p.ver || 0) + 1; // מסמן שצריך להחליף את התמונה בטלגרם וב-OneDrive
+    p.ver = (p.ver || 0) + 1; // מסמן שצריך להחליף את התמונה בטלגרם ובגוגל דרייב
     await saveNow();
     refreshRow(t); renderPhotos();
     Sync.kick(true);
@@ -1487,8 +1577,8 @@
         h('div', { class: 'ph' },
           h('img', { src: url, alt: 'תמונה של עץ ' + Core.photoLabel(t, p), onclick: () => openPhoto(p.id) }),
           h('span', { class: 'sync' },
-            p.tgMsgId ? h('span', { class: 'tg', title: 'גובתה בטלגרם' }, 'TG ✓') : h('span', { class: 'tg pending', title: 'ממתינה לשליחה לטלגרם' }, 'TG …'),
-            p.odId ? h('span', { class: 'od', title: 'נשמרה ב-OneDrive' }, 'OD ✓') : null),
+            p.fromOld ? h('span', { class: 'tg', title: 'תמונה מהסקר הקודם' }, '📅 ' + fmtDate(p.fromOld)) : p.tgMsgId ? h('span', { class: 'tg', title: 'גובתה בטלגרם' }, 'TG ✓') : h('span', { class: 'tg pending', title: 'ממתינה לשליחה לטלגרם' }, 'TG …'),
+            p.odId ? h('span', { class: 'od', title: 'נשמרה בגוגל דרייב' }, 'GD ✓') : null),
           h('button', { class: 'pen', title: 'סמן על התמונה', 'aria-label': 'סמן על התמונה', onclick: () => editPhoto(t, p) }, '✏️'),
           h('button', { class: 'del', title: 'מחק', 'aria-label': 'מחק תמונה', onclick: async () => {
             if (!confirm('למחוק את התמונה מהסקר? אם כבר נשלחה, היא נשארת בטלגרם.')) return;
@@ -1517,7 +1607,7 @@
 
   async function openPhoto(id) {
     let blob;
-    try { blob = await photoBlob(cur, id); } catch (e) { toast('לא ניתן לטעון את התמונה מ-OneDrive: ' + e.message, 4000); return; }
+    try { blob = await photoBlob(cur, id); } catch (e) { toast('לא ניתן לטעון את התמונה מגוגל דרייב: ' + e.message, 4000); return; }
     if (!blob) return;
     const url = URL.createObjectURL(blob);
     const ov = h('div', { style: 'position:fixed;inset:0;background:#000;z-index:60;display:flex;align-items:center;justify-content:center', onclick: () => { ov.remove(); URL.revokeObjectURL(url); } },
@@ -1538,18 +1628,18 @@
     const hm = t => new Date(t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     const drawSync = () => {
       const all = cur.trees.flatMap(t => t.photos || []);
-      const tgLeft = all.filter(p => !p.tgMsgId).length, odLeft = all.filter(p => !p.odId).length;
+      const tgLeft = all.filter(p => !p.fromOld && !p.tgMsgId).length, odLeft = all.filter(p => !p.odId).length;
       syncBox.replaceChildren(
         h('div', {}, tgOn ? (tgLeft ? `טלגרם: ${tgLeft} מתוך ${all.length} תמונות ממתינות לגיבוי.` : `טלגרם: כל ${all.length} התמונות מגובות.`) : 'טלגרם לא מחובר.'),
-        h('div', {}, odOn ? (odLeft ? `OneDrive: ${odLeft} תמונות ממתינות.` : 'OneDrive: התמונות ונתוני הסקר שמורים.') : 'OneDrive לא מחובר.'),
-        ...(cur.odReportAt ? [h('div', {}, `אקסל הועלה ל-OneDrive: ${hm(cur.odReportAt)}`)] : []),
-        ...(cur.odPdfAt ? [h('div', {}, `PDF הועלה ל-OneDrive: ${hm(cur.odPdfAt)}`)] : []),
+        h('div', {}, odOn ? (odLeft ? `גוגל דרייב: ${odLeft} תמונות ממתינות.` : 'גוגל דרייב: התמונות ונתוני הסקר שמורים.') : 'גוגל דרייב לא מחובר.'),
+        ...(cur.odReportAt ? [h('div', {}, `אקסל הועלה לגוגל דרייב: ${hm(cur.odReportAt)}`)] : []),
+        ...(cur.odPdfAt ? [h('div', {}, `PDF הועלה לגוגל דרייב: ${hm(cur.odPdfAt)}`)] : []),
         ...(Sync.state.error ? [h('div', { style: 'color:var(--danger)' }, Sync.state.error)] : []));
       finishBox.replaceChildren(cur.finished
-        ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}. האקסל וה-PDF בתיקיית הפרויקט ב-OneDrive, והתמונות פונו מהטאבלט (הן נטענות מהענן כשצריך).`)
+        ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}. האקסל וה-PDF בתיקיית הפרויקט בגוגל דרייב, והתמונות פונו מהטאבלט (הן נטענות מהענן כשצריך).`)
         : cur.finishPending
           ? h('div', { class: 'small' }, Sync.state.offline ? '⏸ אין קליטה. הסקר יעלה לבד (אקסל + PDF) כשהקליטה תחזור.' : '⟳ מעלה את התמונות, ואז את האקסל וה-PDF…')
-          : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר אקסל ו-PDF באותה תיקייה ב-OneDrive ומפנה את התמונות מהטאבלט. בלי קליטה זה יקרה לבד כשהקליטה תחזור.'));
+          : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר אקסל ו-PDF באותה תיקייה בגוגל דרייב ומפנה את התמונות מהטאבלט. בלי קליטה זה יקרה לבד כשהקליטה תחזור.'));
     };
     drawSync();
     const busy = async (btn, fn) => { btn.disabled = true; try { await fn(); } catch (err) { console.error(err); status.textContent = 'נכשל: ' + err.message; } finally { btn.disabled = false; drawSync(); } };
@@ -1561,7 +1651,7 @@
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', onclick: async e => {
             const btn = e.currentTarget;
-            if (!odOn) { toast('צריך לחבר את OneDrive בהגדרות', 4000); return; }
+            if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
             if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
             cur.finishPending = true; cur.finished = false;
             const sid = cur.id; Sync.preparing.add(sid);
@@ -1574,17 +1664,17 @@
               const x = await buildReport(s);
               await DB.setKV('xlsm:' + s.id, { hash: Sync.hashSurvey(s), blob: x.blob, name: x.name });
               const pdf = await buildPdf(s, (i, n) => { status.textContent = `מכין PDF… עמוד ${i} מתוך ${n}`; });
-              status.textContent = Sync.state.offline ? '✓ האקסל וה-PDF מוכנים. יעלו ל-OneDrive כשהקליטה תחזור.' : '✓ האקסל וה-PDF מוכנים, ועולים עכשיו ל-OneDrive יחד עם התמונות.';
+              status.textContent = Sync.state.offline ? '✓ האקסל וה-PDF מוכנים. יעלו לגוגל דרייב כשהקליטה תחזור.' : '✓ האקסל וה-PDF מוכנים, ועולים עכשיו לגוגל דרייב יחד עם התמונות.';
               if (pdf) viewPdf(s, pdf);
             } catch (err) { console.error(err); status.textContent = 'הכנת הקבצים נכשלה, הם יוכנו בזמן ההעלאה: ' + err.message; }
             finally { Sync.preparing.delete(sid); Sync.now(); btn.disabled = false; drawSync(); }
           } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'),
           h('button', { class: 'btn big', onclick: e => busy(e.currentTarget, async () => {
-            if (!odOn) throw new Error('OneDrive לא מחובר');
+            if (!odOn) throw new Error('גוגל דרייב לא מחובר');
             await saveNow();
-            status.textContent = 'מעלה אקסל ל-OneDrive…';
+            status.textContent = 'מעלה אקסל לגוגל דרייב…';
             await Sync.uploadReport(cur);
-            status.textContent = '✓ האקסל הועלה ל-OneDrive (תיקיית הפרויקט בסקרי עצים).';
+            status.textContent = '✓ האקסל הועלה לגוגל דרייב (תיקיית הפרויקט בסקרי עצים).';
           }) }, '⬆ העלה אקסל לענן'))),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'דוח PDF'),
@@ -1600,9 +1690,9 @@
             status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים).`;
             viewPdf(s, pdf);
             if (odOn) {
-              status.textContent += ' מעלה ל-OneDrive…';
+              status.textContent += ' מעלה לגוגל דרייב…';
               await Sync.uploadPdf(s, pdf);
-              status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים) ונשמר גם ב-OneDrive.`;
+              status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים) ונשמר גם בגוגל דרייב.`;
             }
           }) }, 'הפק PDF'),
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
@@ -1610,7 +1700,7 @@
         status),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'גיבוי וסנכרון'),
-        h('div', { class: 'muted small' }, 'כל שינוי נשמר מיד בטאבלט. נתוני הסקר עולים ל-OneDrive אחרי כל שינוי, והתמונות לטלגרם ול-OneDrive מיד אחרי הצילום.'),
+        h('div', { class: 'muted small' }, 'כל שינוי נשמר מיד בטאבלט. נתוני הסקר עולים לגוגל דרייב אחרי כל שינוי, והתמונות לטלגרם ולגוגל דרייב מיד אחרי הצילום.'),
         syncBox,
         h('div', { class: 'row' },
           h('button', { class: 'btn primary', onclick: () => { Sync.now(); toast('מגבה עכשיו…'); } }, 'גבה עכשיו'),
@@ -1632,7 +1722,7 @@
     const off = Sync.onChange(() => { if (!document.body.contains(syncBox)) { if (off) off(); return; } drawSync(); });
   }
 
-  // הפקה לסקר לבנייה: טבלת אקסל, תמונות ו-GIS. "סיום סקר" מעלה את האקסל ל-OneDrive ומפנה את התמונות
+  // הפקה לסקר לבנייה: טבלת אקסל, תמונות ו-GIS. "סיום סקר" מעלה את האקסל לגוגל דרייב ומפנה את התמונות
   async function renderConstructionExport(body) {
     const warns = Construction.warnings(cur);
     const status = h('div', { class: 'small muted', role: 'status' });
@@ -1652,16 +1742,16 @@
         h('div', { class: 'muted small' }, 'הסטטוס המוצע (שימור / כריתה / העתקה) ממולא ידנית באקסל, ואז מתעדכנים אזור השורשים והטבלה המסכמת.')),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'סיום סקר'),
-        cur.finished ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}. האקסל בתיקיית הפרויקט ב-OneDrive.`)
+        cur.finished ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}. האקסל בתיקיית הפרויקט בגוגל דרייב.`)
           : cur.finishPending ? h('div', { class: 'small' }, '⟳ מעלה את התמונות ואת האקסל…')
-          : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר את קובץ האקסל ב-OneDrive ומפנה את התמונות מהטאבלט.'),
+          : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר את קובץ האקסל בגוגל דרייב ומפנה את התמונות מהטאבלט.'),
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', onclick: async () => {
-            if (!odOn) { toast('צריך לחבר את OneDrive בהגדרות', 4000); return; }
+            if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
             if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
             cur.finishPending = true; cur.finished = false;
             await saveNow(); Sync.now(); go(`#/s/${cur.id}/export`);
-            toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה ל-OneDrive…', 3000);
+            toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה לגוגל דרייב…', 3000);
           } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'))),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'קובץ אקסל'),
@@ -1672,7 +1762,7 @@
             const r = await buildReport(cur);
             await deliver(r.blob, r.name);
             status.textContent = '✓ האקסל הורד.';
-            if (odOn) { status.textContent += ' מעלה ל-OneDrive…'; await Sync.uploadReport(cur); status.textContent = '✓ האקסל הורד ונשמר גם ב-OneDrive.'; }
+            if (odOn) { status.textContent += ' מעלה לגוגל דרייב…'; await Sync.uploadReport(cur); status.textContent = '✓ האקסל הורד ונשמר גם בגוגל דרייב.'; }
           }) }, 'הורד אקסל'),
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
         status),
@@ -1715,7 +1805,7 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   }
 
-  // בונה את קובץ האקסל של סקר (משמש גם להורדה וגם ל-OneDrive)
+  // בונה את קובץ האקסל של סקר (משמש גם להורדה וגם לגוגל דרייב)
   async function buildReport(s) {
     if (Construction.isConstruction(s)) {
       const res = await fetch('template/construction.xltm');
@@ -1731,7 +1821,7 @@
     return { blob: new Blob([r.bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }), name: fileBase(s) + '.xlsm', placed: r.placed };
   }
 
-  // דוח PDF (אותו שם כמו האקסל, כדי שיופיעו אחד ליד השני ב-OneDrive)
+  // דוח PDF (אותו שם כמו האקסל, כדי שיופיעו אחד ליד השני בגוגל דרייב)
   async function buildPdf(s, onProgress) {
     if (Construction.isConstruction(s)) return null; // בסקר לבנייה יש רק אקסל
     const r = await ReportPrint.toPdf(s, id => photoBlob(s, id), onProgress);
@@ -1870,12 +1960,13 @@
     const phrasesTa = h('textarea', { class: 'in', style: 'min-height:140px' });
     phrasesTa.value = (await DB.getKV('phrases', null) || PHRASE_SEED).join('\n');
     const backupStatus = h('div', { class: 'small', role: 'status' });
-    const odClientIn = h('input', { class: 'in', value: await OD.clientId(), dir: 'ltr', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', autocomplete: 'off' });
+    const odClientIn = h('input', { class: 'in', value: await OD.clientId(), dir: 'ltr', placeholder: '1234567890-xxxx.apps.googleusercontent.com', autocomplete: 'off' });
+    const odSecretIn = h('input', { class: 'in', value: await OD.clientSecret(), dir: 'ltr', placeholder: 'GOCSPX-…', autocomplete: 'off' });
     const odRootIn = h('input', { class: 'in', value: await DB.getKV('odRoot', 'סקרי עצים') });
     const odConnected = await OD.connected();
     const odUser = await DB.getKV('odUser', '');
     const odStatus = h('div', { class: 'small', role: 'status' },
-      Sync.state.odNeedsLogin ? 'צריך להתחבר מחדש (החיבור של אפליקציית דפדפן תקף ליממה).' : odConnected ? `✓ מחובר${odUser ? ' כ-' + odUser : ''}` : '');
+      Sync.state.odNeedsLogin ? 'צריך להתחבר מחדש.' : odConnected ? `✓ מחובר${odUser ? ' כ-' + odUser : ''}` : '');
 
     app.replaceChildren(
       bar('הגדרות', '#/'),
@@ -1911,21 +2002,23 @@
               if (!confirm('לנתק את הטלגרם בכל המכשירים?')) return;
               await DB.setKV('tgToken', ''); await DB.setKV('tgChat', ''); await DB.setKV('tgChatName', ''); Sync.settingsChanged(); renderSettings();
             } }, 'נתק') : null),
-          h('div', { class: 'muted small' }, 'הטוקן נשמר גם ב-OneDrive, כך שבכל מכשיר שמתחבר ל-OneDrive הטלגרם מתחבר לבד. החלפת טוקן כאן מעדכנת את כל המכשירים.'),
+          h('div', { class: 'muted small' }, 'הטוקן נשמר גם בגוגל דרייב, כך שבכל מכשיר שמתחבר לגוגל דרייב הטלגרם מתחבר לבד. החלפת טוקן כאן מעדכנת את כל המכשירים.'),
           tgStatus),
         h('div', { class: 'card stack' },
-          h('h2', { style: 'margin:0;font-size:20px' }, 'OneDrive'),
+          h('h2', { style: 'margin:0;font-size:20px' }, 'גוגל דרייב'),
           h('div', { class: 'muted small' }, 'אקסל ו-PDF נשמרים בתיקיית הדוחות, תיקייה לכל פרויקט. הנתונים, התמונות וההגדרות המשותפות נשמרים בתיקייה "גיבוי אפליקציית סקרי עצים".'),
-          field('מזהה האפליקציה ב-Microsoft (Client ID)', odClientIn),
-          field('תיקיית הדוחות ב-OneDrive (אקסל ו-PDF; הגיבוי נשמר בנפרד ב"גיבוי אפליקציית סקרי עצים")', odRootIn),
+          h('div', { class: 'muted small' }, 'כתובת החזרה (Redirect URI) שצריך לרשום בגוגל: ', h('b', { dir: 'ltr' }, location.origin + location.pathname)),
+          field('מזהה הלקוח מגוגל (Client ID)', odClientIn),
+          field('הסוד מגוגל (Client secret)', odSecretIn),
+          field('תיקיית הדוחות בגוגל דרייב (אקסל ו-PDF; הגיבוי נשמר בנפרד ב"גיבוי אפליקציית סקרי עצים")', odRootIn),
           h('div', { class: 'row' },
             h('button', { class: 'btn primary', onclick: async () => {
-              await DB.setKV('odClientId', odClientIn.value.trim()); await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים');
+              await DB.setKV('gdClientId', odClientIn.value.trim()); await DB.setKV('gdClientSecret', odSecretIn.value.trim()); await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים');
 
               if (!navigator.onLine) { odStatus.textContent = 'צריך קליטה כדי להתחבר.'; return; }
               await saveNow();
               try { await OD.beginLogin(); } catch (e) { odStatus.textContent = e.message; }
-            } }, odConnected && !Sync.state.odNeedsLogin ? 'התחבר מחדש' : 'התחבר ל-OneDrive'),
+            } }, odConnected && !Sync.state.odNeedsLogin ? 'התחבר מחדש' : 'התחבר לגוגל דרייב'),
             odConnected ? h('button', { class: 'btn', onclick: async () => { await OD.logout(); renderSettings(); } }, 'נתק') : null,
             h('button', { class: 'btn', onclick: async () => { await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים'); toast('נשמר'); } }, 'שמור תיקייה')),
           odStatus),
@@ -1961,7 +2054,7 @@
     let n = 0;
     for (const s of surveys) for (const t of s.trees) for (const p of t.photos || []) {
       const d = await DB.getPhoto(p.id);
-      if (d && d.blob) { // תמונות שפונו מהטאבלט כבר נמצאות ב-OneDrive
+      if (d && d.blob) { // תמונות שפונו מהטאבלט כבר נמצאות בגוגל דרייב
         zip.file('photos/' + p.id + '.jpg', d.blob); n++;
         if (d.orig) zip.file('photos/' + p.id + '.orig.jpg', d.orig);
         if (d.strokes && d.strokes.length) zip.file('photos/' + p.id + '.strokes.json', JSON.stringify(d.strokes));
@@ -2003,8 +2096,25 @@
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { saveNow(); if (cur) Sync.now(); } });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
-  OD.handleRedirect().then(r => {
-    if (r) { toast(r.ok ? '✓ מחובר ל-OneDrive' : 'החיבור ל-OneDrive נכשל: ' + r.message, 4000); Sync.state.odNeedsLogin = false; }
+  // מעבר מ-OneDrive לגוגל דרייב (פעם אחת): מזהי הקבצים של OneDrive לא תקפים בדרייב, אז הסקרים שבטאבלט יעלו מחדש לדרייב.
+  // מה שכבר ב-OneDrive נשאר שם ולא נמחק
+  async function moveToGdrive() {
+    if ((await DB.getKV('storage', '')) === 'gdrive') return;
+    for (const s of await DB.allSurveys()) {
+      for (const k of Object.keys(s)) if (/^od/.test(k) && k !== 'odLayout') delete s[k];
+      for (const t of s.trees || []) for (const p of t.photos || []) {
+        const d = await DB.getPhoto(p.id);
+        if (d && d.blob) { delete p.odId; delete p.odName; delete p.odVer; delete p.odShared; } // תעלה מחדש לדרייב
+        else if (p.odId) p.odShared = true; // כבר פונתה מהטאבלט: נשארת רק ב-OneDrive
+      }
+      s.finishPending = s.finishPending || false;
+      await DB.putSurvey(s, false);
+    }
+    for (const k of ['odAuth', 'odUser', 'importedSrc', 'importLog']) await DB.delKV(k);
+    await DB.setKV('storage', 'gdrive');
+  }
+  moveToGdrive().catch(() => {}).then(() => OD.handleRedirect()).then(r => {
+    if (r) { toast(r.ok ? '✓ מחובר לגוגל דרייב' : 'החיבור לגוגל דרייב נכשל: ' + r.message, 4000); Sync.state.odNeedsLogin = false; }
     route();
     Sync.kick(true);
     setTimeout(() => { ReportPrint.preloadFonts(); getLayoutWarm(); }, 2000);
