@@ -30,9 +30,10 @@
       t = t.startsWith('/') ? t.slice(1) : 'xl/' + t.replace(/^\.\//, '');
       const doc = await xml(zip, t);
       if (!doc) continue;
-      const cells = new Map();
+      const cells = new Map(), vms = new Map();
       for (const c of doc.getElementsByTagNameNS(MAIN, 'c')) {
         const type = c.getAttribute('t');
+        if (c.getAttribute('vm')) vms.set(c.getAttribute('r'), +c.getAttribute('vm'));
         const v = c.getElementsByTagNameNS(MAIN, 'v')[0];
         let val;
         if (type === 's') val = v ? ss[+v.textContent] : '';
@@ -42,7 +43,7 @@
         else val = v ? +v.textContent : '';
         if (val !== '' && val != null) cells.set(c.getAttribute('r'), val);
       }
-      out.push({ name: sh.getAttribute('name'), cells });
+      out.push({ name: sh.getAttribute('name'), cells, vms, path: t, doc });
     }
     return out;
   }
@@ -63,10 +64,109 @@
   const HEAD_NUM = /^מספר( ה?עץ)?$/, HEAD_SP = /^מין\s*ה?עץ$/;
   const TITLE = /סקר\s*(בטיחות|יציבות)\s*(ה)?עצים/;
 
+  // ---------- תמונות מתוך קובץ האקסל ----------
+  // נתיב יחסי בקובץ (../media/x.jpeg) -> נתיב מלא בתוך ה-zip
+  const resolve = (base, target) => {
+    if (target.startsWith('/')) return target.slice(1);
+    const parts = base.split('/'); parts.pop();
+    for (const seg of target.split('/')) { if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg); }
+    return parts.join('/');
+  };
+  async function relsOf(zip, path) {
+    const i = path.lastIndexOf('/');
+    const doc = await xml(zip, path.slice(0, i) + '/_rels/' + path.slice(i + 1) + '.rels');
+    const out = {};
+    if (doc) for (const r of doc.getElementsByTagName('Relationship')) out[r.getAttribute('Id')] = resolve(path, r.getAttribute('Target'));
+    return out;
+  }
+  // כל התמונות בגיליון: [{col, row, path}] — תמונות בתוך תא (Excel 365) ותמונות צפות (עוגן לפי התא העליון-ימני)
+  async function sheetImages(zip, sh) {
+    const out = [];
+    if (sh.vms.size) {
+      const meta = await xml(zip, 'xl/metadata.xml');
+      const rv = await xml(zip, 'xl/richData/rdrichvalue.xml');
+      const rel = await xml(zip, 'xl/richData/richValueRel.xml');
+      const struct = await xml(zip, 'xl/richData/rdrichvaluestructure.xml');
+      if (meta && rv && rel) {
+        const fut = [...meta.getElementsByTagName('futureMetadata')].find(f => f.getAttribute('name') === 'XLRICHVALUE');
+        const rvbs = fut ? [...fut.getElementsByTagName('bk')].map(b => { const x = b.getElementsByTagName('*'); const r = [...x].find(e => e.localName === 'rvb'); return r ? +r.getAttribute('i') : -1; }) : [];
+        const vmeta = [...meta.getElementsByTagName('valueMetadata')][0];
+        const vbk = vmeta ? [...vmeta.getElementsByTagName('bk')].map(b => { const rc = b.getElementsByTagName('rc')[0]; return rc ? +rc.getAttribute('v') : -1; }) : [];
+        // מיקום המפתח של התמונה בכל מבנה (בדרך כלל הראשון)
+        const keyPos = struct ? [...struct.getElementsByTagName('s')].map(st => Math.max(0, [...st.getElementsByTagName('k')].findIndex(k => /LocalImageIdentifier/.test(k.getAttribute('n'))))) : [];
+        const rvs = [...rv.getElementsByTagName('rv')].map(r => { const v = [...r.getElementsByTagName('v')]; const kp = keyPos[+r.getAttribute('s')] || 0; return v[kp] ? +v[kp].textContent : -1; });
+        const rels = await relsOf(zip, 'xl/richData/richValueRel.xml');
+        const relIds = [...rel.getElementsByTagName('*')].filter(e => e.localName === 'rel').map(e => e.getAttribute('r:id') || e.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id'));
+        for (const [ref, vm] of sh.vms) {
+          const fi = vbk[vm - 1]; const ri = fi >= 0 ? rvbs[fi] : -1; const li = ri >= 0 ? rvs[ri] : -1;
+          const path = li >= 0 ? rels[relIds[li]] : null;
+          if (path) out.push({ col: colNum(ref), row: +ref.replace(/\D+/g, ''), path });
+        }
+      }
+    }
+    const srels = await relsOf(zip, sh.path);
+    const XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing';
+    for (const d of sh.doc.getElementsByTagNameNS(MAIN, 'drawing')) {
+      const dpath = srels[d.getAttribute('r:id') || d.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id')];
+      const ddoc = dpath && await xml(zip, dpath);
+      if (!ddoc) continue;
+      const drels = await relsOf(zip, dpath);
+      for (const a of [...ddoc.getElementsByTagNameNS(XDR, 'twoCellAnchor'), ...ddoc.getElementsByTagNameNS(XDR, 'oneCellAnchor')]) {
+        const from = a.getElementsByTagNameNS(XDR, 'from')[0];
+        const blip = [...a.getElementsByTagName('*')].find(e => e.localName === 'blip');
+        if (!from || !blip) continue;
+        const id = blip.getAttribute('r:embed') || blip.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed');
+        const path = drels[id];
+        if (!path || !/\.jpe?g$/i.test(path)) continue; // לוגו, חותמת וכו' הם png/tiff; תמונות העצים jpg
+        out.push({ col: +from.getElementsByTagNameNS(XDR, 'col')[0].textContent + 1, row: +from.getElementsByTagNameNS(XDR, 'row')[0].textContent + 1, path });
+      }
+    }
+    return out;
+  }
+  // לכל תמונה: העץ לפי התווית שמעליה באותה עמודה (מספר העץ, או המין בעץ בלי מספר)
+  async function attachImages(zip, sh, trees, warnings) {
+    let imgs;
+    try { imgs = await sheetImages(zip, sh); } catch (e) { warnings.push('התמונות בקובץ לא נקראו'); return; }
+    const byKey = new Map();
+    for (const t of trees) {
+      if (t.num) for (const n of (root.Core ? Core.expandNum(t.num) : [t.num])) if (!byKey.has(String(n))) byKey.set(String(n), t);
+      if (t.num && !byKey.has(t.num)) byKey.set(t.num, t);
+      if (!t.num && t.species && !byKey.has(t.species)) byKey.set(t.species, t);
+    }
+    let lost = 0;
+    const seen = new Set();
+    imgs.sort((a, b) => a.row - b.row || b.col - a.col);
+    // בתבנית (הנוכחית ושל האפליקציה): התווית של כל משבצת בשורות 10/32/62/85/116/140, בעמודות K עד V.
+    // בתבניות אחרות: התא הראשון מעל התמונה שיש בו מספר עץ או מין
+    const LABEL_ROWS = [10, 32, 62, 85, 116, 140];
+    const std = std0 => im => im.col >= 11 && im.col <= 22 && im.row > 10 && std0;
+    const isStd = std(sh.cells.has('K9') || sh.cells.has('K10'));
+    for (const im of imgs) {
+      let tree = null, sub = null;
+      const rows = isStd(im) ? [LABEL_ROWS.filter(r => r < im.row).pop()] : Array.from({ length: Math.min(8, im.row - 1) }, (_, i) => im.row - 1 - i);
+      for (const r of rows) {
+        if (tree) break;
+        const v = sh.cells.get(colName(im.col) + r);
+        if (v == null || v === '' || v === 0 || v === false) continue;
+        const k = numText(v);
+        if (byKey.has(k)) { tree = byKey.get(k); sub = /^\d+$/.test(k) && tree.num !== k ? +k : null; }
+      }
+      if (!tree) { lost++; continue; }
+      const key = tree.num + '|' + im.path;
+      if (seen.has(key)) continue; // אותה תמונה פעמיים (תא התמונה ותא ההדפסה)
+      seen.add(key);
+      const f = zip.file(im.path);
+      if (!f) continue;
+      const type = /\.png$/i.test(im.path) ? 'image/png' : 'image/jpeg';
+      (tree.images || (tree.images = [])).push({ blob: new Blob([await f.async('uint8array')], { type }), sub });
+    }
+    if (lost) warnings.push(`${lost} תמונות בלי עץ מתאים`);
+  }
+
   // מחזיר {survey, trees, warnings} או null אם הקובץ לא נראה כמו סקר עצים.
   // שתי תבניות: הנוכחית (xlsm, כותרות טבלה בשורות 22/61/115, סמל ב-B5, שם ב-F9, כתובת ב-D10, תאריך ב-F2)
   // והישנה (xlsx 2018-2025: "סקר בטיחות עצים <שם>" בשורה 9, כתובת מתחת, טבלה מתחת לשורת "מספר העץ"/"מספר")
-  async function parse(buffer, fileName) {
+  async function parse(buffer, fileName, opts) {
     const zip = await JSZip.loadAsync(buffer);
     const sheets = await readSheets(zip);
     const rowsOf = sh => {
@@ -160,6 +260,7 @@
         if (t && typeof lat === 'number' && typeof lon === 'number') { t.lat = lat; t.lon = lon; t.gpsSrc = 'import'; }
       }
     }
+    if (opts && opts.photos) await attachImages(zip, main, trees, warnings);
     return { survey, trees, warnings: [...new Set(warnings)] };
   }
 

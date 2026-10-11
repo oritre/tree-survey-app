@@ -1,7 +1,7 @@
-// סנכרון ברקע כשיש קליטה: גיבוי כל התמונות לטלגרם ושמירת הסקרים ב-OneDrive
+// סנכרון ברקע כשיש קליטה: גיבוי כל התמונות לטלגרם ושמירת הסקרים בגוגל דרייב
 (function (root) {
   'use strict';
-  // נתוני הסקר עולים ל-OneDrive אחרי כל שינוי (קובץ קטן). האקסל וה-PDF עולים רק ב"סיום סקר"
+  // נתוני הסקר עולים לגוגל דרייב אחרי כל שינוי (קובץ קטן). האקסל וה-PDF עולים רק ב"סיום סקר"
   // או בלחיצה על "העלה אקסל לענן", כי הם כוללים את כל התמונות ועולים הרבה גלישה.
   const INDEX = 'אינדקס סקרים.json'; // רשימת כל הסקרים בענן, לחיפוש לפי סמל, שם, רחוב ועיר
 
@@ -60,6 +60,7 @@
     for (const t of Core.sortTrees(s.trees)) {
       for (const p of t.photos || []) {
         if (!t.photos.includes(p)) continue; // נמחקה בינתיים
+        if (p.fromOld) continue; // תמונה מהסקר הקודם: כבר לא חדשה, לא שולחים לטלגרם
         const cap = caption(s, t, p);
         if (!p.tgMsgId) {
           const d = await DB.getPhoto(p.id);
@@ -95,7 +96,7 @@
     return dirty;
   }
 
-  // שתי תיקיות ב-OneDrive:
+  // שתי תיקיות בגוגל דרייב:
   //  "גיבוי אפליקציית סקרי עצים" — הגיבוי של האפליקציה: נתוני הסקר, התמונות, גרסאות קודמות ועותק של האקסל וה-PDF.
   //     ממנה החיפוש בענן עובד. לא מוחקים ממנה.
   //  "סקרי עצים" — הדוחות לעבודה: אקסל ו-PDF בלבד. אפשר למחוק ממנה בלי לפגוע בגיבוי.
@@ -111,7 +112,7 @@
 
   async function syncFolders(s) {
     if (migrate(s)) {
-      // תמונות שעוד נמצאות בטאבלט יעלו לתיקיית הגיבוי. תמונות שכבר פונו נשארות בקובץ הקיים ב-OneDrive
+      // תמונות שעוד נמצאות בטאבלט יעלו לתיקיית הגיבוי. תמונות שכבר פונו נשארות בקובץ הקיים בגוגל דרייב
       for (const t of s.trees) for (const p of t.photos || []) {
         const d = await DB.getPhoto(p.id);
         if (d && d.blob) { p.odId = null; p.odName = null; }
@@ -140,7 +141,7 @@
     return s.odReportDir;
   }
 
-  // קובץ דוח: נשמר בתיקיית הגיבוי, ועותק שלו (העתקה בתוך OneDrive, בלי גלישה נוספת) בתיקיית הדוחות
+  // קובץ דוח: נשמר בתיקיית הגיבוי, ועותק שלו (העתקה בתוך גוגל דרייב, בלי גלישה נוספת) בתיקיית הדוחות
   async function putReportFile(s, name, blob) {
     // PDF: רק בתיקיית הדוחות. בגיבוי של האפליקציה נשמר רק האקסל (מהנתונים שבו אפשר להפיק את ה-PDF מחדש)
     if (/\.pdf$/i.test(name)) {
@@ -168,7 +169,7 @@
   async function syncOneDrive(s) {
     await syncFolders(s);
 
-    // סקר שיובא מקובץ אקסל ישן: עותק של הקובץ המקורי נשמר בתיקיית הגיבוי שלו (העתקה בתוך OneDrive)
+    // סקר שיובא מקובץ אקסל ישן: עותק של הקובץ המקורי נשמר בתיקיית הגיבוי שלו (העתקה בתוך גוגל דרייב)
     if (s.odSrcId && !s.odSrcCopied) {
       try { await OD.copy(s.odSrcId, s.odFolderId, s.odSrcName || 'קובץ מקורי.xlsm'); }
       catch (e) { log('error', 'העתקת הקובץ המקורי לגיבוי נכשלה: ' + e.message, s); }
@@ -186,8 +187,7 @@
           await OD.upload(vf, `נתוני סקר - ${tag}.json`, blob, true);
           // גם האקסל וה-PDF שכבר הופקו, כי "סיום סקר" הבא ידרוס אותם באותו שם
           try {
-            const kids = await OD.api('GET', `/me/drive/items/${s.odFolderId}/children?$select=id,name,file&$top=200`);
-            for (const it of (kids && kids.value) || []) {
+            for (const it of await OD.children(s.odFolderId)) {
               if (it.file && /\.(xlsm|xlsx)$/i.test(it.name)) await OD.copy(it.id, vf, `${tag} - ${it.name}`);
             }
           } catch (e) { log('error', 'העתקת האקסל/PDF לגרסאות קודמות נכשלה: ' + e.message, s); }
@@ -217,17 +217,17 @@
     let nextJob = 0;
     const worker = async () => { while (nextJob < fresh.length) await uploadNew(fresh[nextJob++]); };
     await Promise.all([worker(), worker(), worker()]);
-    if (lost) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי ב-OneDrive נמחקה, יוצר אותה מחדש'); }
+    if (lost) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי בגוגל דרייב נמחקה, יוצר אותה מחדש'); }
     for (const { p, name } of jobs) {
-      if (!p.odId) continue;
+      if (!p.odId || p.odShared) continue; // תמונה מסקר קודם שנשארת בקובץ של הסקר הקודם: לא נוגעים בה
       if ((p.ver || 0) !== (p.odVer || 0)) {
-        // התמונה עודכנה (ציור): מחליפים את הקובץ ב-OneDrive
+        // התמונה עודכנה (ציור): מחליפים את הקובץ בגוגל דרייב
         const d = await DB.getPhoto(p.id);
         if (!d || !d.blob) continue;
         const ver = p.ver || 0;
         let item;
         try { item = await OD.replaceContent(p.odId, d.blob); }
-        catch (_) { item = await OD.upload(s.odPhotosId, p.odName || name, d.blob, true); } // הקובץ נמחק ב-OneDrive
+        catch (_) { item = await OD.upload(s.odPhotosId, p.odName || name, d.blob, true); } // הקובץ נמחק בגוגל דרייב
         p.odId = item.id || p.odId; p.odVer = ver;
         await DB.putSurvey(s, false);
         emit();
@@ -243,7 +243,7 @@
     if (s.odDataHash !== hash) {
       const item = await OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([JSON.stringify(s, null, 1)], { type: 'application/json' }), true);
       await OD.upload(s.odFolderId, 'שכבת עצים.geojson', new Blob([root.Gis.geojson([s])], { type: 'application/geo+json' }), true);
-      if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי ב-OneDrive נמחקה, יוצר אותה מחדש'); }
+      if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי בגוגל דרייב נמחקה, יוצר אותה מחדש'); }
       if (item.id) s.odDataId = item.id;
       s.odDataHash = hash;
       await DB.putSurvey(s, false);
@@ -258,7 +258,7 @@
       await DB.putSurvey(s, false);
       await updateIndex(s);
       await freeLocal(s);
-      log('ok', 'סיום סקר: אקסל ו-PDF נשמרו ב-OneDrive, והתמונות פונו מהטאבלט', s);
+      log('ok', 'סיום סקר: אקסל ו-PDF נשמרו בגוגל דרייב, והתמונות פונו מהטאבלט', s);
       emit();
     }
   }
@@ -266,12 +266,12 @@
   const preparing = new Set(); // סקרים שהאקסל וה-PDF שלהם נבנים עכשיו אחרי "סיום סקר"
   const allInCloud = s => s.trees.every(t => (t.photos || []).every(p => p.odId && (p.ver || 0) === (p.odVer || 0)));
 
-  // מפנה מקום בטאבלט: התמונות המלאות נמחקות (נשארת תמונה ממוזערת), והן נטענות מ-OneDrive כשצריך
+  // מפנה מקום בטאבלט: התמונות המלאות נמחקות (נשארת תמונה ממוזערת), והן נטענות מגוגל דרייב כשצריך
   async function freeLocal(s) {
     const tgOn = !!(await DB.getKV('tgChat', ''));
     for (const t of s.trees) for (const p of t.photos || []) {
       if (!p.odId || (p.ver || 0) !== (p.odVer || 0)) continue;
-      if (tgOn && (!p.tgMsgId || (p.ver || 0) !== (p.tgVer || 0))) continue;
+      if (tgOn && !p.fromOld && (!p.tgMsgId || (p.ver || 0) !== (p.tgVer || 0))) continue;
       const d = await DB.getPhoto(p.id);
       if (d && d.blob) await DB.putPhoto({ id: d.id, thumb: d.thumb, w: d.w, h: d.h, strokes: d.strokes, cloud: true });
     }
@@ -308,14 +308,25 @@
     await DB.putSurvey(s, false);
   }
 
-  // ייבוא סקר ישן ישר לגיבוי ב-OneDrive, בלי לשמור אותו בטאבלט (אלפי סקרים לא נכנסים לזיכרון של הדפדפן).
-  // src: {blob} קובץ מהמחשב, או {odId} קובץ שכבר נמצא ב-OneDrive (מועתק שם, בלי הורדה נוספת).
+  // ייבוא סקר ישן ישר לגיבוי בגוגל דרייב, בלי לשמור אותו בטאבלט (אלפי סקרים לא נכנסים לזיכרון של הדפדפן).
+  // src: {blob} קובץ מהמחשב, או {odId} קובץ שכבר נמצא בגוגל דרייב (מועתק שם, בלי הורדה נוספת).
   // מחזיר את הרשומה לאינדקס; האינדקס עצמו נכתב בקבוצות (flushImported)
   const projCache = new Map();
-  async function importSurvey(s, src) {
+  // שני קבצים של אותו מוסד ואותו תאריך לא נשמרים במקביל, כדי שכל אחד יקבל תיקייה משלו
+  const importLocks = new Map();
+  function importSurvey(s, src) {
+    const key = (s.project || '') + '|' + folderBase(s);
+    const p = (importLocks.get(key) || Promise.resolve()).catch(() => {}).then(() => importSurvey0(s, src));
+    importLocks.set(key, p);
+    return p;
+  }
+  async function importSurvey0(s, src) {
     const pk = s.project || 'ללא פרויקט';
-    if (!projCache.has(pk)) projCache.set(pk, await OD.folder(await backupRoot(), pk));
-    const proj = projCache.get(pk);
+    // ייבוא רץ כמה קבצים במקביל: שומרים את ההבטחה עצמה, כדי שאותה תיקייה לא תיווצר פעמיים
+    if (!projCache.has('')) projCache.set('', backupRoot());
+    if (!projCache.has(pk)) projCache.set(pk, projCache.get('').then(r => OD.folder(r, pk)));
+    let proj;
+    try { proj = await projCache.get(pk); } catch (e) { projCache.delete(pk); projCache.delete(''); throw e; }
     for (let k = 1; ; k++) {
       const id = await OD.folder(proj, k > 1 ? `${folderBase(s)} - ${k}` : folderBase(s));
       const other = await OD.readJson(id, 'נתוני סקר.json');
@@ -326,7 +337,7 @@
     else if (src.odId) await OD.copy(src.odId, s.odFolderId, name);
     s.odSrcCopied = true;
     const item = await OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([JSON.stringify(s, null, 1)], { type: 'application/json' }), true);
-    if (!item || !item.id) throw new Error('שמירת נתוני הסקר ב-OneDrive נכשלה');
+    if (!item || !item.id) throw new Error('שמירת נתוני הסקר בגוגל דרייב נכשלה');
     s.odDataId = item.id;
     if (s.trees.some(t => t.lat)) await OD.upload(s.odFolderId, 'שכבת עצים.geojson', new Blob([root.Gis.geojson([s])], { type: 'application/geo+json' }), true);
     s.odDataHash = hashSurvey(s);
@@ -334,7 +345,7 @@
   }
   function flushImported(entries) { return entries.length ? withIndex(() => writeIndexEntries(entries)) : Promise.resolve(); }
 
-  // הגדרות משותפות לכל המכשירים (טוקן הטלגרם והצ'אט), בקובץ בתיקיית הגיבוי ב-OneDrive.
+  // הגדרות משותפות לכל המכשירים (טוקן הטלגרם והצ'אט), בקובץ בתיקיית הגיבוי בגוגל דרייב.
   // מה שעודכן אחרון (בטאבלט או בענן) הוא שקובע
   const SETTINGS = 'הגדרות משותפות.json';
   let settingsSynced = false;
@@ -352,7 +363,7 @@
     settingsSynced = true;
   }
 
-  // סקר מלא לפי רשומה באינדקס: מהטאבלט אם הוא שם, אחרת מ-OneDrive
+  // סקר מלא לפי רשומה באינדקס: מהטאבלט אם הוא שם, אחרת מגוגל דרייב
   async function loadSurvey(e) {
     const local = await DB.getSurvey(e.id);
     if (local) return local;
@@ -367,7 +378,7 @@
     return idx.surveys || [];
   }
 
-  // אקסל (ואם ביקשו גם PDF) לתיקיית הסקר ב-OneDrive, באותו שם
+  // אקסל (ואם ביקשו גם PDF) לתיקיית הסקר בגוגל דרייב, באותו שם
   async function uploadReport(s, opts) {
     await syncFolders(s);
     // האקסל וה-PDF שהוכנו כבר בלחיצה על "סיום סקר" (בזמן שהתמונות עלו), אם הסקר לא השתנה מאז
@@ -377,7 +388,7 @@
     await putReportFile(s, r.name, r.blob);
     DB.delKV('xlsm:' + s.id).catch(() => {});
     s.odReportHash = hashSurvey(s); s.odReportAt = Date.now();
-    log('ok', 'האקסל נשמר ב-OneDrive', s);
+    log('ok', 'האקסל נשמר בגוגל דרייב', s);
     let pdf = null;
     if (opts && opts.pdf) {
       const last = await DB.getKV('pdf:' + s.id, null);
@@ -390,7 +401,7 @@
     await syncFolders(s);
     await putReportFile(s, pdf.name, pdf.blob);
     s.odPdfAt = Date.now();
-    log('ok', 'ה-PDF נשמר ב-OneDrive', s);
+    log('ok', 'ה-PDF נשמר בגוגל דרייב', s);
     await DB.putSurvey(s, false);
   }
 
@@ -399,7 +410,7 @@
     for (const s0 of surveys) {
       const s = live(s0);
       for (const t of s.trees) for (const p of t.photos || []) {
-        if (tgOn && (!p.tgMsgId || (p.ver || 0) !== (p.tgVer || 0))) tg++;
+        if (tgOn && !p.fromOld && (!p.tgMsgId || (p.ver || 0) !== (p.tgVer || 0))) tg++;
         if (odOn && (!p.odId || (p.ver || 0) !== (p.odVer || 0))) od++;
       }
       if (odOn && s.trees.length && s.odDataHash !== hashSurvey(s)) od++;
@@ -429,7 +440,7 @@
       surveys.sort((a, b) => (live(b) !== b) - (live(a) !== a) || (b.updated || 0) - (a.updated || 0));
       for (const s0 of surveys) {
         const s = live(s0);
-        // טלגרם ו-OneDrive במקביל: "סיום סקר" לא מחכה שכל התמונות יישלחו קודם לטלגרם
+        // טלגרם וגוגל דרייב במקביל: "סיום סקר" לא מחכה שכל התמונות יישלחו קודם לטלגרם
         await Promise.all([
           tgOn && (async () => {
             try { await syncTelegram(s, { token, chat }); }
@@ -438,8 +449,8 @@
           odOn && !state.odNeedsLogin && (async () => {
             try { await syncOneDrive(s); }
             catch (e) {
-              if (e instanceof OD.AuthError) { state.odNeedsLogin = true; log('error', 'OneDrive: צריך להתחבר מחדש', s); }
-              else { state.error = 'OneDrive: ' + e.message; log('error', state.error, s); }
+              if (e instanceof OD.AuthError) { state.odNeedsLogin = true; log('error', 'גוגל דרייב: צריך להתחבר מחדש', s); }
+              else { state.error = 'גוגל דרייב: ' + e.message; log('error', state.error, s); }
             }
           })()]);
       }
@@ -479,7 +490,7 @@
       const ph = s.trees.flatMap(t => t.photos || []);
       return {
         photos: ph.length,
-        tg: tgOn ? ph.filter(p => !p.tgMsgId || (p.ver || 0) !== (p.tgVer || 0)).length : null,
+        tg: tgOn ? ph.filter(p => !p.fromOld && !p.tgMsgId || (p.ver || 0) !== (p.tgVer || 0)).length : null,
         od: odOn ? ph.filter(p => !p.odId || (p.ver || 0) !== (p.odVer || 0)).length : null,
         data: odOn ? s.odDataHash === hashSurvey(s) : null,
       };
