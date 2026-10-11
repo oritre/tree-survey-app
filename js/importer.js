@@ -60,47 +60,96 @@
   const numText = v => typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : clean(v);
   const isTreeNum = s => /^[\d\s,\-–]+$/.test(s) && /\d/.test(s);
 
-  // מחזיר {survey, trees} או null אם הקובץ לא נראה כמו סקר בטיחות עצים
-  async function parse(buffer) {
+  const HEAD_NUM = /^מספר( ה?עץ)?$/, HEAD_SP = /^מין\s*ה?עץ$/;
+  const TITLE = /סקר\s*(בטיחות|יציבות)\s*(ה)?עצים/;
+
+  // מחזיר {survey, trees, warnings} או null אם הקובץ לא נראה כמו סקר עצים.
+  // שתי תבניות: הנוכחית (xlsm, כותרות טבלה בשורות 22/61/115, סמל ב-B5, שם ב-F9, כתובת ב-D10, תאריך ב-F2)
+  // והישנה (xlsx 2018-2025: "סקר בטיחות עצים <שם>" בשורה 9, כתובת מתחת, טבלה מתחת לשורת "מספר העץ"/"מספר")
+  async function parse(buffer, fileName) {
     const zip = await JSZip.loadAsync(buffer);
     const sheets = await readSheets(zip);
-    const main = sheets.find(sh => [...sh.cells.values()].some(v => clean(v) === 'מספר העץ'));
+    const rowsOf = sh => {
+      const byRow = new Map();
+      for (const [ref, v] of sh.cells) { const r = +ref.replace(/\D+/g, ''); if (!byRow.has(r)) byRow.set(r, []); byRow.get(r).push([colNum(ref), v]); }
+      for (const cs of byRow.values()) cs.sort((a, b) => a[0] - b[0]);
+      return byRow;
+    };
+    const isHead = cs => cs.some(([, v]) => HEAD_NUM.test(clean(v))) && cs.some(([, v]) => HEAD_SP.test(clean(v)));
+    let main = null, byRow = null;
+    for (const sh of sheets) { const br = rowsOf(sh); if ([...br.values()].some(isHead)) { main = sh; byRow = br; break; } }
+    // מכתב אישור בלי טבלת עצים: מספיק שיש כותרת "סקר בטיחות עצים"
+    if (!main) for (const sh of sheets) { const br = rowsOf(sh); if ([...br.entries()].some(([r, cs]) => r <= 20 && cs.some(([, v]) => TITLE.test(clean(v))))) { main = sh; byRow = br; break; } }
     if (!main) return null;
+    const warnings = [];
     const get = ref => main.cells.get(ref);
-    // שורות הכותרת של טבלאות העצים, והעמודות לפי הכותרות
-    const byRow = new Map();
-    for (const [ref, v] of main.cells) { const r = +ref.replace(/\D+/g, ''); if (!byRow.has(r)) byRow.set(r, []); byRow.get(r).push([colNum(ref), v]); }
-    const heads = [...byRow.entries()].filter(([, cs]) => cs.some(([, v]) => clean(v) === 'מספר העץ')).map(([r]) => r).sort((a, b) => a - b);
-    const h0 = byRow.get(heads[0]);
-    const colOf = (re, def) => { const f = h0.find(([, v]) => re.test(clean(v))); return f ? f[0] : def; };
-    const cNum = colOf(/^מספר העץ$/, 1), cSp = colOf(/^מין/, 2), cNotes = colOf(/^הערות/, 4), cUrg = colOf(/^דחיפות/, 9);
-    const cJ = cUrg + 1;
-    const maxRow = Math.max(...byRow.keys());
+    const heads = [...byRow.entries()].filter(([, cs]) => isHead(cs)).map(([r]) => r).sort((a, b) => a - b);
     const trees = [];
-    // התבנית הרגילה (כותרות בשורות 22, 61, 115): רק שורות העצים שלה, כי בשורות אחרות יש טקסט קבוע (המלצות, חתימה)
-    const std = heads[0] === 22 && cNum === 1;
-    const rows = [];
-    if (std) rows.push(...Core.TREE_ROWS);
-    else for (let i = 0; i < heads.length; i++) { const end = i + 1 < heads.length ? heads[i + 1] : maxRow + 1; for (let r = heads[i] + 1; r < end; r++) rows.push(r); }
-    {
+    let std = false;
+    if (heads.length) {
+      const h0 = byRow.get(heads[0]);
+      const colOf = (re, def) => { const f = h0.find(([, v]) => re.test(clean(v))); return f ? f[0] : def; };
+      const cNum = colOf(HEAD_NUM, 1), cSp = colOf(HEAD_SP, 2), cNotes = colOf(/^הערות/, 4), cUrg = colOf(/^דחיפות/, 0);
+      const cJ = cUrg ? cUrg + 1 : 0;
+      const maxRow = Math.max(...byRow.keys());
+      // בתבנית הנוכחית: רק שורות העצים שלה, כי בשורות אחרות יש טקסט קבוע (המלצות, חתימה)
+      std = heads[0] === 22 && cNum === 1;
+      const rows = [];
+      if (std) rows.push(...Core.TREE_ROWS);
+      else for (let i = 0; i < heads.length; i++) { const end = i + 1 < heads.length ? heads[i + 1] : maxRow + 1; for (let r = heads[i] + 1; r < end; r++) rows.push(r); }
       for (const r of rows) {
-        const at = c => main.cells.get(colName(c) + r);
+        const at = c => c ? main.cells.get(colName(c) + r) : '';
         const num = numText(at(cNum)), species = clean(at(cSp));
         if (!num && !species) continue;
-        if (num && !isTreeNum(num)) continue; // שורת טקסט (חתימה, הערה כללית)
+        if (num && !isTreeNum(num)) continue; // שורת טקסט (חתימה, המלצה כללית)
         if (!num && (species.length > 40 || (!std && !at(cNotes) && !at(cUrg)))) continue;
         const jv = clean(at(cJ));
         const pm = /(\d+(?:\.\d+)?)/.exec(jv);
         trees.push({ num, species, notes: clean(at(cNotes)), urgency: clean(at(cUrg)), pines: pm ? pm[1] : '', split: /פצל/.test(jv) });
+        if (!num) warnings.push(`עץ בלי מספר (${species})`);
       }
     }
-    // מוסד, כתובת, סמל, מנהל ותאריך
-    let name = clean(get('F9')), address = clean(get('D10'));
-    if (/^\s*=/.test(address) || /^[\d.]+$/.test(address)) address = '';
+    // פרטי המוסד
+    let name = '', address = '', code = '', manager = '', date = '';
+    const textCells = r => (byRow.get(r) || []).map(([c, v]) => [c, clean(v)]).filter(([, v]) => v && !/^=/.test(v) && !/^[\d\s.]+$/.test(v) && !/נספח תמונות/.test(v));
+    if (std || clean(get('F9'))) {
+      name = clean(get('F9')); address = clean(get('D10'));
+      code = numText(get('B5')); manager = clean(get('B6'));
+      date = toIsoDate(get('F2')) || toIsoDate(get('B14'));
+    }
+    if (!name && !std) {
+      // תבנית ישנה: "סקר בטיחות עצים <שם>" (או הכותרת בתא אחד והשם בתא הבא), והכתובת בשורה שמתחת
+      const tr = [...byRow.keys()].filter(r => r <= 20).sort((a, b) => a - b).find(r => textCells(r).some(([, v]) => TITLE.test(v)));
+      if (tr) {
+        const cs = textCells(tr);
+        const k = cs.findIndex(([, v]) => TITLE.test(v));
+        name = clean(cs[k][1].replace(TITLE, '').replace(/^[\s\-–:,]+/, ''));
+        if (!name) name = cs.filter((_, i) => i !== k).map(([, v]) => v).join(' ');
+        if (!address) address = textCells(tr + 1).map(([, v]) => v).filter(v => !/תאריך/.test(v) && !toIsoDate(v)).join(' ');
+      }
+    }
+    if (/^[\d.]+$/.test(address)) address = '';
+    // תאריך: תא עם "תאריך" (הערך באותו תא או בתא שלידו), אחרת כל תאריך בראש הדף
+    if (!date) {
+      for (const [r, cs] of [...byRow.entries()].filter(([r]) => r <= 20).sort((a, b) => a[0] - b[0])) {
+        const k = cs.findIndex(([, v]) => /תאריך/.test(clean(v)));
+        if (k < 0) continue;
+        date = toIsoDate(cs[k][1]) || (cs[k + 1] && toIsoDate(cs[k + 1][1])) || (cs[k - 1] && toIsoDate(cs[k - 1][1])) || '';
+        if (date) break;
+      }
+    }
+    if (!date) for (const [r, cs] of byRow) if (r <= 12) for (const [, v] of cs) { const d = typeof v === 'number' ? toIsoDate(v) : ''; if (d) { date = d; break; } }
+    // סמל מוסד: תא "סמל מוסד" ולידו הערך, או מספר בתחילת שם הקובץ
+    if (!code) for (const cs of byRow.values()) { const k = cs.findIndex(([, v]) => /סמל/.test(clean(v))); if (k >= 0 && cs[k + 1] && /^\d{3,8}$/.test(numText(cs[k + 1][1]))) { code = numText(cs[k + 1][1]); break; } }
+    if (!code && fileName) { const m = /^\s*(\d{5,7})\s/.exec(fileName); if (m) code = m[1]; }
     let street = '', city = '';
     if (address) { const p = address.split(',').map(clean).filter(Boolean); city = p.length > 1 ? p.pop() : ''; street = p.join(', '); }
     else if (name.includes(',')) { const p = name.split(',').map(clean).filter(Boolean); name = p.shift(); city = p.length ? p.pop() : ''; street = p.join(', '); }
-    const survey = { siteName: name, street, city, code: numText(get('B5')), manager: clean(get('B6')), date: toIsoDate(get('F2')) || toIsoDate(get('B14')) };
+    if (!name) warnings.push('לא נמצא שם מוסד');
+    if (!date) warnings.push('לא נמצא תאריך (נלקח תאריך הקובץ)');
+    if (!heads.length) warnings.push('אין טבלת עצים (מכתב אישור)');
+    else if (!trees.length) warnings.push('אין עצים בטבלה');
+    const survey = { siteName: name, street, city, code, manager, date };
     // קובץ שהאפליקציה הפיקה: גיליון "נתוני שטח" עם נ"צ לכל עץ
     const field = sheets.find(sh => sh.name === 'נתוני שטח');
     if (field) {
@@ -111,7 +160,7 @@
         if (t && typeof lat === 'number' && typeof lon === 'number') { t.lat = lat; t.lon = lon; t.gpsSrc = 'import'; }
       }
     }
-    return { survey, trees };
+    return { survey, trees, warnings: [...new Set(warnings)] };
   }
 
   root.Importer = { parse, toIsoDate };
