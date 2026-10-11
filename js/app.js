@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.16.3';
+  const APP_VERSION = '1.16.4';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -469,6 +469,7 @@
     app.replaceChildren(bar('חיפוש סקרים בענן', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' }, q,
       h('div', { class: 'row' }, archBtn, h('button', { class: 'btn', onclick: () => go('#/import') }, '📥 ייבוא סקרים ישנים מאקסל')), archWhere, arch, msg, list));
     if (!(await OD.connected())) { msg.textContent = 'צריך לחבר את גוגל דרייב בהגדרות כדי לחפש בענן.'; return; }
+    if (archive && navigator.onLine) OD.folderTree(archive.id).catch(() => {}); // מכין מראש את מבנה התיקיות של הארכיון, כדי שהחיפוש יהיה מהיר
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
     const draw = () => {
       const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -510,12 +511,9 @@
     try {
       const archive = await DB.getKV('gdArchive', null);
       const files = await OD.searchExcel(text, archive && archive.id);
-      const rows = [];
-      for (const f of files) {
-        const path = await pathOf(f);
-        if (path.some(n => /^גיבוי אפליקציית סקרי עצים$/.test(n))) continue; // עותקים של האפליקציה עצמה מופיעים למעלה
-        rows.push({ f, path });
-      }
+      const paths = await Promise.all(files.map(pathOf)); // במקביל
+      const rows = files.map((f, i) => ({ f, path: paths[i] }))
+        .filter(r => !r.path.some(n => /^גיבוי אפליקציית סקרי עצים$/.test(n))); // עותקים של האפליקציה עצמה מופיעים למעלה
       box.replaceChildren(h('div', { class: 'muted small' }, rows.length ? `${rows.length} קבצים בארכיון` : 'לא נמצאו קבצים בארכיון'),
         ...rows.slice(0, 40).map(({ f, path }) => h('div', { class: 'card stack' },
           h('div', { class: 't', style: 'font-weight:600;overflow-wrap:anywhere' }, '📄 ' + f.name.replace(/\.xls[xm]$/i, '')),
