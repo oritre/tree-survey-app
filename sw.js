@@ -1,5 +1,5 @@
 // עבודה בלי קליטה: שומר את קבצי האפליקציה במטמון
-const CACHE = 'tree-survey-v1.18.3';
+const CACHE = 'tree-survey-v1.18.4';
 const FILES = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'vendor/jszip.min.js', 'js/core.js', 'js/excel.js',
   'js/db.js', 'js/telegram.js', 'js/gis.js', 'js/gdrive.js', 'js/sync.js', 'js/annotate.js', 'js/print.js', 'js/camera.js', 'js/reports.js', 'js/importer.js', 'js/construction-data.js', 'js/construction.js', 'template/construction.xltm', 'js/quotes.js', 'js/quote-print.js', 'js/quotes-ui.js', 'template/quotes/construction.dotx', 'template/quotes/construction-tlv.dotx', 'template/quotes/stability.dotx', 'js/app.js', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css', 'vendor/proj4.min.js', 'template/survey.xltm', 'template/layout.json', 'template/letterhead.png', 'template/footer.png', 'template/stamp.png', 'fonts/arimo-hebrew-400-normal.woff2', 'fonts/arimo-hebrew-700-normal.woff2', 'fonts/arimo-latin-400-normal.woff2', 'fonts/arimo-latin-700-normal.woff2', 'icons/icon-192.png', 'icons/icon-512.png'];
 

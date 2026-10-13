@@ -371,7 +371,7 @@
   }
 
   async function share(q, via) {
-    const { askChoice, toast, downloadFile, fmtDate } = U();
+    const { askChoice, toast, downloadFile } = U();
     const kind = await askChoice(via === 'mail' ? 'שליחה במייל' : 'שליחה בוואטסאפ', 'איזה קובץ לצרף?', [
       { value: 'pdf', label: 'PDF', primary: true }, { value: 'docx', label: 'Word' }, { value: 'both', label: 'שניהם' }, { value: '', label: 'ביטול' }]);
     if (!kind) return;
@@ -380,14 +380,17 @@
     if (kind !== 'pdf') files.push({ name: fileName(q, '.docx'), blob: await makeDocx(q) });
     saveToDrive(q, true, { pdf: (files.find(f => f.name.endsWith('.pdf')) || {}).blob, docx: (files.find(f => f.name.endsWith('.docx')) || {}).blob });
     const fs = files.map(f => new File([f.blob], f.name, { type: f.blob.type }));
-    const subject = nameOf(q);
+    // ori: נושא "הצעת מחיר <שנה> <שם המוסד>", וגוף קבוע
+    const inst = q.blocks.find(x => x.inst && !x.del && (x.t || '').trim());
+    const subject = `הצעת מחיר ${(q.date || U().today()).slice(0, 4)} ${inst ? inst.t.trim() : nameOf(q).replace(/^הצעת מחיר\s*/, '')}`.replace(/\s+/g, ' ').trim();
+    const body = 'שלום רב.\nרצ"ב הצעת מחיר, זמין לכל שאלה.';
     if (navigator.canShare && navigator.canShare({ files: fs })) {
       const data = { files: fs, title: subject };
-      if (via === 'mail') data.text = `מצורפת ${subject}${q.date ? ' מתאריך ' + fmtDate(q.date) : ''}.`;
+      if (via === 'mail') data.text = body;
       try { await navigator.share(data); return; } catch (e) { if (e.name === 'AbortError') return; }
     }
     for (const f of files) downloadFile(f.blob, f.name);
-    if (via === 'mail') location.href = 'mailto:?subject=' + encodeURIComponent(subject);
+    if (via === 'mail') location.href = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
     toast('הקובץ הורד. צרף אותו מתיקיית ההורדות.', 5000);
   }
 
