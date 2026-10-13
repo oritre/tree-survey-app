@@ -333,17 +333,31 @@
     try { return await fn(); } catch (e) { U().toast('נכשל: ' + e.message, 6000); console.error(e); } finally { btn.disabled = false; btn.textContent = old; }
   }
 
-  // שמירה בגוגל דרייב: א עצים / הצעות מחיר / <שם ההצעה> / קובץ
+  // תיקיית הסוג לפי התבנית: יציבות עצים / היתר בניה (תבנית אחרת: ישר בתוך תיקיית השנה)
+  function typeFolder(q) {
+    const n = (q.tplName || '') + ' ' + (q.tpl || '');
+    if (/יציבות|stability/.test(n)) return 'יציבות עצים';
+    if (/היתר|בני[יה]|construction/.test(n)) return 'היתר בניה';
+    return null;
+  }
+  // הנתיב בדרייב: א עצים / הצעות מחיר / <שנת ההצעה> / <יציבות עצים או היתר בניה> / <שם ההצעה>. תיקיות חסרות נוצרות
+  async function drivePath(q) {
+    const base = String((await DB.getKV('quoteFolder', DEFAULT_FOLDER)) || DEFAULT_FOLDER).split('/').map(s => s.trim()).filter(Boolean);
+    const year = (q.date || U().today()).slice(0, 4);
+    return [...base, year, typeFolder(q), nameOf(q)].filter(Boolean);
+  }
+
+  // שמירה בגוגל דרייב, בתיקייה משלה לכל הצעה
   async function saveToDrive(q, files, quiet) {
     const { toast } = U();
     if (!navigator.onLine || !(await OD.connected())) { if (!quiet) toast('לא נשמר בדרייב: ' + (navigator.onLine ? 'צריך להתחבר לגוגל דרייב בהגדרות' : 'אין קליטה'), 5000); return false; }
     try {
-      const path = String((await DB.getKV('quoteFolder', DEFAULT_FOLDER)) || DEFAULT_FOLDER).split('/').map(s => s.trim()).filter(Boolean);
+      const path = await drivePath(q);
       let parent = null;
-      for (const p of [...path, nameOf(q)]) parent = await OD.folder(parent, p);
+      for (const p of path) parent = await OD.folder(parent, p);
       for (const f of files) await OD.upload(parent, f.name, f.blob, true);
       q.savedAt = Date.now(); await saveQuote(q);
-      toast('נשמר בדרייב: ' + [...path, nameOf(q)].join(' / '), 4000);
+      toast('נשמר בדרייב: ' + path.join(' / '), 4000);
       return true;
     } catch (e) { toast('השמירה בדרייב נכשלה: ' + e.message, 6000); return false; }
   }
@@ -396,7 +410,7 @@
         btn('✉ מייל', b => withBusy(b, 'מכין…', () => share(q, 'mail'))),
         btn('☁ שמירה בדרייב', b => withBusy(b, 'שומר…', async () => saveToDrive(q, [
           { name: fileName(q, '.docx'), blob: await makeDocx(q) }, { name: fileName(q, '.pdf'), blob: await makePdf(q) }])))),
-      h('div', { class: 'muted small' }, 'כל קובץ שמופק או נשלח נשמר גם בגוגל דרייב, בתיקייה משלו בתוך "' + DEFAULT_FOLDER + '".'),
+      h('div', { class: 'muted small' }, 'כל קובץ שמופק או נשלח נשמר גם בגוגל דרייב: ' + DEFAULT_FOLDER + ' / ' + (q.date || U().today()).slice(0, 4) + (typeFolder(q) ? ' / ' + typeFolder(q) : '') + ' / תיקייה להצעה.'),
       h('div', { class: 'row' },
         btn('⧉ שכפול ההצעה', async () => {
           const c = JSON.parse(JSON.stringify(q));
