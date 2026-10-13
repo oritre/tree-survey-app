@@ -433,5 +433,5 @@
     return (place.name ? `${survey.code ? survey.code + ' ' : ''}${place.name}` : 'סקר בטיחות עצים').replace(/[\\/:*?"<>|]+/g, ' ');
   }
 
-  root.ReportPrint = { toPdf, pdfPages, buildPages, preloadFonts, fileTitle, CSS };
+  root.ReportPrint = { toPdf, pdfPages, buildPages, preloadFonts, fileTitle, CSS, fontCss, pageToJpeg, makePdf };
 })(self);
