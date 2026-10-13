@@ -144,6 +144,8 @@
       // פסקה עם תמונה (חותמת, לוגו) או שדה שאינו תאריך: נשארת בדיוק כמו בתבנית
       if (/<w:drawing>|<w:pict>|<w:object/.test(e.xml)) { b.kind = 'image'; blocks.push(b); return; }
       const next = els.slice(i + 1).find(x => x.k === 'p' && paraText(x.xml).trim());
+      // ori: בהצעת יציבות השורה "סקר במתחם:" לא נכנסת (שם המוסד מופיע מתחת לכותרת)
+      if (/^סקר במתחם\s*:?\s*$/.test(tt)) return;
       if (!dateSeen && /תאריך\s*:/.test(text)) {
         dateSeen = true;
         b.kind = 'date';
@@ -172,6 +174,12 @@
       if (b.kind === 'text' && inPrice && /^מחיר\s*:?$/.test(tt)) b.kind = 'priceHead';
       blocks.push(b);
     });
+    // אין בתבנית שורות כותרת למילוי (כמו ביציבות): שורת "שם המוסד" מתחת לכותרת, באותו עיצוב כמו הכותרת
+    const title = blocks.find(b => b.kind === 'title');
+    if (title && !blocks.some(b => b.kind === 'subject' || b.kind === 'gush')) {
+      blocks.splice(blocks.indexOf(title) + 1, 0, { id: uid(), k: 'p', xml: title.xml, text: null, t: '', list: false, center: title.center, bold: title.bold,
+        kind: 'subject', label: 'שם המוסד', inst: true, ex: '', fresh: true });
+    }
     return blocks;
   }
 
@@ -181,6 +189,9 @@
 
   // שם הקובץ: שם התבנית + מה שמולא בכותרת (כתובת, גוש/חלקה, מתחם)
   function autoName(q) {
+    // יש שם מוסד: הוא שם הקובץ
+    const inst = q.blocks.find(b => b.inst && !b.del && b.kind === 'subject' && (b.t || '').trim());
+    if (inst) return inst.t.trim();
     const bits = [];
     for (const b of q.blocks) {
       if (b.kind === 'subject' && b.t) bits.push(b.t);
