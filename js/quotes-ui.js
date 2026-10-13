@@ -174,7 +174,7 @@
         seg, content,
         h('div', { class: 'card stack' },
           h('div', {}, h('label', { class: 'f', for: 'qName' }, 'שם הקובץ בדרייב'), nameIn,
-            h('div', { class: 'muted small' }, 'ריק = ' + (q.blocks.some(b => b.inst) ? 'שם המוסד' : 'לפי הכתובת והגוש') + '. אפשר לכתוב כאן שם אחר.'))),
+            h('div', { class: 'muted small' }, 'ריק = ' + (q.blocks.some(b => b.inst) ? 'שם המוסד' : 'הכתובת') + '. אפשר לכתוב כאן שם אחר.'))),
         actions(q)));
     saveWordOn().then(v => { const c = $('#qSaveWord'); if (c) c.checked = v; });
   }
@@ -361,9 +361,8 @@
       const files = [{ name: fileName(q, '.pdf'), blob: have.pdf || await makePdf(q) }];
       if (await saveWordOn()) files.push({ name: fileName(q, '.docx'), blob: have.docx || await makeDocx(q) });
       const path = await drivePath(q);
-      let parent = null;
-      for (const p of path) parent = await OD.folder(parent, p);
-      for (const f of files) await OD.upload(parent, f.name, f.blob, true);
+      const parent = await OD.path(path);
+      await Promise.all(files.map(f => OD.upload(parent, f.name, f.blob, true)));
       q.savedAt = Date.now(); await saveQuote(q);
       toast('נשמר בדרייב: ' + path.join(' / '), 4000);
       return true;
@@ -396,15 +395,16 @@
 
   async function preview(q) {
     const { h } = U();
-    const pdf = await makePdf(q);
-    const urls = (await ReportPrint.pdfPages(pdf)).map(b => URL.createObjectURL(b));
-    const close = () => { ov.remove(); urls.forEach(u => URL.revokeObjectURL(u)); window.removeEventListener('hashchange', close); };
+    // תצוגה מקדימה: אותם עמודים שמהם נוצר ה-PDF, בלי להפיק קובץ (מהיר)
+    if (root.ReportPrint) await ReportPrint.preloadFonts();
+    const view = PdfVec.view(await QuotePrint.pages(await templateBytes(q.tpl), q), { css: QuotePrint.CSS });
+    const close = () => { ov.remove(); view.cleanup(); window.removeEventListener('hashchange', close); };
     window.addEventListener('hashchange', close);
-    const ov = h('div', { class: 'modal', style: 'align-items:flex-start;overflow:auto;padding:12px' },
-      h('div', { class: 'stack', style: 'width:min(820px,100%)' },
-        h('div', { class: 'row', style: 'position:sticky;top:0;z-index:2' }, h('button', { class: 'btn primary', onclick: close }, 'סגירה'),
-          h('span', { class: 'small', style: 'color:#fff' }, 'תצוגה מקדימה של ה-PDF. קובץ ה-Word נשמר עם העיצוב המקורי של התבנית.')),
-        ...urls.map(u => h('img', { src: u, alt: 'עמוד בהצעה', style: 'width:100%;display:block;background:#fff;border-radius:6px' }))));
+    const ov = h('div', { class: 'pdfv' },
+      h('div', { class: 'annot-bar' },
+        h('button', { class: 'txt', onclick: close }, 'סגור'),
+        h('span', { class: 'sp pdfv-title' }, 'תצוגה מקדימה')),
+      view);
     document.body.append(ov);
   }
 
@@ -414,8 +414,8 @@
     return h('div', { class: 'card stack' },
       h('div', { class: 'row' },
         btn('👁 תצוגה מקדימה', b => withBusy(b, 'מכין…', () => preview(q))),
-        btn('📄 PDF', b => withBusy(b, 'מכין PDF…', async () => { const blob = await makePdf(q); downloadFile(blob, fileName(q, '.pdf')); await saveToDrive(q, true, { pdf: blob }); }), 'primary'),
-        btn('📝 Word', b => withBusy(b, 'מכין Word…', async () => { const blob = await makeDocx(q); downloadFile(blob, fileName(q, '.docx')); if (await saveWordOn()) await saveToDrive(q, true, { docx: blob }); }), 'primary')),
+        btn('📄 PDF', b => withBusy(b, 'מכין PDF…', async () => { const blob = await makePdf(q); downloadFile(blob, fileName(q, '.pdf')); saveToDrive(q, true, { pdf: blob }); }), 'primary'),
+        btn('📝 Word', b => withBusy(b, 'מכין Word…', async () => { const blob = await makeDocx(q); downloadFile(blob, fileName(q, '.docx')); if (await saveWordOn()) saveToDrive(q, true, { docx: blob }); }), 'primary')),
       h('div', { class: 'row' },
         btn('💬 וואטסאפ', b => withBusy(b, 'מכין…', () => share(q, 'wa'))),
         btn('✉ מייל', b => withBusy(b, 'מכין…', () => share(q, 'mail'))),

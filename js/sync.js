@@ -241,8 +241,10 @@
     // נתוני הסקר ושכבת GIS: אחרי כל שינוי
     const hash = hashSurvey(s);
     if (s.odDataHash !== hash) {
-      const item = await OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([JSON.stringify(s, null, 1)], { type: 'application/json' }), true);
-      await OD.upload(s.odFolderId, 'שכבת עצים.geojson', new Blob([root.Gis.geojson([s])], { type: 'application/geo+json' }), true);
+      // שני הקבצים עולים במקביל
+      const [item] = await Promise.all([
+        OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([JSON.stringify(s, null, 1)], { type: 'application/json' }), true),
+        OD.upload(s.odFolderId, 'שכבת עצים.geojson', new Blob([root.Gis.geojson([s])], { type: 'application/geo+json' }), true)]);
       if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי בגוגל דרייב נמחקה, יוצר אותה מחדש'); }
       if (item.id) s.odDataId = item.id;
       s.odDataHash = hash;

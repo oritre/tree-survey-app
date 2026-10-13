@@ -254,16 +254,7 @@
   }
 
   async function toPdf(bytes, q) {
-    const list = await pages(bytes, q);
-    const css = (await ReportPrint.fontCss()) + CSS;
-    const holder = document.createElement('div');
-    const out = [];
-    for (const html of list) {
-      holder.innerHTML = html;
-      const xhtml = new XMLSerializer().serializeToString(holder.firstElementChild);
-      out.push(await ReportPrint.pageToJpeg(xhtml, css));
-    }
-    return ReportPrint.makePdf(out);
+    return PdfVec.fromHtml(await pages(bytes, q), { css: CSS });
   }
 
   root.QuotePrint = { pages, toPdf, CSS };
