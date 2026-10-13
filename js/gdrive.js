@@ -78,18 +78,23 @@
 
     async connected() { const a = await DB.getKV('odAuth', null); return !!(a && (a.refresh || a.access)); },
 
-    async logout() { await DB.setKV('odAuth', null); await DB.setKV('odUser', ''); },
+    async logout() { await DB.setKV('odAuth', null); await DB.setKV('odUser', ''); await DB.setKV('gdIds', null); OD._ids = null; OD._verified.clear(); },
 
     async accessToken() {
       const a = await DB.getKV('odAuth', null);
       if (!a) throw new AuthError('לא מחובר לגוגל דרייב');
       if (Date.now() < a.exp) return a.access;
       if (!a.refresh) throw new AuthError('צריך להתחבר מחדש לגוגל דרייב');
-      try { return await OD._token({ grant_type: 'refresh_token', refresh_token: a.refresh }); }
-      catch (e) {
-        if (e instanceof AuthError) { await DB.setKV('odAuth', Object.assign(a, { refresh: null, exp: 0 })); throw new AuthError('צריך להתחבר מחדש לגוגל דרייב'); }
-        throw e;
-      }
+      // כמה בקשות במקביל: רענון אחד בלבד
+      if (OD._refreshing) return OD._refreshing;
+      OD._refreshing = (async () => {
+        try { return await OD._token({ grant_type: 'refresh_token', refresh_token: a.refresh }); }
+        catch (e) {
+          if (e instanceof AuthError) { await DB.setKV('odAuth', Object.assign(a, { refresh: null, exp: 0 })); throw new AuthError('צריך להתחבר מחדש לגוגל דרייב'); }
+          throw e;
+        }
+      })().finally(() => { OD._refreshing = null; });
+      return OD._refreshing;
     },
 
     // בקשה ל-Drive API. 404 מחזיר null. raw=true מחזיר את התשובה עצמה (להורדת קבצים)
@@ -141,32 +146,102 @@
 
     clean: name => String(name).replace(/[\\/:*?"<>|#%]+/g, ' ').replace(/\s+/g, ' ').trim() || 'ללא שם',
 
+    // ---------- זיכרון מזהים (כדי לא לחפש כל פעם מחדש את אותן תיקיות וקבצים) ----------
+    // תיקייה: נשמרת בטאבלט. בכל הפעלה של האפליקציה בודקים פעם אחת שהיא עדיין קיימת (ולא בפח)
+    _ids: null,
+    _verified: new Set(),
+    _created: new Set(),
+    async _idMap() {
+      if (!OD._ids) OD._ids = new Map(Object.entries((await DB.getKV('gdIds', null)) || {}));
+      return OD._ids;
+    },
+    _saveIds: (() => { let t = null; return () => { clearTimeout(t); t = setTimeout(() => DB.setKV('gdIds', Object.fromEntries(OD._ids || [])).catch(() => {}), 500); }; })(),
+    _key: (parentId, name, folder) => `${folder ? 'd' : 'f'}|${parentId || 'root'}|${OD.clean(name)}`,
+    async _cached(key) {
+      const m = await OD._idMap();
+      const id = m.get(key);
+      if (!id) return null;
+      if (OD._verified.has(id)) return id;
+      const j = await OD.api('GET', `/files/${id}?fields=id,trashed&supportsAllDrives=true`).catch(() => null);
+      if (j && !j.trashed) { OD._verified.add(id); return id; }
+      m.delete(key); OD._saveIds();
+      return null;
+    },
+    async _remember(key, id) { (await OD._idMap()).set(key, id); OD._verified.add(id); OD._saveIds(); },
+    async _forget(key) { const m = await OD._idMap(); if (m.delete(key)) OD._saveIds(); },
+
     // תיקייה בתוך תיקייה (או בשורש), נוצרת אם אינה קיימת
     async folder(parentId, name) {
-      const found = await OD._find(parentId, name, true);
-      if (found) return found.id;
-      const made = await OD.api('POST', '/files?fields=id', { name: OD.clean(name), mimeType: FOLDER, parents: [parentId || 'root'] });
-      return made.id;
+      const key = OD._key(parentId, name, true);
+      const hit = await OD._cached(key);
+      if (hit) return hit;
+      // תיקייה שנוצרה עכשיו ריקה: אין מה לחפש בתוכה
+      const found = OD._created.has(parentId) ? null : await OD._find(parentId, name, true);
+      let id = found && found.id;
+      if (!id) { id = (await OD.api('POST', '/files?fields=id&supportsAllDrives=true', { name: OD.clean(name), mimeType: FOLDER, parents: [parentId || 'root'] })).id; OD._created.add(id); }
+      await OD._remember(key, id);
+      return id;
+    },
+    // שרשרת תיקיות (למשל א עצים / הצעות מחיר / 2026 / היתר בניה), נוצרות לפי הצורך.
+    // התיקיות שכבר מוכרות נבדקות כולן במקביל (בקשה אחת לכל אחת, באותו זמן) ולא אחת אחרי השנייה
+    async path(names) {
+      const m = await OD._idMap();
+      let parent = null;
+      const known = [];
+      for (const n of names) { const id = m.get(OD._key(parent, n, true)); if (!id) break; known.push(id); parent = id; }
+      await Promise.all(known.filter(id => !OD._verified.has(id)).map(id =>
+        OD.api('GET', `/files/${id}?fields=id,trashed&supportsAllDrives=true`).then(j => { if (j && !j.trashed) OD._verified.add(id); }).catch(() => {})));
+      parent = null;
+      for (const n of names) parent = await OD.folder(parent, n);
+      return parent;
     },
 
     // העלאת קובץ. replace=true מחליף קובץ קיים באותו שם. מחזיר {id, name}, או null אם התיקייה לא קיימת
     async upload(parentId, name, blob, replace) {
       name = OD.clean(name);
       const type = blob.type || 'application/octet-stream';
+      const key = OD._key(parentId, name, false);
+      if (replace) {
+        // הקובץ כבר מוכר: מחליפים את התוכן ישר, בלי לחפש אותו (אם נמחק או בפח, ממשיכים כרגיל)
+        const known = (await OD._idMap()).get(key);
+        if (known) {
+          const j = await OD.api('PATCH', `${UPLOAD}/files/${known}?uploadType=media&fields=id,name,trashed&supportsAllDrives=true`, blob, { 'Content-Type': type }).catch(() => null);
+          if (j && !j.trashed) return j;
+          await OD._forget(key);
+        }
+      }
       let existing = null;
       try { existing = replace ? await OD._find(parentId, name, false) : null; }
       catch (e) { if (/404|not found/i.test(e.message)) return null; throw e; }
-      if (existing) return OD.replaceContent(existing.id, blob);
-      // קובץ חדש: העלאה בהמשכים (עובד לכל גודל)
-      const tok = await OD.accessToken();
-      const init = await fetch(`${UPLOAD}/files?uploadType=resumable&fields=id,name&supportsAllDrives=true`, {
-        method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': type },
-        body: JSON.stringify({ name, parents: [parentId || 'root'] }) });
-      if (init.status === 404) return null; // תיקיית היעד נמחקה
-      if (!init.ok) throw new Error('העלאה לגוגל דרייב נכשלה (' + init.status + ')');
-      const res = await fetch(init.headers.get('Location'), { method: 'PUT', headers: { 'Content-Type': type }, body: blob });
-      if (!res.ok) throw new Error('העלאה לגוגל דרייב נכשלה (' + res.status + ')');
-      return res.json();
+      if (existing) { const j = await OD.replaceContent(existing.id, blob); await OD._remember(key, existing.id); return j; }
+      let out;
+      if (blob.size < 5 * 1024 * 1024) {
+        // קובץ קטן: בקשה אחת (multipart) במקום שתיים
+        const boundary = 'b' + Math.random().toString(36).slice(2);
+        const body = new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`, JSON.stringify({ name, parents: [parentId || 'root'] }),
+          `\r\n--${boundary}\r\nContent-Type: ${type}\r\n\r\n`, blob, `\r\n--${boundary}--`]);
+        out = await OD.api('POST', `${UPLOAD}/files?uploadType=multipart&fields=id,name&supportsAllDrives=true`, body, { 'Content-Type': `multipart/related; boundary=${boundary}` });
+        if (!out) { await OD._forgetParent(parentId); return null; } // תיקיית היעד נמחקה
+      } else {
+        // קובץ גדול: העלאה בהמשכים
+        const tok = await OD.accessToken();
+        const init = await fetch(`${UPLOAD}/files?uploadType=resumable&fields=id,name&supportsAllDrives=true`, {
+          method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': type },
+          body: JSON.stringify({ name, parents: [parentId || 'root'] }) });
+        if (init.status === 404) { await OD._forgetParent(parentId); return null; }
+        if (!init.ok) throw new Error('העלאה לגוגל דרייב נכשלה (' + init.status + ')');
+        const res = await fetch(init.headers.get('Location'), { method: 'PUT', headers: { 'Content-Type': type }, body: blob });
+        if (!res.ok) throw new Error('העלאה לגוגל דרייב נכשלה (' + res.status + ')');
+        out = await res.json();
+      }
+      if (replace && out && out.id) await OD._remember(key, out.id);
+      return out;
+    },
+    // תיקייה שנמחקה: שוכחים אותה (ואת מה שבתוכה)
+    async _forgetParent(parentId) {
+      const m = await OD._idMap();
+      for (const [k, v] of [...m]) if (v === parentId || k.split('|')[1] === parentId) m.delete(k);
+      OD._verified.delete(parentId); OD._saveIds();
     },
 
     // מחליף את התוכן של קובץ קיים (תמונה אחרי ציור, נתוני סקר), בלי לשנות את שמו
@@ -182,8 +257,17 @@
     },
 
     async readJson(parentId, name) {
+      // קובץ מוכר: הורדה ישירה בלי לחפש אותו קודם
+      const key = OD._key(parentId, name, false);
+      const known = (await OD._idMap()).get(key);
+      if (known) {
+        const b = await OD.download(known).catch(() => null);
+        if (b) { try { return JSON.parse(await b.text()); } catch (_) {} }
+        await OD._forget(key);
+      }
       const f = await OD._find(parentId, name, false);
       if (!f) return null;
+      await OD._remember(key, f.id);
       const b = await OD.download(f.id);
       return b ? JSON.parse(await b.text()) : null;
     },

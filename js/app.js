@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.18.4';
+  const APP_VERSION = '1.19.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1765,7 +1765,7 @@
             await saveNow();
             status.textContent = 'מפיק PDF…';
             const s = cur;
-            const pdf = await buildPdf(s, (i, n) => { status.textContent = `מפיק PDF… עמוד ${i} מתוך ${n}`; });
+            const pdf = await buildPdf(s, (i, n) => { status.textContent = `מפיק PDF… ${i}/${n}`; });
             status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים).`;
             viewPdf(s, pdf);
             if (odOn) {
@@ -1917,7 +1917,7 @@
   async function buildPdf(s, onProgress) {
     if (Construction.isConstruction(s)) return null; // בסקר לבנייה יש רק אקסל
     const r = await ReportPrint.toPdf(s, id => photoBlob(s, id), onProgress);
-    const pdf = { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages };
+    const pdf = { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages, html: r.html };
     // ה-PDF האחרון של כל סקר נשמר בטאבלט, כדי שאפשר יהיה לפתוח ולשלוח אותו מתוך האפליקציה
     try { await DB.setKV('pdf:' + s.id, Object.assign({ at: Date.now(), hash: Sync.hashSurvey(s) }, pdf)); pdfChanged(s.id); } catch (_) {}
     return pdf;
@@ -1983,9 +1983,10 @@
   }
 
   async function viewPdf(s, pdf) {
-    const pages = await ReportPrint.pdfPages(pdf.blob);
-    const urls = pages.map(b => URL.createObjectURL(b));
-    const close = () => { ov.remove(); urls.forEach(u => URL.revokeObjectURL(u)); window.removeEventListener('hashchange', close); };
+    // PDF חדש (וקטורי): מציגים את העמודים מה-HTML שממנו נוצר. PDF ישן (תמונות): מחלצים את התמונות
+    const view = pdf.html ? PdfVec.view(pdf.html, { rootId: 'printRoot' }) : null;
+    const urls = view ? [] : (await ReportPrint.pdfPages(pdf.blob)).map(b => URL.createObjectURL(b));
+    const close = () => { ov.remove(); urls.forEach(u => URL.revokeObjectURL(u)); if (view) view.cleanup(); window.removeEventListener('hashchange', close); };
     window.addEventListener('hashchange', close);
     const ov = h('div', { class: 'pdfv' },
       h('div', { class: 'annot-bar' },
@@ -1994,7 +1995,7 @@
         h('button', { class: 'txt', onclick: () => sharePdf(s, pdf, 'mail') }, '✉ מייל'),
         h('button', { class: 'txt', onclick: () => sharePdf(s, pdf, 'whatsapp') }, 'וואטסאפ'),
         h('button', { class: 'txt', title: 'הורדה', 'aria-label': 'הורדה', onclick: () => downloadFile(pdf.blob, pdf.name) }, '⬇')),
-      h('div', { class: 'pdfv-pages' }, urls.map((u, i) => h('img', { src: u, alt: `עמוד ${i + 1}` }))));
+      view || h('div', { class: 'pdfv-pages' }, urls.map((u, i) => h('img', { src: u, alt: `עמוד ${i + 1}` }))));
     document.body.append(ov);
   }
 

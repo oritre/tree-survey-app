@@ -189,16 +189,16 @@
 
   // שם הקובץ: שם התבנית + מה שמולא בכותרת (כתובת, גוש/חלקה, מתחם)
   function autoName(q) {
-    // יש שם מוסד: הוא שם הקובץ
+    // ori: יציבות = שם המוסד; היתר בניה = הכתובת בלבד (בלי גוש/חלקה ובלי שם התבנית)
     const inst = q.blocks.find(b => b.inst && !b.del && b.kind === 'subject' && (b.t || '').trim());
     if (inst) return inst.t.trim();
-    const bits = [];
-    for (const b of q.blocks) {
-      if (b.kind === 'subject' && b.t) bits.push(b.t);
-      if (b.kind === 'gush' && (b.gush || b.helka)) bits.push(`גוש ${b.gush} חלקה ${b.helka}`);
-      if (b.kind === 'blank' && b.blank === 'colon' && b.val) bits.push(b.val);
-    }
-    return [q.tplName || 'הצעת מחיר', ...bits].join(' ');
+    const subj = q.blocks.filter(b => b.kind === 'subject' && !b.del && (b.t || '').trim()).map(b => b.t.trim());
+    if (subj.length) return subj.join(' ');
+    const blank = q.blocks.find(b => b.kind === 'blank' && b.blank === 'colon' && !b.del && (b.val || '').trim());
+    if (blank) return blank.val.trim();
+    const g = q.blocks.find(b => b.kind === 'gush' && !b.del && (b.gush || b.helka));
+    if (g) return `גוש ${g.gush} חלקה ${g.helka}`.trim();
+    return q.tplName || 'הצעת מחיר';
   }
 
   function total(q) {

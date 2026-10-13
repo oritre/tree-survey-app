@@ -389,28 +389,32 @@
     return new Blob(chunks, { type: 'application/pdf' });
   }
 
-  // מפיק את הדוח כקובץ PDF. getPhotoBlob(id) מחזיר את התמונה (מהטאבלט או מהענן)
+  const shrunk = new Map();
+  // מפיק את הדוח כקובץ PDF אמיתי (טקסט וקווים וקטוריים, PdfVec). getPhotoBlob(id) מחזיר את התמונה (מהטאבלט או מהענן)
   async function toPdf(survey, getPhotoBlob, onProgress) {
     const photoUrls = {};
     const slots = Core.reportSlots(survey.trees).slice(0, Core.MAX_PRINTED);
-    for (const s of slots) {
-      if (photoUrls[s.photo.id]) continue;
-      const b = await getPhotoBlob(s.photo.id);
-      if (b) photoUrls[s.photo.id] = await blobToDataUrl(await shrink(b, 900));
-    }
+    // התמונות מוקטנות 3 במקביל, ותמונה שכבר הוקטנה (אותו קובץ) לא מוקטנת שוב
+    const ids = [...new Set(slots.map(s => s.photo.id))];
+    let n = 0, next = 0;
+    const work = async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        const b = await getPhotoBlob(id);
+        if (b) {
+          const key = id + ':' + b.size;
+          if (!shrunk.has(key)) shrunk.set(key, shrink(b, 1100).then(blobToDataUrl));
+          photoUrls[id] = await shrunk.get(key);
+        }
+        if (onProgress) onProgress(++n, ids.length + 1);
+      }
+    };
+    await Promise.all([work(), work(), work()]);
+    if (shrunk.size > 120) shrunk.clear();
     const pages = await buildPages(survey, photoUrls);
-    const imgs = {};
-    for (const n of ['letterhead', 'footer', 'stamp']) imgs[`template/${n}.png`] = await urlToDataUrl(`template/${n}.png`);
-    const css = (await fontCss()) + CSS.replace(/@font-face\{[^}]*\}/g, '').replace('#printRoot{display:none}', '');
-    const holder = document.createElement('div');
-    const out = [];
-    for (let i = 0; i < pages.length; i++) {
-      if (onProgress) onProgress(i + 1, pages.length);
-      holder.innerHTML = pages[i].replace(/src="(template\/[a-z]+\.png)"/g, (m, u) => `src="${imgs[u]}"`);
-      const xhtml = new XMLSerializer().serializeToString(holder.firstElementChild);
-      out.push(await pageToJpeg(xhtml, css));
-    }
-    return { blob: makePdf(out), pages: pages.length };
+    ensureStyle();
+    const blob = await PdfVec.fromHtml(pages, { rootId: 'printRoot', widthPt: PAGE_W });
+    return { blob, pages: pages.length, html: pages };
   }
 
   // העמודים של PDF שהאפליקציה יצרה (כל עמוד הוא תמונת JPEG אחת), לתצוגה בתוך האפליקציה
