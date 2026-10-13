@@ -170,9 +170,11 @@
       h('main', { class: 'stack editor' },
         h('div', { class: 'card stack' },
           h('div', { class: 'muted small' }, 'תבנית: ' + q.tplName),
-          h('div', {}, h('label', { class: 'f', for: 'qName' }, 'שם ההצעה (שם התיקייה והקובץ בדרייב)'), nameIn),
           h('div', {}, h('label', { class: 'f' }, 'תאריך'), dateIn)),
         seg, content,
+        h('div', { class: 'card stack' },
+          h('div', {}, h('label', { class: 'f', for: 'qName' }, 'שם הקובץ בדרייב'), nameIn,
+            h('div', { class: 'muted small' }, 'ריק = ' + (q.blocks.some(b => b.inst) ? 'שם המוסד' : 'לפי הכתובת והגוש') + '. אפשר לכתוב כאן שם אחר.'))),
         actions(q)));
   }
 
@@ -193,9 +195,9 @@
           field('גוש', h('input', { class: 'in', inputmode: 'numeric', value: b.gush || '', oninput: e => { b.gush = e.target.value.trim(); changed(); } })),
           field('חלקה', h('input', { class: 'in', inputmode: 'numeric', value: b.helka || '', oninput: e => { b.helka = e.target.value.trim(); changed(); } }))));
       } else if (b.kind === 'subject') {
-        fields.push(field(/\d/.test(b.ex) && /,/.test(b.ex) ? 'כתובת' : 'שורה בכותרת',
-          h('input', { class: 'in', value: b.t || '', placeholder: 'לדוגמה: ' + b.ex, oninput: e => { b.t = e.target.value; changed(); } }),
-          'שורה ריקה לא תופיע בהצעה'));
+        fields.push(field(b.label || (/\d/.test(b.ex) && /,/.test(b.ex) ? 'כתובת' : 'שורה בכותרת'),
+          h('input', { class: 'in', value: b.t || '', placeholder: b.ex ? 'לדוגמה: ' + b.ex : '', oninput: e => { b.t = e.target.value; changed(); } }),
+          b.inst ? 'מופיע מתחת לכותרת, ומשמש גם כשם הקובץ' : 'שורה ריקה לא תופיע בהצעה'));
       } else if (b.kind === 'blank' && b.blank === 'mark') {
         const labels = [...new Set([...b.text.matchAll(/\[\[([^\]]*)\]\]/g)].map(m => m[1]))];
         for (const l of labels) fields.push(field(l || 'שדה', h('input', { class: 'in', value: (b.vals || {})[l] || '', oninput: e => { (b.vals = b.vals || {})[l] = e.target.value; changed(); } })));
