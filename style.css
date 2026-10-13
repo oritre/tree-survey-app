@@ -254,3 +254,14 @@ a.btn { text-decoration: none; color: inherit; }
 .pdfv-title { color: #fff; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pdfv-pages { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; align-items: center; gap: 10px; -webkit-overflow-scrolling: touch; }
 .pdfv-pages img { width: 100%; max-width: 900px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.5); }
+
+/* הצעות מחיר */
+.price-row { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.doc-row { display: flex; gap: 6px; align-items: flex-start; }
+.doc-row > :first-child { flex: 1; min-width: 0; }
+.doc-row.li { padding-inline-start: 24px; }
+.doc-tools { display: flex; flex-direction: column; }
+textarea.doc-text { min-height: 50px; font-size: 17px; }
+textarea.doc-text.c { text-align: center; }
+textarea.doc-text.b { font-weight: 700; }
+.price-row textarea.in, textarea.doc-text { min-height: 50px; }

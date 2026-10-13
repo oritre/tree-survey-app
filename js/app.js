@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.17.0';
+  const APP_VERSION = '1.18.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -105,6 +105,7 @@
     if (hash.startsWith('#/summary')) return renderSummary();
     if (hash.startsWith('#/import')) return renderImport();
     if (hash.startsWith('#/settings')) return renderSettings();
+    if (hash.startsWith('#/quotes')) return QuotesUI.render(hash);
     return renderHome();
   }
   function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
@@ -147,6 +148,8 @@
     live: id => (cur && cur.id === id ? cur : null),
     onSynced: () => { if (cur && tab === 'trees') renderPhotos(); },
     buildReport, buildPdf,
+    // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
+    ui: { h, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, today, fmtDate },
   };
 
   // ---------- מסך הבית ----------
@@ -189,7 +192,8 @@
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', style: 'flex:1', onclick: newSurvey }, '+ סקר חדש'),
           h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/cloud') }, '🔎 חיפוש סקרים בענן'),
-          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/summary') }, '🌲 אורנים ומפות')),
+          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/summary') }, '🌲 אורנים ומפות'),
+          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/quotes') }, '💰 הצעות מחיר')),
         chips, list,
         hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} סקרים מימים קודמים שמורים בענן. `,
           h('a', { href: '#/cloud' }, 'לחיפוש סקרים בענן')) : null,
