@@ -176,6 +176,7 @@
           h('div', {}, h('label', { class: 'f', for: 'qName' }, 'שם הקובץ בדרייב'), nameIn,
             h('div', { class: 'muted small' }, 'ריק = ' + (q.blocks.some(b => b.inst) ? 'שם המוסד' : 'לפי הכתובת והגוש') + '. אפשר לכתוב כאן שם אחר.'))),
         actions(q)));
+    saveWordOn().then(v => { const c = $('#qSaveWord'); if (c) c.checked = v; });
   }
 
   function field(label, input, hint) {
@@ -342,18 +343,23 @@
     if (/היתר|בני[יה]|construction/.test(n)) return 'היתר בניה';
     return null;
   }
-  // הנתיב בדרייב: א עצים / הצעות מחיר / <שנת ההצעה> / <יציבות עצים או היתר בניה> / <שם ההצעה>. תיקיות חסרות נוצרות
+  // הנתיב בדרייב: א עצים / הצעות מחיר / <שנת ההצעה> / <יציבות עצים או היתר בניה>. תיקיות חסרות נוצרות
   async function drivePath(q) {
     const base = String((await DB.getKV('quoteFolder', DEFAULT_FOLDER)) || DEFAULT_FOLDER).split('/').map(s => s.trim()).filter(Boolean);
     const year = (q.date || U().today()).slice(0, 4);
-    return [...base, year, typeFolder(q), nameOf(q)].filter(Boolean);
+    return [...base, year, typeFolder(q)].filter(Boolean);
   }
 
-  // שמירה בגוגל דרייב, בתיקייה משלה לכל הצעה
-  async function saveToDrive(q, files, quiet) {
+  // שמירה בגוגל דרייב: קובץ PDF בתיקיית הסוג (בלי תיקייה לכל הצעה), ואם סומן גם קובץ Word.
+  // have = קבצים שכבר הוכנו (כדי לא להכין שוב)
+  const saveWordOn = async () => !!(await DB.getKV('quoteSaveWord', false));
+  async function saveToDrive(q, quiet, have) {
     const { toast } = U();
     if (!navigator.onLine || !(await OD.connected())) { if (!quiet) toast('לא נשמר בדרייב: ' + (navigator.onLine ? 'צריך להתחבר לגוגל דרייב בהגדרות' : 'אין קליטה'), 5000); return false; }
     try {
+      have = have || {};
+      const files = [{ name: fileName(q, '.pdf'), blob: have.pdf || await makePdf(q) }];
+      if (await saveWordOn()) files.push({ name: fileName(q, '.docx'), blob: have.docx || await makeDocx(q) });
       const path = await drivePath(q);
       let parent = null;
       for (const p of path) parent = await OD.folder(parent, p);
@@ -372,7 +378,7 @@
     const files = [];
     if (kind !== 'docx') files.push({ name: fileName(q, '.pdf'), blob: await makePdf(q) });
     if (kind !== 'pdf') files.push({ name: fileName(q, '.docx'), blob: await makeDocx(q) });
-    saveToDrive(q, files, true);
+    saveToDrive(q, true, { pdf: (files.find(f => f.name.endsWith('.pdf')) || {}).blob, docx: (files.find(f => f.name.endsWith('.docx')) || {}).blob });
     const fs = files.map(f => new File([f.blob], f.name, { type: f.blob.type }));
     const subject = nameOf(q);
     if (navigator.canShare && navigator.canShare({ files: fs })) {
@@ -405,14 +411,15 @@
     return h('div', { class: 'card stack' },
       h('div', { class: 'row' },
         btn('👁 תצוגה מקדימה', b => withBusy(b, 'מכין…', () => preview(q))),
-        btn('📄 PDF', b => withBusy(b, 'מכין PDF…', async () => { const blob = await makePdf(q); downloadFile(blob, fileName(q, '.pdf')); await saveToDrive(q, [{ name: fileName(q, '.pdf'), blob }], true); }), 'primary'),
-        btn('📝 Word', b => withBusy(b, 'מכין Word…', async () => { const blob = await makeDocx(q); downloadFile(blob, fileName(q, '.docx')); await saveToDrive(q, [{ name: fileName(q, '.docx'), blob }], true); }), 'primary')),
+        btn('📄 PDF', b => withBusy(b, 'מכין PDF…', async () => { const blob = await makePdf(q); downloadFile(blob, fileName(q, '.pdf')); await saveToDrive(q, true, { pdf: blob }); }), 'primary'),
+        btn('📝 Word', b => withBusy(b, 'מכין Word…', async () => { const blob = await makeDocx(q); downloadFile(blob, fileName(q, '.docx')); if (await saveWordOn()) await saveToDrive(q, true, { docx: blob }); }), 'primary')),
       h('div', { class: 'row' },
         btn('💬 וואטסאפ', b => withBusy(b, 'מכין…', () => share(q, 'wa'))),
         btn('✉ מייל', b => withBusy(b, 'מכין…', () => share(q, 'mail'))),
-        btn('☁ שמירה בדרייב', b => withBusy(b, 'שומר…', async () => saveToDrive(q, [
-          { name: fileName(q, '.docx'), blob: await makeDocx(q) }, { name: fileName(q, '.pdf'), blob: await makePdf(q) }])))),
-      h('div', { class: 'muted small' }, 'כל קובץ שמופק או נשלח נשמר גם בגוגל דרייב: ' + DEFAULT_FOLDER + ' / ' + (q.date || U().today()).slice(0, 4) + (typeFolder(q) ? ' / ' + typeFolder(q) : '') + ' / תיקייה להצעה.'),
+        btn('☁ שמירה בדרייב', b => withBusy(b, 'שומר…', () => saveToDrive(q)))),
+      h('label', { class: 'row small', style: 'gap:8px' },
+        h('input', { type: 'checkbox', id: 'qSaveWord', onchange: e => DB.setKV('quoteSaveWord', e.target.checked) }), 'לשמור בדרייב גם קובץ Word (חוץ מה-PDF)'),
+      h('div', { class: 'muted small' }, 'כל הצעה שמופקת או נשלחת נשמרת כקובץ PDF בגוגל דרייב: ' + DEFAULT_FOLDER + ' / ' + (q.date || U().today()).slice(0, 4) + (typeFolder(q) ? ' / ' + typeFolder(q) : '') + '.'),
       h('div', { class: 'row' },
         btn('⧉ שכפול ההצעה', async () => {
           const c = JSON.parse(JSON.stringify(q));
