@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.19.3';
+  const APP_VERSION = '1.19.4';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1932,18 +1932,20 @@
   // ובוחרים בו את Gmail או את וואטסאפ. את הבחירה האחרונה אנדרואיד מציג ראשונה
   async function sharePdf(s, pdf, via) {
     const file = new File([pdf.blob], pdf.name, { type: 'application/pdf' });
+    // לפי ori: נושא = "סקר עצים <השנה שבה נשלח> <שם הגן> <כתובת> <עיר>", בגוף: שורה ריקה ואז "רצ"ב סקר עצים וחשבונית לתשלום"
     const place = Core.placeOf(s);
-    const where = [place.name, place.address].filter(Boolean).join(', ') || s.site || '';
-    const subject = `סקר בטיחות עצים - ${where} - ${fmtDate(s.date)}`;
+    const where = [s.siteName, s.street, s.city].filter(Boolean).join(' ') || [place.name, place.address].filter(Boolean).join(' ') || s.site || '';
+    const subject = `סקר עצים ${new Date().getFullYear()} ${where}`.trim();
+    const body = '\nרצ"ב סקר עצים וחשבונית לתשלום';
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      const data = { files: [file], title: subject };
-      if (via === 'mail') data.text = `מצורף דוח סקר בטיחות עצים: ${where}, ${fmtDate(s.date)}.`;
+      // בוואטסאפ אין נושא, אז הנושא נכנס כשורה ראשונה בהודעה
+      const data = { files: [file], title: subject, text: via === 'mail' ? body : subject + '\n' + body };
       try { await navigator.share(data); return; }
       catch (e) { if (e.name === 'AbortError') return; }
     }
     // אין שיתוף קבצים בדפדפן הזה: מורידים את הקובץ, ובמייל פותחים הודעה חדשה עם נושא (את הקובץ מצרפים מההורדות)
     downloadFile(pdf.blob, pdf.name);
-    if (via === 'mail') location.href = 'mailto:?subject=' + encodeURIComponent(subject);
+    if (via === 'mail') location.href = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
     toast('הקובץ הורד. צרף אותו מתיקיית ההורדות.', 5000);
   }
   // בחירת תיקייה בגוגל דרייב לחיפוש בארכיון: נכנסים לתיקיות ובוחרים
