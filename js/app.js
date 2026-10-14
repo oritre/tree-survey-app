@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.19.1';
+  const APP_VERSION = '1.19.2';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -2233,6 +2233,25 @@
   // ---------- הפעלה ----------
   window.addEventListener('pagehide', saveNow);
   // יציאה מהאפליקציה (מסך כבוי, מעבר לאפליקציה אחרת): שומר מיד בטאבלט ומעלה את נתוני הסקר
+  // מקלדת מספרים: מקש "הבא" במקלדת עובר לשדה הבא, כמו Tab במחשב
+  const isNumField = el => el && el.tagName === 'INPUT' && (el.type === 'number' || ['numeric', 'decimal'].includes(el.getAttribute('inputmode')));
+  const nextField = el => {
+    // בתוך חלון קופץ: רק השדות שבו
+    const all = [...(el.closest('.modal') || document).querySelectorAll('input, textarea')].filter(x =>
+      !['checkbox', 'radio', 'file', 'button', 'hidden', 'date', 'search'].includes(x.type) && !x.disabled && !x.readOnly && x.offsetParent !== null);
+    return all[all.indexOf(el) + 1] || null;
+  };
+  document.addEventListener('focusin', e => {
+    if (isNumField(e.target)) e.target.setAttribute('enterkeyhint', nextField(e.target) ? 'next' : 'done');
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || e.isComposing || !isNumField(e.target) || e.target.getAttribute('enterkeyhint') !== 'next') return;
+    const n = nextField(e.target);
+    if (!n) return;
+    e.preventDefault();
+    n.focus();
+    if (n.select && n.tagName === 'INPUT') try { n.select(); } catch (_) {}
+  });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { saveNow(); if (cur) Sync.now(); } });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
