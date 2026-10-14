@@ -109,8 +109,10 @@
     return w;
   }
 
-  // שם התמונה בסקר לבנייה: שדה אחד לאקסל ולטלגרם (p.trees, ובתמונות ישנות ההערה p.note)
-  const photoName = p => String(p.trees || p.note || '').trim();
+  // שם התמונה בסקר לבנייה: שדה אחד לאקסל, לטלגרם ולשם הקובץ. שם שנכתב ידנית (p.trees, ובתמונות ישנות ההערה p.note),
+  // ואם לא נכתב: מספר העץ, שמתעדכן לבד כשמספר העץ משתנה
+  const manualName = p => String(p.trees || p.note || '').trim();
+  const photoName = (t, p) => manualName(p) || String((t && t.num) || '').trim();
 
   // ---------- מילוי התבנית ----------
   // שורות העצים בגיליון סקר: עמוד 1 שורות 11-35, ואז 18 עמודים של 32 עצים (53-84, 99-130, ...)
@@ -139,7 +141,7 @@
         for (const n of Core.expandNum(t.num)) for (const p of photos.filter(x => x.sub === n)) slots.push({ tree: t, sub: n, label: String(n), photo: p });
       } else {
         // תמונה אחת לכמה עצים: "עצים בתמונה" (למשל 7-9) היא התווית בנספח
-        for (const p of photos) slots.push({ tree: t, sub: null, label: photoName(p) || String(t.num || t.species || ''), photo: p });
+        for (const p of photos) slots.push({ tree: t, sub: null, label: photoName(t, p) || String(t.species || ''), photo: p });
       }
     }
     return slots.slice(0, SLOT_CELLS.length).map((x, i) => Object.assign(x, { index: i + 1 }));
@@ -149,7 +151,7 @@
   // מספרי עצים שמופיעים בתמונה של עץ אחר ("עצים בתמונה")
   function coveredNums(trees) {
     const set = new Set();
-    for (const t of trees) for (const p of t.photos || []) if (p.inReport && photoName(p)) for (const n of Core.expandNum(pictureName(photoName(p))) || []) set.add(n);
+    for (const t of trees) for (const p of t.photos || []) if (p.inReport && manualName(p)) for (const n of Core.expandNum(pictureName(manualName(p))) || []) set.add(n);
     return set;
   }
   // דף התבנית שמכיל את משבצת i (0 = עמוד ראשון), כדי לפתוח את השורות המוסתרות
@@ -319,6 +321,6 @@
 
   root.Construction = {
     TYPES, typeOf, TRANSPLANT, transplantOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
-    compute, category, warnings, buildWorkbook, TREE_ROWS, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums,
+    compute, category, warnings, buildWorkbook, TREE_ROWS, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
   };
 })(this);
