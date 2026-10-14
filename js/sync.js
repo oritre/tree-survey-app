@@ -37,12 +37,20 @@
 
   // כיתוב התמונה בטלגרם: רק ההערה שנכתבה לתמונה באפליקציה, בלי שום דבר נוסף.
   // פרטי הסקר נשלחים פעם אחת בהודעה לפני התמונה הראשונה של הסקר
+  // בסקר לבנייה: שם התמונה (מספר העץ, או מה שנכתב ידנית), כמו באקסל
   function caption(s, t, p) {
+    if (Construction.isConstruction(s)) return Construction.photoName(t, p).slice(0, 1000);
     return (p.note || '').trim().slice(0, 1000);
   }
 
 
-  function photoFileName(t, p, k) {
+  // בסקר לבנייה: הקובץ נקרא כמו התמונה בנספח (7.jpg, 7-9.jpg), ותמונה נוספת באותו שם מקבלת _2, _3
+  function photoFileName(t, p, k, s, used) {
+    if (s && Construction.isConstruction(s)) {
+      const base = (Construction.pictureName(Construction.photoName(t, p)).trim() || 'ללא מספר').replace(/[\\/:*?"<>|]/g, '_');
+      const n = (used.get(base) || 0) + 1; used.set(base, n);
+      return `${base}${n > 1 ? '_' + n : ''}.jpg`;
+    }
     const label = Core.photoLabel(t, p) || 'ללא מספר';
     return `עץ ${label}${p.note ? ' - ' + p.note : ' - ' + k}.jpg`;
   }
@@ -200,7 +208,8 @@
 
     // תמונות: כל אחת עולה פעם אחת, ומשנה שם אם השם/הפרטים השתנו. תמונות חדשות עולות 3 במקביל (מהיר יותר בקליטה חלשה)
     const jobs = [];
-    for (const t of Core.sortTrees(s.trees)) { let k = 1; for (const p of t.photos || []) jobs.push({ t, p, name: photoFileName(t, p, k++) }); }
+    const used = new Map();
+    for (const t of Core.sortTrees(s.trees)) { let k = 1; for (const p of t.photos || []) jobs.push({ t, p, name: photoFileName(t, p, k++, s, used) }); }
     let lost = false;
     const uploadNew = async ({ p, name }) => {
       if (lost || p.odId) return;

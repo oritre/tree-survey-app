@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.19.2';
+  const APP_VERSION = '1.19.3';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1648,8 +1648,10 @@
       // סקר לבנייה: שדה אחד לתמונה, גם לאקסל (התווית בנספח, למשל 7-9) וגם לטלגרם
       const shared = Construction.isConstruction(cur) && !split;
       const noteIn = shared
-        ? h('input', { class: 'in note-in', value: p.trees || p.note || '', placeholder: `שם התמונה לאקסל ולטלגרם (ריק = ${t.num || 'מספר העץ'}, למשל 7-9)`,
-            oninput: e => { p.trees = p.note = e.target.value.trim(); saveSoon(); Sync.kick(); } })
+        ? h('input', { class: 'in note-in', value: Construction.photoName(t, p), placeholder: 'שם התמונה (מספר העץ, למשל 7-9)', title: 'אוטומטית מספר העץ. אפשר לשנות, למשל 7-9',
+            // ריק או בדיוק מספר העץ = אוטומטי (מתעדכן כשמספר העץ משתנה); כל דבר אחר = שם ידני
+            oninput: e => { const v = e.target.value.trim(); p.trees = p.note = v === String(t.num || '').trim() ? '' : v; saveSoon(); Sync.kick(); },
+            onchange: e => { if (!e.target.value.trim()) e.target.value = Construction.photoName(t, p); } })
         : h('input', { class: 'in note-in', value: p.note || '', placeholder: 'שם / פרטים (לטלגרם בלבד)',
             oninput: e => { p.note = e.target.value; saveSoon(); Sync.kick(); } });
       return h('div', { class: 'ph-card' + (p.inReport ? ' in-report' : '') },
