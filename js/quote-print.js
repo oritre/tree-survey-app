@@ -253,8 +253,9 @@
       `${ftrHtml}</section>`);
   }
 
+  // data: ההצעה עצמה נשמרת בתוך ה-PDF, כדי שאפשר יהיה לפתוח אותה לעריכה מהדרייב
   async function toPdf(bytes, q) {
-    return PdfVec.fromHtml(await pages(bytes, q), { css: CSS });
+    return PdfVec.fromHtml(await pages(bytes, q), { css: CSS, data: JSON.stringify({ app: 'tree-survey-quote', v: 1, quote: q }) });
   }
 
   root.QuotePrint = { pages, toPdf, CSS };
