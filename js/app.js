@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.20.1';
+  const APP_VERSION = '1.20.2';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -40,8 +40,10 @@
   }
   function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
   // שם קובץ לשיתוף (וואטסאפ וכו'): וואטסאפ משבש שמות עם גרשיים עבריים, אז ״ -> '' ו-׳ -> '
-  const shareName = s => String(s || '').replace(/\u05F4/g, "''").replace(/\u05F3/g, "'");
-  const safeName = s => String(s || '').replace(/(\S)"(?=\S)/g, '$1\u05F4').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // ori: שמות קבצים בלי גרשיים בכלל (ליד"ה -> לידה), כי וואטסאפ משבש שמות איתם
+  const QUOTES = /["'\u05F3\u05F4\u201C\u201D\u2018\u2019]/g;
+  const shareName = s => String(s || '').replace(QUOTES, '');
+  const safeName = s => String(s || '').replace(QUOTES, '').replace(/[\\/:*?<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
 
   // ---------- מצב ----------
   let cur = null; // הסקר הפתוח
