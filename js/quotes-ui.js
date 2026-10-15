@@ -392,7 +392,7 @@
     if (kind !== 'docx') files.push({ name: fileName(q, '.pdf'), blob: await makePdf(q) });
     if (kind !== 'pdf') files.push({ name: fileName(q, '.docx'), blob: await makeDocx(q) });
     saveToDrive(q, true, { pdf: (files.find(f => f.name.endsWith('.pdf')) || {}).blob, docx: (files.find(f => f.name.endsWith('.docx')) || {}).blob });
-    const fs = files.map(f => new File([f.blob], f.name, { type: f.blob.type }));
+    const fs = files.map(f => new File([f.blob], U().shareName(f.name), { type: f.blob.type }));
     // ori: נושא "הצעת מחיר <שנה> <שם המוסד>", וגוף קבוע
     const inst = q.blocks.find(x => x.inst && !x.del && (x.t || '').trim());
     const subject = `הצעת מחיר ${(q.date || U().today()).slice(0, 4)} ${inst ? inst.t.trim() : nameOf(q).replace(/^הצעת מחיר\s*/, '')}`.replace(/\s+/g, ' ').trim();
