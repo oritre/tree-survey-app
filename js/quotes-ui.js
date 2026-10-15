@@ -95,16 +95,16 @@
         h('div', { style: 'flex:1;min-width:0' },
           h('div', { class: 't' }, nameOf(q)),
           h('div', { class: 'muted small' }, [q.tplName, U().fmtDate(q.date)].filter(Boolean).join(' · ') + (savedNow(q) ? ' · ☁ בדרייב' : ''))),
-        h('span', { class: 'muted', 'aria-hidden': 'true' }, '←'))) : [h('div', { class: 'empty' }, list.length ? 'לא נמצאו הצעות' : all.length ? 'אין הצעות מהיום. הצעות קודמות נמצאות ב"חיפוש הצעות בדרייב".' : 'עוד אין הצעות מחיר. לחץ על "הצעת מחיר חדשה".')]));
+        h('span', { class: 'arrow', 'aria-hidden': 'true' }, '‹'))) : [h('div', { class: 'empty' }, list.length ? 'לא נמצאו הצעות' : all.length ? 'אין הצעות מהיום. הצעות קודמות נמצאות ב"חיפוש הצעות בדרייב".' : 'עוד אין הצעות מחיר. לחץ על "הצעת מחיר חדשה".')]));
     };
     filter.addEventListener('input', draw);
     $('#app').replaceChildren(
       bar('הצעות מחיר', '#/'),
       h('main', { class: 'stack' },
-        h('div', { class: 'row' },
-          h('button', { class: 'btn primary big', style: 'flex:1', onclick: pickTemplate }, '+ הצעת מחיר חדשה'),
-          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/quotes-search') }, '🔎 חיפוש הצעות בדרייב'),
-          h('button', { class: 'btn big', style: 'flex:1', onclick: manageTemplates }, '📂 תבניות')),
+        h('div', { class: 'home-actions three' },
+          h('button', { class: 'tile primary', onclick: pickTemplate }, U().icon('plus'), 'הצעת מחיר חדשה'),
+          h('button', { class: 'tile', onclick: () => go('#/quotes-search') }, U().icon('search'), 'חיפוש הצעות בדרייב'),
+          h('button', { class: 'tile', onclick: manageTemplates }, U().icon('file'), 'תבניות')),
         list.length > 4 ? filter : null, box,
         hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} הצעות מימים קודמים שמורות בדרייב. `,
           h('a', { href: '#/quotes-search' }, 'לחיפוש הצעות בדרייב')) : null));
@@ -501,7 +501,7 @@
     const shown = local.filter(q => !text || nameOf(q).includes(text)).sort((a, b) => b.updated - a.updated);
     return shown.length ? shown.map(q => h('div', { class: 'card survey-item', role: 'button', tabindex: 0, onclick: () => go('#/quotes/' + encodeURIComponent(q.id)) },
       h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 't' }, nameOf(q)), h('div', { class: 'muted small' }, [q.tplName, U().fmtDate(q.date), 'בטאבלט'].filter(Boolean).join(' · '))),
-      h('span', { class: 'muted', 'aria-hidden': 'true' }, '←'))) : [h('div', { class: 'empty' }, 'לא נמצאו הצעות בטאבלט')];
+      h('span', { class: 'arrow', 'aria-hidden': 'true' }, '‹'))) : [h('div', { class: 'empty' }, 'לא נמצאו הצעות בטאבלט')];
   }
 
   function fileRow(f, local) {
