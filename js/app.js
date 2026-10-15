@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.20.0';
+  const APP_VERSION = '1.20.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -39,6 +39,8 @@
     setTimeout(() => t.remove(), ms || 2600);
   }
   function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+  // שם קובץ לשיתוף (וואטסאפ וכו'): וואטסאפ משבש שמות עם גרשיים עבריים, אז ״ -> '' ו-׳ -> '
+  const shareName = s => String(s || '').replace(/\u05F4/g, "''").replace(/\u05F3/g, "'");
   const safeName = s => String(s || '').replace(/(\S)"(?=\S)/g, '$1\u05F4').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
 
   // ---------- מצב ----------
@@ -149,7 +151,7 @@
     onSynced: () => { if (cur && tab === 'trees') renderPhotos(); },
     buildReport, buildPdf,
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
-    ui: { h, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, today, fmtDate },
+    ui: { h, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, shareName, today, fmtDate },
   };
 
   // ---------- מסך הבית ----------
@@ -1890,7 +1892,7 @@
   }
 
   async function deliver(blob, name) {
-    const file = new File([blob], name, { type: blob.type });
+    const file = new File([blob], shareName(name), { type: blob.type });
     if (navigator.canShare && navigator.canShare({ files: [file] }) && await DB.getKV('shareFiles', false)) {
       try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e.name === 'AbortError') return; }
     }
@@ -1931,7 +1933,7 @@
   // מייל / וואטסאפ: אתר לא יכול לצרף קובץ ישירות למייל או לוואטסאפ, אז נפתח חלון השיתוף של אנדרואיד עם הקובץ מצורף,
   // ובוחרים בו את Gmail או את וואטסאפ. את הבחירה האחרונה אנדרואיד מציג ראשונה
   async function sharePdf(s, pdf, via) {
-    const file = new File([pdf.blob], pdf.name, { type: 'application/pdf' });
+    const file = new File([pdf.blob], shareName(pdf.name), { type: 'application/pdf' });
     // לפי ori: נושא = "סקר עצים <השנה שבה נשלח> <שם הגן> <כתובת> <עיר>", בגוף: שורה ריקה ואז "רצ"ב סקר עצים וחשבונית לתשלום"
     const place = Core.placeOf(s);
     const where = [s.siteName, s.street, s.city].filter(Boolean).join(' ') || [place.name, place.address].filter(Boolean).join(' ') || s.site || '';
