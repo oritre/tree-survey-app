@@ -69,6 +69,7 @@
 
   // ---------- ניווט ----------
   async function render(hash) {
+    if (hash.startsWith('#/quotes-search')) return renderSearch();
     const m = /^#\/quotes\/(.+)$/.exec(hash);
     if (m) {
       const q = (await allQuotes()).find(x => x.id === decodeURIComponent(m[1]));
@@ -81,7 +82,10 @@
   // ---------- רשימת הצעות ----------
   async function renderList() {
     const { h, bar, go } = U();
-    const list = (await allQuotes()).sort((a, b) => b.updated - a.updated);
+    const all = (await allQuotes()).sort((a, b) => b.updated - a.updated);
+    // ori: כמו הסקרים, רק ההצעות של היום (והצעות שעוד לא נשמרו בדרייב). הקודמות: בחיפוש בדרייב
+    const list = all.filter(q => dayOf(q.updated) === U().today() || !savedNow(q));
+    const hiddenN = all.length - list.length;
     const filter = h('input', { class: 'in', type: 'search', placeholder: 'חיפוש לפי שם, כתובת או גוש' });
     const box = h('div', { class: 'grid-list' });
     const draw = () => {
@@ -90,8 +94,8 @@
       box.replaceChildren(...(shown.length ? shown.map(q => h('div', { class: 'card survey-item', role: 'button', tabindex: 0, onclick: () => go('#/quotes/' + encodeURIComponent(q.id)) },
         h('div', { style: 'flex:1;min-width:0' },
           h('div', { class: 't' }, nameOf(q)),
-          h('div', { class: 'muted small' }, [q.tplName, U().fmtDate(q.date)].filter(Boolean).join(' · ') + (q.savedAt ? ' · ☁ בדרייב' : ''))),
-        h('span', { class: 'muted', 'aria-hidden': 'true' }, '←'))) : [h('div', { class: 'empty' }, list.length ? 'לא נמצאו הצעות' : 'עוד אין הצעות מחיר. לחץ על "הצעת מחיר חדשה".')]));
+          h('div', { class: 'muted small' }, [q.tplName, U().fmtDate(q.date)].filter(Boolean).join(' · ') + (savedNow(q) ? ' · ☁ בדרייב' : ''))),
+        h('span', { class: 'muted', 'aria-hidden': 'true' }, '←'))) : [h('div', { class: 'empty' }, list.length ? 'לא נמצאו הצעות' : all.length ? 'אין הצעות מהיום. הצעות קודמות נמצאות ב"חיפוש הצעות בדרייב".' : 'עוד אין הצעות מחיר. לחץ על "הצעת מחיר חדשה".')]));
     };
     filter.addEventListener('input', draw);
     $('#app').replaceChildren(
@@ -99,11 +103,17 @@
       h('main', { class: 'stack' },
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', style: 'flex:1', onclick: pickTemplate }, '+ הצעת מחיר חדשה'),
+          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/quotes-search') }, '🔎 חיפוש הצעות בדרייב'),
           h('button', { class: 'btn big', style: 'flex:1', onclick: manageTemplates }, '📂 תבניות')),
-        list.length > 4 ? filter : null, box));
+        list.length > 4 ? filter : null, box,
+        hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} הצעות מימים קודמים שמורות בדרייב. `,
+          h('a', { href: '#/quotes-search' }, 'לחיפוש הצעות בדרייב')) : null));
     draw();
   }
   const nameOf = q => (q.name || '').trim() || Quotes.autoName(q);
+  const dayOf = t => { const d = new Date(t || 0); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  // נשמרה בדרייב אחרי השינוי האחרון (השמירה עצמה מעדכנת את updated, ולכן מרווח קטן)
+  const savedNow = q => !!q.savedAt && q.updated - q.savedAt < 5000;
 
   async function pickTemplate() {
     const { askChoice, go, toast, today } = U();
@@ -211,7 +221,7 @@
       fields.length ? h('div', { class: 'card stack' }, h('h2', { style: 'margin:0;font-size:19px' }, 'פרטים'), ...fields) : null,
       pricesCard(q, changed, redraw),
       h('div', { class: 'muted small', style: 'text-align:center' }, 'כל שאר הטקסט נשאר כמו בתבנית. לשינוי טקסט קבוע: "עריכת כל המסמך".'),
-    ];
+    ].filter(Boolean);
   }
 
   function priceRow(q, b, changed, redraw) {
@@ -338,6 +348,7 @@
 
   // תיקיית הסוג לפי התבנית: יציבות עצים / היתר בניה (תבנית אחרת: ישר בתוך תיקיית השנה)
   function typeFolder(q) {
+    if (q.typeFolder !== undefined) return q.typeFolder; // הצעה שנפתחה מקובץ Word בדרייב: התיקייה שהיא הייתה בה
     const n = (q.tplName || '') + ' ' + (q.tpl || '');
     if (/יציבות|stability/.test(n)) return 'יציבות עצים';
     if (/היתר|בני[יה]|construction/.test(n)) return 'היתר בניה';
@@ -362,6 +373,9 @@
       if (await saveWordOn()) files.push({ name: fileName(q, '.docx'), blob: have.docx || await makeDocx(q) });
       const path = await drivePath(q);
       const parent = await OD.path(path);
+      // תיקייה חדשה (שנה חדשה וכו'): החיפוש בדרייב יקרא שוב את רשימת התיקיות
+      const t = OD._trees && OD._trees[TREE_KEY];
+      if (t && !t.map.has(parent)) { delete OD._trees[TREE_KEY]; DB.setKV(TREE_KEY, null).catch(() => {}); }
       await Promise.all(files.map(f => OD.upload(parent, f.name, f.blob, true)));
       q.savedAt = Date.now(); await saveQuote(q);
       toast('נשמר בדרייב: ' + path.join(' / '), 4000);
@@ -430,6 +444,184 @@
           await saveQuote(c); go('#/quotes/' + encodeURIComponent(c.id));
         }),
         btn('🗑 מחיקה', async () => { if (!confirm('למחוק את ההצעה מהאפליקציה? (מה שנשמר בדרייב נשאר)')) return; await deleteQuote(q.id); go('#/quotes'); }, 'danger')));
+  }
+
+  // ---------- חיפוש הצעות בדרייב ----------
+  const TREE_KEY = 'gdQTree';
+  const PDF = 'application/pdf', DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  // תיקיית החיפוש: מה שנבחר, או תיקיית הצעות המחיר
+  async function searchRoot() {
+    const r = await DB.getKV('quoteSearchRoot', null);
+    if (r && r.id) return r;
+    const base = String((await DB.getKV('quoteFolder', DEFAULT_FOLDER)) || DEFAULT_FOLDER).split('/').map(x => x.trim()).filter(Boolean);
+    return { id: await OD.path(base), name: base.join(' / ') };
+  }
+
+  let lastSearch = '';
+  async function renderSearch() {
+    const { h, bar, debounce } = U();
+    const input = h('input', { class: 'in', type: 'search', value: lastSearch, placeholder: 'שם מוסד, כתובת, גוש…', 'aria-label': 'חיפוש הצעות' });
+    const where = h('div', { class: 'muted small' });
+    const box = h('div', { class: 'grid-list' });
+    let seq = 0;
+    const run = async () => {
+      const my = ++seq, text = lastSearch = input.value.trim();
+      const local = await allQuotes();
+      if (!navigator.onLine || !(await OD.connected())) {
+        where.textContent = navigator.onLine ? 'צריך להתחבר לגוגל דרייב בהגדרות. בינתיים מוצגות ההצעות שבטאבלט.' : 'אין קליטה. מוצגות ההצעות שבטאבלט.';
+        box.replaceChildren(...localRows(local, text));
+        return;
+      }
+      box.replaceChildren(h('div', { class: 'muted small' }, 'מחפש…'));
+      try {
+        const r = await searchRoot();
+        where.replaceChildren('מחפש בתיקייה: ', h('b', {}, r.name || 'הדרייב שלי'), ' ובכל התיקיות שבתוכה');
+        const files = await OD.searchIn(r.id, text, [PDF, DOCX], TREE_KEY);
+        if (my !== seq) return;
+        box.replaceChildren(...(files.length ? files.map(f => fileRow(f, local)) : [h('div', { class: 'empty' }, text ? 'לא נמצאו הצעות' : 'אין הצעות בתיקייה הזו')]));
+      } catch (e) {
+        if (my !== seq) return;
+        box.replaceChildren(h('div', { class: 'empty' }, 'החיפוש בדרייב נכשל: ' + e.message), ...localRows(local, text));
+      }
+    };
+    input.addEventListener('input', debounce(run, 500));
+    $('#app').replaceChildren(
+      bar('חיפוש הצעות בדרייב', '#/quotes'),
+      h('main', { class: 'stack' },
+        h('div', { class: 'card stack' }, input,
+          h('div', { class: 'row', style: 'justify-content:space-between' }, where,
+            h('button', { class: 'btn', onclick: () => pickFolder(run) }, '📁 בחירת תיקייה'))),
+        box));
+    run();
+  }
+
+  // הצעות שבטאבלט (כשאין קליטה)
+  function localRows(local, text) {
+    const { h, go } = U();
+    const shown = local.filter(q => !text || nameOf(q).includes(text)).sort((a, b) => b.updated - a.updated);
+    return shown.length ? shown.map(q => h('div', { class: 'card survey-item', role: 'button', tabindex: 0, onclick: () => go('#/quotes/' + encodeURIComponent(q.id)) },
+      h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 't' }, nameOf(q)), h('div', { class: 'muted small' }, [q.tplName, U().fmtDate(q.date), 'בטאבלט'].filter(Boolean).join(' · '))),
+      h('span', { class: 'muted', 'aria-hidden': 'true' }, '←'))) : [h('div', { class: 'empty' }, 'לא נמצאו הצעות בטאבלט')];
+  }
+
+  function fileRow(f, local) {
+    const { h } = U();
+    const isPdf = /\.pdf$/i.test(f.name) || (f.file && f.file.mimeType === PDF);
+    const when = f.lastModifiedDateTime ? new Date(f.lastModifiedDateTime).toLocaleDateString('he-IL') : '';
+    const open = h('button', { class: 'btn primary', onclick: () => withBusy(open, 'פותח…', () => openFromDrive(f, local)) }, '✏ פתיחה לעריכה');
+    return h('div', { class: 'card stack' },
+      h('div', {}, h('div', { class: 't' }, (isPdf ? '📄 ' : '📝 ') + f.name.replace(/\.(pdf|docx)$/i, '')),
+        h('div', { class: 'muted small' }, [isPdf ? 'PDF' : 'Word', f.path && f.path.length ? f.path.join(' / ') : null, when].filter(Boolean).join(' · '))),
+      h('div', { class: 'row' }, open,
+        h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + f.id + '/view', target: '_blank', rel: 'noopener' }, 'הצג בדרייב')));
+  }
+
+  // פתיחת הצעה מהדרייב לעריכה:
+  //  PDF שהאפליקציה הפיקה (מגרסה 1.20): ההצעה שמורה בתוך הקובץ
+  //  PDF ישן: ההצעה שבטאבלט באותו שם, אם יש
+  //  Word: המסמך עצמו נפתח כמו תבנית, עם כל מה שכבר כתוב בו
+  async function openFromDrive(f, local) {
+    const { go, toast, askChoice } = U();
+    const isPdf = /\.pdf$/i.test(f.name) || (f.file && f.file.mimeType === PDF);
+    const stem = f.name.replace(/\.(pdf|docx)$/i, '');
+    const sameName = local.filter(q => U().safeName(nameOf(q)) === stem).sort((a, b) => b.updated - a.updated)[0];
+    const show = async q => { await markSaved(q); go('#/quotes/' + encodeURIComponent(q.id)); };
+    if (isPdf) {
+      const blob = await OD.download(f.id);
+      if (!blob) throw new Error('הקובץ לא נמצא בדרייב');
+      let data = null;
+      try { data = JSON.parse(await PdfVec.readData(blob)); } catch (_) {}
+      if (data && data.quote && data.quote.blocks) {
+        const q = data.quote;
+        const mine = local.find(x => x.id === q.id);
+        const use = mine && mine.updated > (q.updated || 0) ? mine : q;
+        await ensureTemplate(use);
+        return show(use);
+      }
+      if (sameName) return show(sameName);
+      // PDF בלי נתוני הצעה: אם יש לידו קובץ Word באותו שם, פותחים אותו
+      const word = (await OD.children((f.parents || [])[0])).find(x => x.name === stem + '.docx');
+      if (word) return openWord(Object.assign(word, { path: f.path }));
+      const c = await askChoice('אי אפשר לערוך את הקובץ הזה', 'זה PDF שלא נוצר באפליקציה (או מגרסה ישנה), ואין לידו קובץ Word. אפשר לפתוח אותו לצפייה.', [
+        { value: 'dl', label: 'הורדה וצפייה', primary: true }, { value: '', label: 'סגירה' }]);
+      if (c === 'dl') U().downloadFile(blob, f.name);
+      return;
+    }
+    return openWord(f);
+  }
+
+  async function openWord(f) {
+    const { go, today } = U();
+    const blob = await OD.download(f.id);
+    if (!blob) throw new Error('הקובץ לא נמצא בדרייב');
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const blocks = await Quotes.parse(bytes, true);
+    // המסמך עצמו הוא התבנית של ההצעה (נשמר בטאבלט)
+    const id = 'd-' + f.id;
+    await DB.setKV('qtpl:' + id, bytes); delete bytesCache[id];
+    const stem = f.name.replace(/\.docx$/i, '');
+    const path = f.path || [];
+    const type = path.find(x => x === 'יציבות עצים' || x === 'היתר בניה') || null;
+    const q = Quotes.newQuote({ id, name: 'קובץ Word מהדרייב' + (type ? ' (' + type + ')' : '') }, blocks, today());
+    q.name = stem; q.typeFolder = type; q.fromDrive = { id: f.id, name: f.name };
+    // התאריך שכתוב במסמך
+    const d = blocks.find(b => b.kind === 'date');
+    const m = d && /(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/.exec(d.text);
+    if (m) q.date = `${m[3].length === 2 ? '20' + m[3] : m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    await markSaved(q);
+    go('#/quotes/' + encodeURIComponent(q.id));
+  }
+  // הצעה שנפתחה מהדרייב כבר שמורה שם (עד שמשנים בה משהו)
+  async function markSaved(q) { await saveQuote(q); q.savedAt = q.updated; await saveQuote(q); }
+
+  // הצעה מתבנית שהועלתה במכשיר אחר: מחפשים בטאבלט תבנית באותו שם
+  async function ensureTemplate(q) {
+    try { await templateBytes(q.tpl); return; } catch (_) {}
+    // הצעה שנפתחה מקובץ Word בדרייב במכשיר אחר: מורידים את אותו קובץ Word
+    if (/^d-/.test(q.tpl)) {
+      const b = await OD.download(q.tpl.slice(2)).catch(() => null);
+      if (b) { await DB.setKV('qtpl:' + q.tpl, new Uint8Array(await b.arrayBuffer())); return; }
+    }
+    const t = (await templates()).find(x => x.name === q.tplName);
+    if (!t) throw new Error(`התבנית "${q.tplName}" לא נמצאת בטאבלט הזה. אפשר להעלות אותה ב"תבניות" ולנסות שוב.`);
+    q.tpl = t.id;
+  }
+
+  // בחירת תיקייה בדרייב לחיפוש הצעות: נכנסים לתיקיות ובוחרים
+  function pickFolder(after) {
+    const { h, toast } = U();
+    if (!navigator.onLine) { toast('אין קליטה'); return; }
+    const stack = [{ id: null, name: 'הדרייב שלי' }];
+    const list = h('div', { class: 'stack', style: 'max-height:55vh;overflow:auto' });
+    const title = h('b', {});
+    const close = () => ov.remove();
+    const draw = async () => {
+      const cur = stack[stack.length - 1];
+      title.textContent = stack.map(x => x.name).join(' / ');
+      list.replaceChildren(h('div', { class: 'muted small' }, 'טוען…'));
+      try {
+        const folders = (await OD.children(cur.id)).filter(x => x.folder);
+        list.replaceChildren(...[
+          stack.length > 1 ? h('button', { class: 'btn', onclick: () => { stack.pop(); draw(); } }, '⬆ חזרה') : null,
+          ...folders.map(x => h('button', { class: 'btn', style: 'justify-content:flex-start', onclick: () => { stack.push({ id: x.id, name: x.name }); draw(); } }, '📁 ' + x.name)),
+          folders.length ? null : h('div', { class: 'muted small' }, 'אין כאן תתי תיקיות')].filter(Boolean));
+      } catch (e) { list.replaceChildren(h('div', {}, 'נכשל: ' + e.message)); }
+    };
+    const ov = h('div', { class: 'modal' },
+      h('div', { class: 'card stack', style: 'width:min(560px,94%)' },
+        h('div', { class: 'muted small' }, 'ההצעות יחופשו בתיקייה שתבחר ובכל התיקיות שבתוכה'),
+        title, list,
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary', onclick: async () => {
+            const cur = stack[stack.length - 1];
+            if (!cur.id) { toast('בחר תיקייה'); return; }
+            await DB.setKV('quoteSearchRoot', { id: cur.id, name: stack.slice(1).map(x => x.name).join(' / ') });
+            close(); after();
+          } }, 'בחר את התיקייה הזו'),
+          h('button', { class: 'btn', onclick: async () => { await DB.setKV('quoteSearchRoot', null); close(); after(); } }, 'ברירת מחדל (הצעות מחיר)'),
+          h('button', { class: 'btn', onclick: close }, 'ביטול'))));
+    document.body.append(ov);
+    draw();
   }
 
   root.QuotesUI = { render, templates, templateBytes };

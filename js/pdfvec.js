@@ -217,9 +217,30 @@
           if (r.under) page.drawRectangle({ x: r.x * k, y: H - (r.base + r.size * 0.12) * k, width: (r.r - r.x) * k, height: Math.max(0.4, r.size * 0.06 * k), color: col(r.color) });
         }
       }
+      if (opts.data != null) attachData(doc, opts.data);
       const bytes = await doc.save();
       return new Blob([bytes], { type: 'application/pdf' });
     } finally { holder.remove(); }
+  }
+
+  // נתונים של האפליקציה בתוך ה-PDF (למשל הצעת מחיר, כדי שאפשר יהיה לפתוח אותה שוב לעריכה מהדרייב).
+  // נשמר דחוס במילון המידע של הקובץ, ולא משפיע על התצוגה
+  const DATA_KEY = 'TreeSurveyData';
+  function attachData(doc, text) {
+    const { PDFName } = root.PDFLib;
+    const ref = doc.context.register(doc.context.flateStream(new TextEncoder().encode(text)));
+    doc.getInfoDict().set(PDFName.of(DATA_KEY), ref);
+  }
+  // מחזיר את הנתונים שנשמרו ב-PDF, או null
+  async function readData(blob) {
+    await loadLibs();
+    const { PDFDocument, PDFName, decodePDFRawStream } = root.PDFLib;
+    try {
+      const doc = await PDFDocument.load(new Uint8Array(await blob.arrayBuffer()), { updateMetadata: false, ignoreEncryption: true });
+      const st = doc.context.lookup(doc.getInfoDict().get(PDFName.of(DATA_KEY)));
+      if (!st) return null;
+      return new TextDecoder().decode(decodePDFRawStream(st).decode());
+    } catch (_) { return null; }
   }
 
   // תצוגה של העמודים בתוך האפליקציה (בלי לפענח את ה-PDF): אותו HTML שממנו נוצר הקובץ, מוקטן לרוחב המסך
@@ -247,5 +268,5 @@
     return box;
   }
 
-  root.PdfVec = { fromHtml, loadLibs, view };
+  root.PdfVec = { fromHtml, loadLibs, view, readData };
 })(self);

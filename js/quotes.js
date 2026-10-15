@@ -130,8 +130,9 @@
     return { zip, doc, body: bm[1], bodyStart: bm.index + '<w:body>'.length, bodyEnd: bm.index + '<w:body>'.length + bm[1].length };
   }
 
-  // יוצר הצעת מחיר חדשה מתבנית: רשימת פסקאות, ולכל אחת מה משתנה בה
-  async function parse(bytes) {
+  // יוצר הצעת מחיר חדשה מתבנית: רשימת פסקאות, ולכל אחת מה משתנה בה.
+  // keep=true: מסמך הצעה קיים (Word מהדרייב) — הערכים שכבר כתובים בו נשארים, ושום שורה לא נמחקת או נוספת
+  async function parse(bytes, keep) {
     const { body } = await load(bytes);
     const els = topLevel(body);
     const blocks = [];
@@ -145,7 +146,7 @@
       if (/<w:drawing>|<w:pict>|<w:object/.test(e.xml)) { b.kind = 'image'; blocks.push(b); return; }
       const next = els.slice(i + 1).find(x => x.k === 'p' && paraText(x.xml).trim());
       // ori: בהצעת יציבות השורה "סקר במתחם:" לא נכנסת (שם המוסד מופיע מתחת לכותרת)
-      if (/^סקר במתחם\s*:?\s*$/.test(tt)) return;
+      if (!keep && /^סקר במתחם\s*:?\s*$/.test(tt)) return;
       if (!dateSeen && /תאריך\s*:/.test(text)) {
         dateSeen = true;
         b.kind = 'date';
@@ -155,8 +156,8 @@
       else if (titleSeen && !introSeen && /בהמשך ל/.test(tt)) introSeen = true;
       else if (titleSeen && !introSeen && tt) {
         const g = GUSH_RE.exec(text);
-        if (g) { b.kind = 'gush'; b.gush = ''; b.helka = ''; b.ex = tt; }
-        else { b.kind = 'subject'; b.t = ''; b.ex = tt; }
+        if (g) { b.kind = 'gush'; b.gush = keep ? g[1] : ''; b.helka = keep ? g[2] : ''; b.ex = tt; }
+        else { b.kind = 'subject'; b.t = keep ? text : ''; b.ex = tt; }
       } else if (/^מחיר\s*:?$/.test(tt) && !signSeen) inPrice = true;
       if (b.kind === 'text' && !signSeen) {
         const p = inPrice && parsePrice(text);
@@ -176,7 +177,7 @@
     });
     // אין בתבנית שורות כותרת למילוי (כמו ביציבות): שורת "שם המוסד" מתחת לכותרת, באותו עיצוב כמו הכותרת
     const title = blocks.find(b => b.kind === 'title');
-    if (title && !blocks.some(b => b.kind === 'subject' || b.kind === 'gush')) {
+    if (!keep && title && !blocks.some(b => b.kind === 'subject' || b.kind === 'gush')) {
       blocks.splice(blocks.indexOf(title) + 1, 0, { id: uid(), k: 'p', xml: title.xml, text: null, t: '', list: false, center: title.center, bold: title.bold,
         kind: 'subject', label: 'שם המוסד', inst: true, ex: '', fresh: true });
     }

@@ -310,9 +310,12 @@
       return files.slice(0, 60).map(shape);
     },
     // כל התיקיות בתוך תיקיית הארכיון: מזהה -> {שם, תיקיית אב}. נשמר בטאבלט ליום, ומתעדכן ברקע אחרי שעה
-    async folderTree(rootId) {
-      const KEY = 'gdTree';
-      const mem = OD._tree;
+    // key: איפה לשמור בטאבלט (לכל חיפוש עץ משלו, כדי שלא ידרסו זה את זה)
+    async folderTree(rootId, key) {
+      const KEY = key || 'gdTree';
+      OD._trees = OD._trees || {};
+      const setMem = v => { OD._trees[KEY] = v; if (KEY === 'gdTree') OD._tree = v; };
+      const mem = OD._trees[KEY];
       if (mem && mem.root === rootId && Date.now() - mem.at < 60 * 60 * 1000) return mem.map;
       const saved = mem && mem.root === rootId ? mem : await DB.getKV(KEY, null).then(x => x && x.root === rootId ? { root: x.root, at: x.at, map: new Map(x.list) } : null).catch(() => null);
       const load = async () => {
@@ -328,16 +331,31 @@
           for (const f of res.flat()) if (!map.has(f.id)) { map.set(f.id, { name: f.name, parent: (f.parents || [])[0] }); next.push(f.id); }
           level = next;
         }
-        OD._tree = { root: rootId, at: Date.now(), map };
+        setMem({ root: rootId, at: Date.now(), map });
         DB.setKV(KEY, { root: rootId, at: Date.now(), list: [...map] }).catch(() => {});
         return map;
       };
       if (saved && Date.now() - saved.at < 24 * 60 * 60 * 1000) {
-        OD._tree = saved;
-        if (Date.now() - saved.at > 60 * 60 * 1000 && !OD._treeLoading) OD._treeLoading = load().catch(() => {}).finally(() => { OD._treeLoading = null; });
+        setMem(saved);
+        OD._treeLoading = OD._treeLoading || {};
+        if (Date.now() - saved.at > 60 * 60 * 1000 && !OD._treeLoading[KEY]) OD._treeLoading[KEY] = load().catch(() => {}).finally(() => { OD._treeLoading[KEY] = null; });
         return saved.map;
       }
       return load();
+    },
+    // חיפוש קבצים בתוך תיקייה ובכל התיקיות שבתוכה (שם הקובץ או התוכן), החדשים קודם. text ריק = הקבצים האחרונים
+    // mimes: סוגי הקבצים. מחזיר עד 80 קבצים, כל אחד עם path (התיקיות מתחת לתיקיית החיפוש)
+    async searchIn(rootId, text, mimes, treeKey) {
+      const tree = await OD.folderTree(rootId, treeKey);
+      const t = (text || '').trim();
+      const cond = [t ? `(name contains ${q(t)} or fullText contains ${q(t)})` : null, `(${mimes.map(m => `mimeType = '${m}'`).join(' or ')})`, 'trashed = false'].filter(Boolean).join(' and ');
+      const ids = [...tree.keys()], chunks = [];
+      for (let i = 0; i < ids.length; i += 40) chunks.push(ids.slice(i, i + 40));
+      const res = await Promise.all(chunks.map(c => OD._list(`(${c.map(id => `${q(id)} in parents`).join(' or ')}) and ${cond}`,
+        { pageSize: '100', orderBy: 'modifiedTime desc', fields: 'nextPageToken,files(id,name,parents,modifiedTime,mimeType,size)' }, 1)));
+      const pathOf = id => { const out = []; for (let i = 0; id && id !== rootId && i < 8; i++) { const f = tree.get(id); if (!f) break; out.unshift(f.name); id = f.parent; } return out; };
+      return res.flat().sort((a, b) => String(b.modifiedTime).localeCompare(String(a.modifiedTime))).slice(0, 80)
+        .map(f => Object.assign(shape(f), { path: pathOf((f.parents || [])[0]) }));
     },
     async subfolders(rootId) { return new Set((await OD.folderTree(rootId)).keys()); },
     // שם תיקייה (ותיקיות האב שלה) להצגה בתוצאות. כל תיקייה נקראת מגוגל פעם אחת בלבד
