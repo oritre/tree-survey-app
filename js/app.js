@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.20.2';
+  const APP_VERSION = '1.21.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -28,6 +28,36 @@
       else el.setAttribute(k, v === true ? '' : v);
     }
     for (const k of kids.flat()) if (k != null && k !== false) el.append(k.nodeType ? k : document.createTextNode(String(k)));
+    return el;
+  }
+  // אייקונים (SVG בקו, 24x24): נראים אותו דבר בכל טאבלט, בניגוד לאמוג'י שתלוי בגופן המכשיר
+  const ICONS = {
+    plus: 'M12 5v14M5 12h14',
+    search: 'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM20 20l-4-4',
+    tree: 'M12 2l6 9h-3.5l4.5 7H5l4.5-7H6zM12 18v4',
+    money: 'M3 7h18v10H3zM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM6 10h.01M18 14h.01',
+    gear: 'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
+    list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+    info: 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zM12 11v5M12 8h.01',
+    file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6',
+    camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z',
+    image: 'M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4M16 9h.01',
+    pin: 'M12 21s-6-6.2-6-11a6 6 0 1 1 12 0c0 4.8-6 11-6 11zM12 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
+    photo: 'M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4',
+    check: 'M5 12l5 5L20 7',
+    cloud: 'M7 18a4 4 0 0 1-.5-8 6 6 0 0 1 11.3 1.5A3.5 3.5 0 0 1 17.5 18z',
+    back: 'M5 12h14M13 6l6 6-6 6',
+    trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
+    next: 'M19 12H5M11 6l-6 6 6 6',
+    sprout: 'M12 21v-8M12 13c0-4 3-7 8-7 0 4-3 7-8 7zM12 13c0-3-2-5-6-5 0 3 2 5 6 5z',
+  };
+  function icon(name, cls) {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    el.setAttribute('viewBox', '0 0 24 24'); el.setAttribute('fill', 'none'); el.setAttribute('stroke', 'currentColor');
+    el.setAttribute('stroke-width', '2'); el.setAttribute('stroke-linecap', 'round'); el.setAttribute('stroke-linejoin', 'round');
+    el.setAttribute('aria-hidden', 'true'); el.setAttribute('class', 'ic' + (cls ? ' ' + cls : ''));
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', ICONS[name] || ''); el.append(p);
     return el;
   }
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -114,11 +144,14 @@
   }
   function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
 
+  // סרגל עליון. title: טקסט, או {title, sub} לכותרת עם שורת משנה (למשל פרויקט ותאריך הסקר)
   function bar(title, back, ...right) {
+    const t = title && typeof title === 'object' && !title.nodeType ? title : { title };
     return h('header', { class: 'bar' },
-      back ? h('button', { class: 'icon-btn', 'aria-label': 'חזרה', onclick: () => go(back) }, '→') : null,
+      back ? h('button', { class: 'icon-btn back', 'aria-label': 'חזרה', onclick: () => go(back) }, icon('back')) : null,
       back ? homeBtn() : null,
-      h('h1', {}, title), h('button', { class: 'sync-pill icon-btn', id: 'syncPill', onclick: () => go('#/health') }, syncText()), ...right,
+      h('h1', {}, h('span', { class: 't' }, t.title), t.sub ? h('span', { class: 'sub' }, t.sub) : null),
+      h('button', { class: 'sync-pill icon-btn ' + syncClass(), id: 'syncPill', title: 'מצב הגיבוי (לחיצה: בקרת גיבוי)', onclick: () => go('#/health') }, h('span', { class: 'dot' }), h('span', { class: 'txt' }, syncText())), ...right,
       powerBtn());
   }
 
@@ -139,21 +172,29 @@
   // מצב הגיבוי בפינה: כמה ממתינות לטלגרם / גוגל דרייב
   function syncText() {
     const st = Sync.state;
-    if (st.odNeedsLogin) return '☁ גוגל דרייב: להתחבר מחדש';
-    if (st.offline) return (st.tgPending + st.odPending) ? `⏸ אין קליטה · ${st.tgPending + st.odPending} ממתינים` : '⏸ אין קליטה';
-    if (st.busy) return '⟳ מגבה…';
-    if (st.error) return '⚠ ' + st.error.slice(0, 40);
+    if (st.odNeedsLogin) return 'גוגל דרייב: להתחבר מחדש';
+    if (st.offline) return (st.tgPending + st.odPending) ? `אין קליטה · ${st.tgPending + st.odPending} ממתינים` : 'אין קליטה';
+    if (st.busy) return 'מגבה…';
+    if (st.error) return st.error.slice(0, 40);
     const n = st.tgPending + st.odPending;
-    return n ? `☁ ${n} ממתינים` : '☁ מגובה';
+    return n ? `${n} ממתינים` : 'מגובה';
   }
-  Sync.onChange(() => { const el = $('#syncPill'); if (el) el.textContent = syncText(); });
+  // צבע הנקודה בפינה: ירוק מגובה, צהוב ממתין/מגבה, אפור בלי קליטה, אדום תקלה
+  function syncClass() {
+    const st = Sync.state;
+    if (st.odNeedsLogin || st.error) return 'err';
+    if (st.offline) return 'off';
+    if (st.busy) return 'busy';
+    return (st.tgPending + st.odPending) ? 'pending' : 'ok';
+  }
+  Sync.onChange(() => { const el = $('#syncPill'); if (el) { $('.txt', el).textContent = syncText(); el.className = 'sync-pill icon-btn ' + syncClass(); } });
 
   window.App = {
     live: id => (cur && cur.id === id ? cur : null),
     onSynced: () => { if (cur && tab === 'trees') renderPhotos(); },
     buildReport, buildPdf,
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
-    ui: { h, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, shareName, today, fmtDate },
+    ui: { h, icon, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, shareName, today, fmtDate },
   };
 
   // ---------- מסך הבית ----------
@@ -174,30 +215,37 @@
     const card = s => {
       const n = s.trees.filter(Core.hasContent).length;
       const ph = s.trees.reduce((a, t) => a + (t.photos || []).length, 0);
-      return h('div', { class: 'card survey-item', role: 'button', tabindex: 0, onclick: () => go('#/s/' + s.id) },
+      const status = s.finished ? h('span', { class: 'status-chip done' }, icon('check'), 'הסתיים, בענן')
+        : s.finishPending ? h('span', { class: 'status-chip wait' }, 'ממתין להעלאה')
+        : dayOf(s.updated || s.created) !== today() ? h('span', { class: 'status-chip open' }, 'בתהליך') : null;
+      return h('div', { class: 'card survey-item', role: 'button', tabindex: 0, onclick: () => go('#/s/' + s.id),
+        onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('#/s/' + s.id); } } },
         h('div', { style: 'flex:1;min-width:0' },
           h('div', { class: 't' }, s.site || 'סקר ללא שם', Construction.isConstruction(s) ? h('span', { class: 'badge type-badge' }, 'לבנייה') : null),
           h('div', { class: 'muted small' }, [s.code ? 'סמל ' + s.code : null, fmtDate(s.date)].filter(Boolean).join(' · ')),
-          h('div', { class: 'small' }, `${n} עצים · ${ph} תמונות` + (s.finished ? ' · ✓ הסתיים, בענן' : s.finishPending ? ' · ממתין להעלאה' : dayOf(s.updated || s.created) !== today() ? ' · בתהליך' : ''))),
-        h('span', { class: 'muted', 'aria-hidden': 'true' }, '←'));
+          h('div', { class: 'meta' },
+            h('span', {}, icon('tree'), `${n} עצים`),
+            h('span', {}, icon('camera'), `${ph} תמונות`),
+            status)),
+        h('span', { class: 'arrow', 'aria-hidden': 'true' }, '‹'));
     };
     const shown = projectFilter == null ? projects : [projectFilter];
     const list = surveys.length ? shown.map(pr => h('section', {},
       h('h2', { class: 'proj-head' }, (pr || 'ללא פרויקט') + ` (${surveys.filter(s => (s.project || '') === pr).length})`),
       h('div', { class: 'grid-list' }, surveys.filter(s => (s.project || '') === pr).map(card))))
-      : h('div', { class: 'empty' }, all.length ? 'אין סקרים מהיום. סקרים קודמים נמצאים ב"חיפוש סקרים בענן".' : 'עוד אין סקרים. לחץ על "סקר חדש" כדי להתחיל.');
+      : h('div', { class: 'empty' }, icon('sprout'), all.length ? 'אין סקרים מהיום. סקרים קודמים נמצאים ב"חיפוש סקרים בענן".' : 'עוד אין סקרים. לחץ על "סקר חדש" כדי להתחיל.');
     const chips = projects.length > 1 ? h('div', { class: 'project-chips', role: 'group', 'aria-label': 'סינון לפי פרויקט' },
       h('button', { class: 'chip' + (projectFilter == null ? ' on' : ''), onclick: () => { projectFilter = null; renderHome(); } }, 'כל הפרויקטים'),
       projects.map(pr => h('button', { class: 'chip' + (projectFilter === pr ? ' on' : ''), onclick: () => { projectFilter = pr; renderHome(); } }, pr || 'ללא פרויקט'))) : null;
 
     app.replaceChildren(
-      bar('סקרי עצים', null, h('button', { class: 'icon-btn', onclick: () => go('#/settings') }, '⚙ הגדרות')),
+      bar('סקרי עצים', null, h('button', { class: 'icon-btn', title: 'הגדרות', 'aria-label': 'הגדרות', onclick: () => go('#/settings') }, icon('gear'))),
       h('main', { class: 'stack' },
-        h('div', { class: 'row' },
-          h('button', { class: 'btn primary big', style: 'flex:1', onclick: newSurvey }, '+ סקר חדש'),
-          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/cloud') }, '🔎 חיפוש סקרים בענן'),
-          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/summary') }, '🌲 אורנים ומפות'),
-          h('button', { class: 'btn big', style: 'flex:1', onclick: () => go('#/quotes') }, '💰 הצעות מחיר')),
+        h('div', { class: 'home-actions' },
+          h('button', { class: 'tile primary', onclick: newSurvey }, icon('plus'), 'סקר חדש'),
+          h('button', { class: 'tile', onclick: () => go('#/cloud') }, icon('search'), 'חיפוש סקרים בענן'),
+          h('button', { class: 'tile', onclick: () => go('#/summary') }, icon('tree'), 'אורנים ומפות'),
+          h('button', { class: 'tile', onclick: () => go('#/quotes') }, icon('money'), 'הצעות מחיר')),
         chips, list,
         hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} סקרים מימים קודמים שמורים בענן. `,
           h('a', { href: '#/cloud' }, 'לחיפוש סקרים בענן')) : null,
@@ -1062,12 +1110,13 @@
   // ---------- מסך הסקר ----------
   function renderSurvey() {
     const app = $('#app');
-    const tabs = [['trees', 'עצים'], ['details', 'פרטי הסקר'], ['export', 'הפקת דוח']];
+    const tabs = [['trees', 'עצים', 'tree'], ['details', 'פרטי הסקר', 'info'], ['export', 'הפקת דוח', 'file']];
     const body = h('main', {});
+    const n = cur.trees.filter(Core.hasContent).length;
     app.replaceChildren(
-      bar(cur.site || 'סקר חדש', '#/'),
-      h('nav', { class: 'tabs' }, tabs.map(([k, label]) =>
-        h('button', { class: 'tab' + (tab === k ? ' on' : ''), onclick: () => go(`#/s/${cur.id}/${k}`) }, label))),
+      bar({ title: cur.site || 'סקר חדש', sub: [cur.project, fmtDate(cur.date), n ? `${n} עצים` : null, Construction.isConstruction(cur) ? 'סקר לבנייה' : null].filter(Boolean).join(' · ') }, '#/'),
+      h('nav', { class: 'tabs', 'aria-label': 'חלקי הסקר' }, tabs.map(([k, label, ic]) =>
+        h('button', { class: 'tab' + (tab === k ? ' on' : ''), 'aria-current': tab === k ? 'page' : null, onclick: () => go(`#/s/${cur.id}/${k}`) }, icon(ic), label))),
       body);
     if (tab === 'details') renderDetails(body);
     else if (tab === 'export') renderExport(body);
@@ -1178,7 +1227,8 @@
 
   function treeRow(t) {
     const pineMissing = !Construction.isConstruction(cur) && Core.isPine(t.species) && (t.pines == null || t.pines === '');
-    return h('button', { class: 'tree-row' + (t.id === curTreeId ? ' on' : ''), 'data-id': t.id, onclick: () => selectTree(t.id) },
+    const urg = !Construction.isConstruction(cur) && t.urgency ? ' u-' + t.urgency : '';
+    return h('button', { class: 'tree-row' + (t.id === curTreeId ? ' on' : '') + urg, 'data-id': t.id, 'data-search': `${t.num || ''} ${t.species || ''} ${t.notes || ''}`.toLowerCase(), onclick: () => selectTree(t.id) },
       h('span', { class: 'n' }, t.num || '—'),
       h('span', { style: 'min-width:0' },
         h('div', { class: 'sp' }, t.species || 'ללא מין'),
@@ -1187,26 +1237,42 @@
         Construction.isConstruction(cur) ? constructionBadge(t)
           : t.urgency ? h('span', { class: 'badge u-' + t.urgency }, t.urgency) : null,
         pineMissing ? h('span', { class: 'badge alert', title: 'חסרה כמות אורנים' }, 'אורנים?') : null,
-        h('span', { class: 'badge', title: 'תמונות' }, '📷' + (t.photos || []).length),
-        t.lat != null ? h('span', { class: 'badge', title: 'יש נ"צ' }, '📍') : null));
+        (t.photos || []).length ? h('span', { class: 'badge soft', title: 'תמונות' }, icon('camera'), (t.photos || []).length) : null,
+        t.lat != null ? h('span', { class: 'badge soft', title: 'יש נ"צ' }, icon('pin')) : null));
   }
 
+  // סינון רשימת העצים (מספר, מין או הערה). נשמר בין רענונים של הרשימה
+  let treeFilter = '';
+  function applyTreeFilter(list) {
+    const q = treeFilter.trim().toLowerCase();
+    let shown = 0;
+    for (const r of list.querySelectorAll('.tree-row')) { const ok = !q || r.dataset.search.includes(q); r.classList.toggle('hidden', !ok); if (ok) shown++; }
+    const none = $('.no-match', list.parentNode);
+    if (none) none.classList.toggle('hidden', shown > 0 || !q);
+  }
   function renderTreeList(pane) {
     pane = pane || $('.list-pane');
     if (!pane) return;
     const trees = Core.sortTrees(cur.trees);
     const n = trees.filter(Core.hasContent).length;
-    pane.replaceChildren(
-      h('button', { class: 'btn primary big block', onclick: addTree }, '+ עץ חדש'),
-      h('div', { class: 'muted small' }, `${n} עצים בסקר` + (n > Core.MAX_TREES ? ` (בתבנית יש מקום ל-${Core.MAX_TREES})` : '')),
-      trees.length ? h('div', { class: 'tree-list' }, trees.map(treeRow)) : h('div', { class: 'empty' }, 'עוד אין עצים'));
+    const list = h('div', { class: 'tree-list' }, trees.map(treeRow));
+    const search = trees.length > 6 ? h('input', { class: 'in tree-search', type: 'search', value: treeFilter, placeholder: 'סינון: מספר, מין או הערה', 'aria-label': 'סינון העצים',
+      oninput: e => { treeFilter = e.target.value; applyTreeFilter(list); } }) : null;
+    if (!search) treeFilter = '';
+    pane.replaceChildren(...[
+      h('button', { class: 'btn primary big block', onclick: addTree }, icon('plus'), 'עץ חדש'),
+      h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > Core.MAX_TREES ? ` (בתבנית יש מקום ל-${Core.MAX_TREES})` : ''))),
+      search,
+      trees.length ? list : h('div', { class: 'empty' }, icon('sprout'), 'עוד אין עצים'),
+      h('div', { class: 'muted small no-match hidden', style: 'text-align:center' }, 'אין עץ שמתאים לסינון')].filter(Boolean));
+    applyTreeFilter(list);
     const on = $('.tree-row.on', pane);
     if (on) on.scrollIntoView({ block: 'nearest' });
   }
 
   function refreshRow(t) {
     const old = $(`.tree-row[data-id="${t.id}"]`);
-    if (old) old.replaceWith(treeRow(t));
+    if (old) { const r = treeRow(t); r.classList.toggle('hidden', old.classList.contains('hidden')); old.replaceWith(r); }
   }
 
   function selectTree(id) {
@@ -1309,22 +1375,30 @@
     const chipSpecies = Construction.isConstruction(cur)
       ? [...new Set(sug.speciesAll.map(Construction.canonSpecies).filter(x => Construction.SPECIES.has(x)))].slice(0, 16)
       : sug.speciesTop;
+    // הצ'יפ של המין שכבר נבחר מסומן
+    const markSpChips = () => { for (const c of spChips.children) c.classList.toggle('on', c.textContent === (t.species || '').trim()); };
     const spChips = h('div', { class: 'chips' }, chipSpecies.map(s => h('button', { class: 'chip', type: 'button',
-      onclick: () => { t.species = s; spIn.value = s; markPine(); changed(); askPines(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); } }, s)));
+      onclick: () => { t.species = s; spIn.value = s; markPine(); markSpChips(); changed(); askPines(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); } }, s)));
+    spIn.addEventListener('input', markSpChips);
+    markSpChips();
 
-    // הערות
-    const notesIn = h('textarea', { class: 'in', 'aria-label': 'הערות וטיפול מומלץ', oninput: e => { t.notes = e.target.value; changed(); } });
+    // הערות. צ'יפ של הערה שכבר כתובה מסומן, ולחיצה עליו מסירה אותה
+    const notesIn = h('textarea', { class: 'in', 'aria-label': 'הערות וטיפול מומלץ', oninput: e => { t.notes = e.target.value; markNoteChips(); changed(); } });
     notesIn.value = t.notes || '';
+    const noteParts = () => notesIn.value.split(/\s*[,.]\s*/).map(s => s.trim()).filter(Boolean);
+    const markNoteChips = () => { const parts = noteParts(); for (const c of notesChips.children) c.classList.toggle('on', parts.includes(c.textContent)); };
     const notesChips = h('div', { class: 'chips' }, (Construction.isConstruction(cur) ? sug.constructionNotes || CONSTRUCTION_NOTES_SEED : sug.phrasesTop).map(p => h('button', { class: 'chip', type: 'button',
       onclick: () => {
-        const cur0 = notesIn.value.trim();
-        notesIn.value = cur0 ? cur0.replace(/[,.]$/, '') + ', ' + p : p;
-        t.notes = notesIn.value; changed();
+        const parts = noteParts();
+        if (parts.includes(p)) notesIn.value = parts.filter(x => x !== p).join(', ');
+        else { const cur0 = notesIn.value.trim(); notesIn.value = cur0 ? cur0.replace(/[,.]$/, '') + ', ' + p : p; }
+        t.notes = notesIn.value; markNoteChips(); changed();
       } }, p)));
+    markNoteChips();
 
     // דחיפות
     const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'דחיפות' }, [['', 'ללא'], ['כ', 'כ - כריתה'], ['1', '1 - מיידי'], ['2', '2 - חצי שנה']].map(([v, label]) =>
-      h('button', { type: 'button', class: (t.urgency || '') === v ? 'on' : '', onclick: e => {
+      h('button', { type: 'button', class: (v ? 'v-' + v : '') + ((t.urgency || '') === v ? ' on' : ''), onclick: e => {
         t.urgency = v; changed();
         [...seg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget));
       } }, label)));
@@ -1351,13 +1425,13 @@
         h('div', {},
           h('label', { class: 'f' }, 'תמונות'),
           h('div', { class: 'row', style: 'margin-bottom:10px' },
-            h('button', { class: 'btn primary big', onclick: takePhotos }, '📷 צלם'),
-            h('button', { class: 'btn big', onclick: () => pickPhoto('galInput') }, '🖼 מהגלריה'),
+            h('button', { class: 'btn primary big', onclick: takePhotos }, icon('camera'), 'צלם'),
+            h('button', { class: 'btn big', onclick: () => pickPhoto('galInput') }, icon('image'), 'מהגלריה'),
             gpsBox),
           photosBox),
-        h('div', { class: 'row', style: 'justify-content:space-between;margin-top:20px' },
-          h('button', { class: 'btn danger', onclick: deleteTree }, 'מחק עץ'),
-          h('button', { class: 'btn primary', onclick: addTree }, '+ עץ הבא'))));
+        h('div', { class: 'editor-foot' },
+          h('button', { class: 'btn danger', onclick: deleteTree }, icon('trash'), 'מחק עץ'),
+          h('button', { class: 'btn primary', onclick: addTree }, icon('plus'), 'עץ הבא'))));
     renderPhotos();
   }
 
@@ -1479,7 +1553,7 @@
       h('button', { class: 'btn big' + (has ? ' ok' : ''), disabled: t._gpsBusy ? '' : null, onclick: () => {
         if (has && !confirm(`לעץ כבר יש נ"צ (${t.lat.toFixed(5)}, ${t.lon.toFixed(5)}). לעדכן למיקום הנוכחי?`)) return;
         captureGps(t);
-      } }, t._gpsBusy ? '📍 מאתר…' : has ? `📍 נ"צ ✓${t.acc != null ? ` ±${Math.round(t.acc)}מ'` : t.gpsSrc === 'map' ? ' (מפה)' : ''}` : '📍 נ"צ'),
+      } }, icon('pin'), t._gpsBusy ? 'מאתר…' : has ? `נ"צ ✓${t.acc != null ? ` ±${Math.round(t.acc)}מ'` : t.gpsSrc === 'map' ? ' (מפה)' : ''}` : 'נ"צ'),
       h('button', { class: 'btn big', disabled: t._gpsBusy ? '' : null, onclick: () => refineOnMap(t) }, has ? '🗺 דייק במפה' : '🗺 סמן במפה'));
   }
 
