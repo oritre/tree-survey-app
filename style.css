@@ -389,3 +389,4 @@ textarea.doc-text.b { font-weight: 700; }
   ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
   ::-webkit-scrollbar-track { background: transparent; }
 }
+.cam-ev { min-width: 34px; text-align: center; font-size: 16px; color: #fff; }
