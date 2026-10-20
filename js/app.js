@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.21.0';
+  const APP_VERSION = '1.21.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1287,6 +1287,9 @@
   async function addTree() {
     refreshSuggestions();
     const t = { id: uid(), num: Core.nextNum(cur.trees), species: '', notes: '', urgency: '', pines: null, split: false, photos: [], created: Date.now() };
+    // סקר לבנייה: מין העץ של העץ הקודם עובר לעץ החדש (מוצג באפור). בלי לגעת הוא נשאר; בלחיצה בוחרים מין אחר בלי למחוק
+    const prev = cur.trees[cur.trees.length - 1];
+    if (Construction.isConstruction(cur) && prev && (prev.species || '').trim()) { t.species = prev.species; t.speciesAuto = true; }
     cur.trees.push(t);
     selectTree(t.id);
     await saveNow();
@@ -1368,8 +1371,8 @@
       if (n == null) { pineIn.focus(); return; }
       t.pines = n; pineIn.value = n; markPine(); changed();
     };
-    const spIn = h('input', { class: 'in', value: t.species || '', list: 'speciesList', 'aria-label': 'מין עץ',
-      oninput: e => { t.species = e.target.value; markPine(); changed(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); if (e.inputType === 'insertReplacementText' || !e.inputType) askPines(); },
+    const spIn = h('input', { class: 'in', value: t.speciesAuto ? '' : t.species || '', placeholder: t.speciesAuto ? t.species.trim() : '', list: 'speciesList', 'aria-label': 'מין עץ',
+      oninput: e => { t.species = e.target.value; if (t.speciesAuto) { delete t.speciesAuto; spIn.placeholder = ''; } markPine(); changed(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); if (e.inputType === 'insertReplacementText' || !e.inputType) askPines(); },
       onchange: askPines });
     markPine();
     const chipSpecies = Construction.isConstruction(cur)
