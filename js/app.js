@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.21.1';
+  const APP_VERSION = '1.21.2';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -2161,6 +2161,10 @@
     annotateAfter.firstChild.checked = await DB.getKV('annotateAfter', true);
     const inAppCamera = chk('inAppCamera', true, 'מצלמה מהירה בתוך האפליקציה (צילום ברצף). כבוי = אפליקציית המצלמה של המכשיר');
     inAppCamera.firstChild.checked = await DB.getKV('inAppCamera', true);
+    const curOrient = await DB.getKV('orientLock', 'start');
+    const orientSel = h('select', { class: 'in', onchange: async e => { await DB.setKV('orientLock', e.target.value); applyOrientation(); toast('נשמר'); } },
+      [['start', 'נעול בכיוון שבו האפליקציה נפתחה'], ['portrait', 'תמיד לאורך'], ['landscape', 'תמיד לרוחב'], ['any', 'מסתובב עם הטאבלט']]
+        .map(([v, l]) => h('option', { value: v, selected: v === curOrient ? '' : null }, l)));
     const shareFiles = chk('shareFiles', false, 'במקום הורדה, לפתוח את תפריט השיתוף (לשליחה לדרייב, וואטסאפ וכו\')');
     shareFiles.firstChild.checked = await DB.getKV('shareFiles', false);
     const speciesTa = h('textarea', { class: 'in', style: 'min-height:140px' });
@@ -2249,7 +2253,7 @@
             h('button', { class: 'btn', onclick: async () => { await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים'); toast('נשמר'); } }, 'שמור תיקייה'))),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'עבודה בשטח'),
-          inAppCamera, annotateAfter, shareFiles),
+          inAppCamera, annotateAfter, shareFiles, field('כיוון המסך באפליקציה', orientSel)),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'רשימות בחירה'),
           h('div', { class: 'muted small' }, 'שורה לכל פריט. ההערות מתחת לשדה ההערות הן רק מה שכתוב כאן (בלי למידה מהסקרים). למיני העצים האפליקציה מוסיפה גם מינים שכבר כתבת בסקרי בטיחות.'),
@@ -2339,6 +2343,18 @@
   });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { saveNow(); if (cur) Sync.now(); } });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  // כיוון מסך: באנדרואיד האפליקציה המותקנת לא תמיד מצייתת לנעילת הסיבוב של המכשיר, אז נועלים מתוך האפליקציה.
+  // 'start' = הכיוון שבו האפליקציה נפתחה (ברירת מחדל), 'portrait' / 'landscape' קבוע, 'any' = מסתובבת חופשי
+  async function applyOrientation() {
+    const so = screen.orientation;
+    if (!so || !so.lock) return;
+    const mode = await DB.getKV('orientLock', 'start');
+    try {
+      if (mode === 'any') so.unlock();
+      else await so.lock(mode === 'start' ? (so.type.startsWith('portrait') ? 'portrait' : 'landscape') : mode);
+    } catch (_) {} // בדפדפן רגיל (לא אפליקציה מותקנת) אי אפשר לנעול
+  }
+  applyOrientation();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
   // מעבר מ-OneDrive לגוגל דרייב (פעם אחת): מזהי הקבצים של OneDrive לא תקפים בדרייב, אז הסקרים שבטאבלט יעלו מחדש לדרייב.
   // מה שכבר ב-OneDrive נשאר שם ולא נמחק
