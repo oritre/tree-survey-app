@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.23.2';
+  const APP_VERSION = '1.23.3';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -2067,9 +2067,9 @@
     const files = [{ name: base + ' - טבלאות.xlsm', blob: new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }) }];
     const items = Construction.photoSlots(s.trees).map(sl => ({ label: sl.label, id: sl.photo.id }));
     if (!items.length) { toast('אין תמונות שסומנו לדוח, אז נוצר רק האקסל', 4000); return files; }
-    const title = ['סקר עצים לבנייה', s.site, fmtDate(s.date)].filter(Boolean).join(' · ');
-    const pdf = await ReportPrint.photosPdf(title, items, id => photoBlob(s, id), (i, n) => say(`מכין PDF של התמונות… ${i}/${n}`));
-    files.push({ name: base + ' - תמונות.pdf', blob: pdf });
+    const pdf = await ReportPrint.photosPdf(items, id => photoBlob(s, id), (i, n) => say(`מכין PDF של התמונות… ${i}/${n}`));
+    // שם הקובץ לפי ori: "תמונות" ושם הפרויקט (הכתובת של הסקר)
+    files.push({ name: safeName(`תמונות - ${s.site || s.project || 'סקר עצים לבנייה'}`) + '.pdf', blob: pdf });
     return files;
   }
 
