@@ -438,11 +438,17 @@
   }
 
   // ---------- PDF של תמונות בלבד (סקר לבנייה) ----------
-  // items: [{ label, id }] לפי הסדר. 6 תמונות בעמוד (2x3), מעל כל תמונה התווית שלה (מספר העץ או שם התמונה)
-  async function photosPdf(title, items, getPhotoBlob, onProgress) {
-    const M = 28, GAP = 12, HEAD = 26, LAB = 20, COLS = 2, ROWS = 3;
-    const cw = (PAGE_W - 2 * M - GAP) / COLS, rh = (PAGE_H - 2 * M - HEAD) / ROWS, ih = rh - LAB - 8;
+  // כמו "תמונות עצים בניה" בתוכנה במחשב (image_sheets.generate_building_sheet): A4 לרוחב, 6x2 תמונות בעמוד,
+  // מימין לשמאל. מעל כל תמונה מסגרת עם התווית (מספר העץ או שם התמונה), לוגו למעלה משמאל ושורה תחתונה במרכז.
+  // items: [{ label, id }] לפי הסדר
+  async function photosPdf(items, getPhotoBlob, onProgress) {
+    const MM = 72 / 25.4;
+    const W = PAGE_H, H = PAGE_W; // לרוחב
+    const COLS = 6, ROWS = 2, ML = 12, MR = 12, MT = 33, MB = 18, NUMBOX = 8, PAD = 2, LINE = 0.3;
+    const pageWmm = W / MM, pageHmm = H / MM;
+    const cellW = (pageWmm - ML - MR) / COLS, cellH = (pageHmm - MT - MB) / ROWS, imgH = cellH - NUMBOX;
     const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const pt = v => (v * MM).toFixed(2) + 'pt';
     const pics = new Array(items.length);
     let n = 0, next = 0;
     const work = async () => {
@@ -459,25 +465,35 @@
       }
     };
     await Promise.all([work(), work(), work()]);
+    const logo = await new Promise(res => { const im = new Image(); im.onload = () => res(im.naturalHeight / im.naturalWidth); im.onerror = () => res(null); im.src = 'template/build-logo.png'; });
+    const box = (x, y, w, h, extra) => `<div class="pa" style="left:${pt(x)};top:${pt(y)};width:${pt(w)};height:${pt(h)};border:${pt(LINE)} solid #000;${extra || ''}"></div>`;
     const pages = [];
     const per = COLS * ROWS, total = Math.max(1, Math.ceil(items.length / per));
+    const footW = pageWmm * 0.75;
     for (let pg = 0; pg < total; pg++) {
       let cells = '';
-      items.slice(pg * per, pg * per + per).forEach((it, j) => {
-        const c = j % COLS, r = Math.floor(j / COLS);
-        const right = M + c * (cw + GAP), top = M + HEAD + r * rh;
-        const p = pics[pg * per + j];
-        let img = '<div style="font-size:10pt;color:#888">התמונה לא נמצאה</div>';
-        if (p) { const k = Math.min(cw / p.w, ih / p.h); img = `<img src="${p.url}" style="width:${(p.w * k).toFixed(1)}pt;height:${(p.h * k).toFixed(1)}pt">`; }
-        cells += `<div class="pt" style="right:${right}pt;top:${top}pt;width:${cw}pt;height:${LAB}pt;justify-content:center;align-items:center;font-weight:700;font-size:13pt">${esc(it.label)}</div>` +
-          `<div class="pi" style="right:${right}pt;top:${top + LAB + 2}pt;width:${cw}pt;height:${ih}pt">${img}</div>`;
+      items.slice(pg * per, pg * per + per).forEach((it, idx) => {
+        const row = Math.floor(idx / COLS), col = COLS - 1 - (idx % COLS);
+        const x = ML + col * cellW, y = MT + row * cellH;
+        cells += box(x, y, cellW, NUMBOX) +
+          `<div class="pt" style="left:${pt(x)};top:${pt(y)};width:${pt(cellW)};height:${pt(NUMBOX)};justify-content:center;align-items:center;font-size:10pt;padding:0">${esc(it.label)}</div>` +
+          box(x, y + NUMBOX, cellW, imgH);
+        const p = pics[pg * per + idx];
+        if (p) {
+          const bw = cellW - 2 * PAD, bh = imgH - 2 * PAD, k = Math.min(bw / p.w, bh / p.h);
+          const dw = p.w * k, dh = p.h * k;
+          cells += `<img class="pa" src="${p.url}" style="left:${pt(x + PAD + (bw - dw) / 2)};top:${pt(y + NUMBOX + PAD + (bh - dh) / 2)};width:${pt(dw)};height:${pt(dh)}">`;
+        }
       });
-      pages.push(`<div class="pg"><div class="pt" style="right:${M}pt;top:${M - 6}pt;width:${PAGE_W - 2 * M}pt;height:${HEAD - 6}pt;align-items:center;font-size:11pt">` +
-        `<span style="flex:1">${esc(title)}</span><span>עמוד ${pg + 1} מתוך ${total}</span></div>${cells}</div>`);
+      pages.push(`<div class="pg" style="width:${W}pt;height:${H}pt">` +
+        (logo ? `<img class="pa" src="template/build-logo.png" style="left:${pt(ML)};top:${pt(8)};width:${pt(40)};height:${pt(40 * logo)}">` : '') +
+        cells +
+        `<img class="pa" src="template/build-footer.png" style="left:${pt((pageWmm - footW) / 2)};top:${pt(pageHmm - MB + 4)};width:${pt(footW)};height:${pt(footW * 44 / 1474)}">` +
+        '</div>');
     }
     if (shrunk.size > 120) shrunk.clear();
     ensureStyle();
-    return PdfVec.fromHtml(pages, { rootId: 'printRoot', widthPt: PAGE_W });
+    return PdfVec.fromHtml(pages, { rootId: 'printRoot', widthPt: W });
   }
 
   root.ReportPrint = { photosPdf, toPdf, pdfPages, buildPages, preloadFonts, fileTitle, CSS, fontCss, pageToJpeg, makePdf };
