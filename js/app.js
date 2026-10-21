@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.22.0';
+  const APP_VERSION = '1.22.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -337,9 +337,14 @@
   // תמונות שהוצאו מקובץ אקסל ישן (Importer.parse עם photos) -> לעצים של הסקר החדש, לפי מספר העץ (או המין בעץ בלי מספר)
   async function addOldPhotos(s, parsedTrees, oldDate) {
     let n = 0;
+    // כמה עצים עם אותו מספר או אותו מין (בלי מספר): העץ ה-k מהקובץ הוא העץ ה-k בסקר
+    const keyOf = x => x.num ? '#' + x.num : '~' + (x.species || '');
+    const seen = new Map();
     for (const pt of parsedTrees) {
+      const k = keyOf(pt), j = seen.get(k) || 0;
+      seen.set(k, j + 1);
       if (!pt.images || !pt.images.length) continue;
-      const t = s.trees.find(x => pt.num ? x.num === pt.num : (!x.num && x.species === pt.species));
+      const t = s.trees.filter(x => keyOf(x) === k)[j];
       if (!t) continue;
       for (const im of pt.images) {
         const p = await processImage(im.blob);
@@ -1760,11 +1765,34 @@
           Core.ensureReportPhoto(t, old);
           saveSoon(); renderPhotos(); Sync.kick();
         } }, nums.map(n => h('option', { value: n, selected: p.sub === n ? 'selected' : null }, 'עץ ' + n))) : null,
-        noteIn);
+        noteIn,
+        cur.trees.length > 1 ? h('select', { class: 'in move-sel', 'aria-label': 'העבר את התמונה לעץ אחר', onchange: e => { const to = treeById(e.target.value); if (to) movePhoto(t, p, to); } },
+          h('option', { value: '' }, '↔ העבר לעץ אחר…'),
+          cur.trees.filter(x => x !== t).map(x => h('option', { value: x.id }, ['עץ', x.num || '(בלי מספר)', x.species].filter(Boolean).join(' ')))) : null);
     }));
     const hint = h('div', { class: 'muted small', style: 'margin-top:6px' },
       'כל התמונות מגובות בטלגרם. רק המסומנות "בדוח" נכנסות לנספח התמונות.');
     box.replaceChildren(h('div', { class: 'photos' }, items), hint);
+  }
+
+  // העברת תמונה לעץ אחר (למשל אחרי ייבוא סקר ישן שבו תמונה שויכה לעץ הלא נכון).
+  // השם בגוגל דרייב והכיתוב בטלגרם מתעדכנים בסנכרון הבא לפי העץ החדש
+  async function movePhoto(from, p, to) {
+    const key = Core.groupKey(from, p);
+    from.photos = from.photos.filter(x => x !== p);
+    Core.ensureReportPhoto(from, key);
+    p.sub = null;
+    if (Core.splitActive(to)) {
+      const nums = Core.expandNum(to.num);
+      p.sub = nums.find(n => !to.photos.some(x => x.sub === n)) || nums[0];
+    }
+    // נכנסת לדוח רק אם לעץ החדש עוד אין תמונה בדוח (למספר הזה)
+    p.inReport = !to.photos.some(x => x.inReport && Core.groupKey(to, x) === Core.groupKey(to, p));
+    to.photos.push(p);
+    await saveNow();
+    refreshRow(from); refreshRow(to); renderPhotos();
+    Sync.kick(true);
+    toast(`התמונה הועברה לעץ ${to.num || to.species || ''}`.trim());
   }
 
   async function openPhoto(id) {
