@@ -43,12 +43,45 @@
     await Quotes.parse(bytes); // בדיקה שזה באמת מסמך Word
     const up = (await DB.getKV('quoteTemplates', [])) || [];
     const old = up.find(t => t.name === name);
+    // ori: בהעלאת תבנית שואלים לאיזו תיקייה בתוך "הצעות מחיר / <שנה>" נשמרות ההצעות שלה
+    const folder = await askFolder(name, old && old.folder !== undefined ? old.folder : guessFolder(name));
+    if (folder === undefined) return null;
     const id = old ? old.id : 'u-' + Quotes.uid();
     await DB.setKV('qtpl:' + id, bytes);
     delete bytesCache[id];
-    if (!old) up.push({ id, name });
+    if (old) old.folder = folder; else up.push({ id, name, folder });
     await DB.setKV('quoteTemplates', up);
+    tplFolders[id] = folder;
     return name;
+  }
+  // תיקיית הסוג לפי שם התבנית
+  function guessFolder(n) {
+    if (/יציבות|stability/.test(n)) return 'יציבות עצים';
+    if (/חוו?ת[\s-]*דעת/.test(n)) return 'חוות דעת';
+    if (/היתר|בני[יה]|construction/.test(n)) return 'היתר בניה';
+    return null;
+  }
+  // בחירת תיקייה לתבנית. מחזיר שם תיקייה, null = ישר בתיקיית השנה, undefined = ביטול
+  async function askFolder(name, current) {
+    const { askChoice } = U();
+    const known = ['יציבות עצים', 'היתר בניה', 'חוות דעת'];
+    const others = [...new Set(((await DB.getKV('quoteTemplates', [])) || []).map(t => t.folder).filter(f => f && !known.includes(f)))];
+    if (current && !known.includes(current) && !others.includes(current)) others.push(current);
+    const year = U().today().slice(0, 4);
+    const v = await askChoice('לאיזו תיקייה לשמור?', `הצעות מהתבנית "${name}" יישמרו בדרייב ב: הצעות מחיר / <שנת ההצעה, למשל ${year}> / התיקייה שתבחר. תיקייה שלא קיימת תיווצר.`, [
+      ...[...known, ...others].map(f => ({ value: 'f:' + f, label: f, primary: f === current })),
+      { value: 'new', label: 'תיקייה חדשה…' },
+      { value: 'year', label: 'ישר בתיקיית השנה', primary: current === null },
+      { value: '', label: 'ביטול' }]);
+    if (!v) return undefined;
+    if (v === 'year') return null;
+    if (v === 'new') { const n = (prompt('שם התיקייה החדשה') || '').trim(); return n ? n.replace(/[\\/]/g, ' ') : undefined; }
+    return v.slice(2);
+  }
+  // תיקיית הסוג של כל תבנית שהועלתה (מזהה -> שם תיקייה)
+  let tplFolders = {};
+  async function loadTplFolders() {
+    tplFolders = Object.fromEntries(((await DB.getKV('quoteTemplates', [])) || []).filter(t => t.folder !== undefined).map(t => [t.id, t.folder]));
   }
 
   // כל סעיפי התמחיר שמופיעים בתבניות ובהצעות קודמות, לבחירה מהירה
@@ -69,6 +102,7 @@
 
   // ---------- ניווט ----------
   async function render(hash) {
+    await loadTplFolders();
     if (hash.startsWith('#/quotes-search')) return renderSearch();
     const m = /^#\/quotes\/(.+)$/.exec(hash);
     if (m) {
@@ -134,14 +168,22 @@
     const list = h('div', { class: 'stack' });
     const input = h('input', { type: 'file', accept: '.dotx,.docx', multiple: true, class: 'hidden', onchange: async e => {
       for (const f of e.target.files) {
-        try { toast('נוספה התבנית ' + await uploadTemplate(f)); } catch (err) { toast(f.name + ': ' + err.message, 5000); }
+        try { const n = await uploadTemplate(f); if (n) toast('נוספה התבנית ' + n); } catch (err) { toast(f.name + ': ' + err.message, 5000); }
       }
       libCache = null; input.value = ''; draw();
     } });
     const draw = async () => {
       const tpls = await templates();
       list.replaceChildren(...tpls.map(t => h('div', { class: 'row', style: 'justify-content:space-between' },
-        h('span', {}, t.name, t.uploaded ? h('span', { class: 'badge', style: 'margin-inline-start:6px' }, 'הועלתה') : null),
+        h('span', { style: 'flex:1' }, t.name, t.uploaded ? h('span', { class: 'badge', style: 'margin-inline-start:6px' }, 'הועלתה') : null,
+          h('div', { class: 'muted small' }, '📁 ' + (tplFolder(t.id, t.name) || 'ישר בתיקיית השנה'))),
+        t.uploaded ? h('button', { class: 'btn', onclick: async () => {
+          const f = await askFolder(t.name, tplFolder(t.id, t.name));
+          if (f === undefined) return;
+          const up = (await DB.getKV('quoteTemplates', [])) || [];
+          const x = up.find(y => y.id === t.id); if (x) x.folder = f;
+          await DB.setKV('quoteTemplates', up); tplFolders[t.id] = f; draw();
+        } }, 'תיקייה') : null,
         t.uploaded ? h('button', { class: 'btn danger', onclick: async () => {
           if (!confirm(`למחוק את התבנית "${t.name}"? הצעות שנעשו ממנה לא יוכלו להפיק קובץ עד שתעלה אותה שוב.`)) return;
           await DB.setKV('quoteTemplates', ((await DB.getKV('quoteTemplates', [])) || []).filter(x => x.id !== t.id));
@@ -349,11 +391,11 @@
   // תיקיית הסוג לפי התבנית: יציבות עצים / היתר בניה (תבנית אחרת: ישר בתוך תיקיית השנה)
   function typeFolder(q) {
     if (q.typeFolder !== undefined) return q.typeFolder; // הצעה שנפתחה מקובץ Word בדרייב: התיקייה שהיא הייתה בה
-    const n = (q.tplName || '') + ' ' + (q.tpl || '');
-    if (/יציבות|stability/.test(n)) return 'יציבות עצים';
-    if (/היתר|בני[יה]|construction/.test(n)) return 'היתר בניה';
-    return null;
+    return tplFolder(q.tpl, q.tplName);
   }
+  // התיקייה שנבחרה לתבנית כשהועלתה, אחרת לפי השם
+  const tplFolder = (id, name) => tplFolders[id] !== undefined ? tplFolders[id] : guessFolder((name || '') + ' ' + (id || ''));
+
   // הנתיב בדרייב: א עצים / הצעות מחיר / <שנת ההצעה> / <יציבות עצים או היתר בניה>. תיקיות חסרות נוצרות
   async function drivePath(q) {
     const base = String((await DB.getKV('quoteFolder', DEFAULT_FOLDER)) || DEFAULT_FOLDER).split('/').map(s => s.trim()).filter(Boolean);
@@ -561,7 +603,9 @@
     await DB.setKV('qtpl:' + id, bytes); delete bytesCache[id];
     const stem = f.name.replace(/\.docx$/i, '');
     const path = f.path || [];
-    const type = path.find(x => x === 'יציבות עצים' || x === 'היתר בניה') || null;
+    // התיקייה שאחרי תיקיית השנה (יציבות עצים, היתר בניה, חוות דעת...)
+    const yi = path.findIndex(x => /^\d{4}$/.test(x));
+    const type = (yi >= 0 ? path[yi + 1] : path.find(x => ['יציבות עצים', 'היתר בניה', 'חוות דעת'].includes(x))) || null;
     const q = Quotes.newQuote({ id, name: 'קובץ Word מהדרייב' + (type ? ' (' + type + ')' : '') }, blocks, today());
     q.name = stem; q.typeFolder = type; q.fromDrive = { id: f.id, name: f.name };
     // התאריך שכתוב במסמך
