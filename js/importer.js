@@ -79,6 +79,8 @@
     if (doc) for (const r of doc.getElementsByTagName('Relationship')) out[r.getAttribute('Id')] = resolve(path, r.getAttribute('Target'));
     return out;
   }
+  // תמונות העצים: בדרך כלל jpg, לפעמים png/jfif. לוגו וחותמת (png/tiff) נמצאים מחוץ לנספח ומסוננים לפי העמודה
+  const PHOTO_EXT = /\.(jpe?g|jfif|png|gif|webp|bmp)$/i;
   // כל התמונות בגיליון: [{col, row, path}] — תמונות בתוך תא (Excel 365) ותמונות צפות (עוגן לפי התא העליון-ימני)
   async function sheetImages(zip, sh) {
     const out = [];
@@ -106,60 +108,124 @@
     }
     const srels = await relsOf(zip, sh.path);
     const XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing';
+    const colW = colWidths(sh.doc);
+    const num = (el, tag) => { const e = el && el.getElementsByTagNameNS(XDR, tag)[0]; return e ? +e.textContent : 0; };
     for (const d of sh.doc.getElementsByTagNameNS(MAIN, 'drawing')) {
       const dpath = srels[d.getAttribute('r:id') || d.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id')];
       const ddoc = dpath && await xml(zip, dpath);
       if (!ddoc) continue;
       const drels = await relsOf(zip, dpath);
       for (const a of [...ddoc.getElementsByTagNameNS(XDR, 'twoCellAnchor'), ...ddoc.getElementsByTagNameNS(XDR, 'oneCellAnchor')]) {
-        const from = a.getElementsByTagNameNS(XDR, 'from')[0];
+        const from = a.getElementsByTagNameNS(XDR, 'from')[0], to = a.getElementsByTagNameNS(XDR, 'to')[0];
         const blip = [...a.getElementsByTagName('*')].find(e => e.localName === 'blip');
         if (!from || !blip) continue;
         const id = blip.getAttribute('r:embed') || blip.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed');
         const path = drels[id];
-        if (!path || !/\.jpe?g$/i.test(path)) continue; // לוגו, חותמת וכו' הם png/tiff; תמונות העצים jpg
-        out.push({ col: +from.getElementsByTagNameNS(XDR, 'col')[0].textContent + 1, row: +from.getElementsByTagNameNS(XDR, 'row')[0].textContent + 1, path });
+        if (!path || !PHOTO_EXT.test(path)) continue;
+        // תמונה צפה שהוזזה קצת ונגעה בעמודה הסמוכה: העמודה שבה רוב התמונה (ולא העמודה שבה היא מתחילה)
+        let col = num(from, 'col') + 1;
+        const c2 = to ? num(to, 'col') + 1 : 0;
+        if (c2 > col) {
+          let best = colW(col) - num(from, 'colOff'), bestCol = col;
+          for (let c = col + 1; c < c2; c++) if (colW(c) > best) { best = colW(c); bestCol = c; }
+          if (num(to, 'colOff') > best) bestCol = c2;
+          col = bestCol;
+        }
+        out.push({ col, row: num(from, 'row') + 1, path, floating: true });
       }
     }
     return out;
   }
-  // לכל תמונה: העץ לפי התווית שמעליה באותה עמודה (מספר העץ, או המין בעץ בלי מספר)
+  // רוחב כל עמודה ב-EMU (לפי <cols> בגיליון), כדי לדעת באיזו עמודה נמצאת רוב התמונה
+  function colWidths(doc) {
+    const fmt = doc.getElementsByTagNameNS(MAIN, 'sheetFormatPr')[0];
+    const chars = fmt && fmt.getAttribute('defaultColWidth') ? +fmt.getAttribute('defaultColWidth') : (fmt && fmt.getAttribute('baseColWidth') ? +fmt.getAttribute('baseColWidth') + 0.71 : 8.43);
+    const emu = w => Math.round(w * 7 + 5) * 9525;
+    const ranges = [...doc.getElementsByTagNameNS(MAIN, 'col')].map(c => [+c.getAttribute('min'), +c.getAttribute('max'), +c.getAttribute('width') || chars]);
+    return c => { const r = ranges.find(([a, b]) => c >= a && c <= b); return emu(r ? r[2] : chars); };
+  }
+  // לכל תמונה: העץ לפי התווית שמעליה באותה עמודה (מספר העץ, או המין בעץ בלי מספר).
+  // התבניות שונות בין השנים (התווית של העמוד השני בשורה 29, 32 וכו'), אז מחפשים את התווית מעל כל תמונה ולא לפי שורות קבועות:
+  // עולים מהתמונה ומדלגים על תאים ריקים, על תאי התמונות (#VALUE!), על נתיבי C:\...\Pictures ועל מספר התמונה שמעליהם.
+  // כמה עצים עם אותה תווית (למשל ארבעה "אורנים" בלי מספר): התווית ה-k בסדר הנספח שייכת לעץ ה-k עם התווית הזו
   async function attachImages(zip, sh, trees, warnings) {
     let imgs;
     try { imgs = await sheetImages(zip, sh); } catch (e) { warnings.push('התמונות בקובץ לא נקראו'); return; }
-    const byKey = new Map();
+    const add = (m, k, t) => { if (!m.has(k)) m.set(k, []); if (!m.get(k).includes(t)) m.get(k).push(t); };
+    const exact = new Map(), part = new Map(), bySp = new Map();
     for (const t of trees) {
-      if (t.num) for (const n of (root.Core ? Core.expandNum(t.num) : [t.num])) if (!byKey.has(String(n))) byKey.set(String(n), t);
-      if (t.num && !byKey.has(t.num)) byKey.set(t.num, t);
-      if (!t.num && t.species && !byKey.has(t.species)) byKey.set(t.species, t);
+      if (t.num) {
+        add(exact, t.num, t); add(exact, Core.normNum(t.num), t);
+        for (const n of Core.expandNum(t.num) || []) add(part, String(n), t);
+      } else if (t.species) add(bySp, t.species, t);
     }
-    let lost = 0;
-    const seen = new Set();
-    imgs.sort((a, b) => a.row - b.row || b.col - a.col);
-    // בתבנית (הנוכחית ושל האפליקציה): התווית של כל משבצת בשורות 10/32/62/85/116/140, בעמודות K עד V.
-    // בתבניות אחרות: התא הראשון מעל התמונה שיש בו מספר עץ או מין
-    const LABEL_ROWS = [10, 32, 62, 85, 116, 140];
-    const std = std0 => im => im.col >= 11 && im.col <= 22 && im.row > 10 && std0;
-    const isStd = std(sh.cells.has('K9') || sh.cells.has('K10'));
-    for (const im of imgs) {
-      let tree = null, sub = null;
-      const rows = isStd(im) ? [LABEL_ROWS.filter(r => r < im.row).pop()] : Array.from({ length: Math.min(8, im.row - 1) }, (_, i) => im.row - 1 - i);
-      for (const r of rows) {
-        if (tree) break;
-        const v = sh.cells.get(colName(im.col) + r);
-        if (v == null || v === '' || v === 0 || v === false) continue;
+    const lookup = k => exact.get(k) || exact.get(Core.normNum(k)) || part.get(k) || bySp.get(k) || null;
+    const cell = (c, r) => sh.cells.get(colName(c) + r);
+    const blank = v => v == null || v === '' || v === 0 || v === false;
+    const PATH = /\\|\.jpe?g$/i;
+    const appendix = [...sh.cells.values()].some(v => typeof v === 'string' && /נספח תמונות/.test(v));
+    const labelOf = (col, row) => {
+      let sawPath = false, sawNum = false;
+      for (let r = row - 1; r >= Math.max(1, row - 10); r--) {
+        const v = cell(col, r);
+        if (blank(v)) continue;
         const k = numText(v);
-        if (byKey.has(k)) { tree = byKey.get(k); sub = /^\d+$/.test(k) && tree.num !== k ? +k : null; }
+        if (/^#/.test(k)) continue; // תא של תמונה בתוך תא
+        if (PATH.test(k)) { sawPath = true; continue; }
+        if (sawPath && !sawNum && /^\d+$/.test(k)) { sawNum = true; continue; } // מספר התמונה, מתחת לתווית
+        return { row: r, key: k };
       }
-      if (!tree) { lost++; continue; }
-      const key = tree.num + '|' + im.path;
+      return null;
+    };
+    // סדר התווית בנספח: לפי מספר התמונה שמתחתיה (בתבנית הנוכחית, כי העמודות המוסתרות O:V ממשיכות אחרי העמוד השני), אחרת לפי שורה ועמודה
+    const orderOf = (col, row) => {
+      for (const r of [row + 1, row + 2]) { const v = cell(col, r); if (typeof v === 'number' && v > 0) return v; }
+      return 1e6 + row * 100 + col;
+    };
+    let lost = 0;
+    const placed = [];
+    for (const im of imgs) {
+      // מחוץ לנספח (לוגו, חותמת, חתימה): רק jpg נחשב תמונת עץ, כמו קודם
+      if (appendix && im.col < 11) continue;
+      if (!appendix && !/\.jpe?g$/i.test(im.path)) continue;
+      const lb = labelOf(im.col, im.row);
+      if (!lb || !lookup(lb.key)) { lost++; continue; }
+      placed.push(Object.assign({}, im, { imgRow: im.row, row: lb.row, key: lb.key }));
+    }
+    // כל התוויות בשורות התוויות שנמצאו (גם בלי תמונה), כדי לספור נכון את הסדר של תוויות כפולות
+    const labelRows = [...new Set(placed.map(p => p.row))];
+    const cols = [...new Set(placed.map(p => p.col))];
+    const allCols = appendix ? Array.from({ length: 12 }, (_, i) => 11 + i) : cols;
+    const labels = [];
+    for (const r of labelRows) for (const c of allCols) {
+      const v = cell(c, r);
+      if (blank(v)) continue;
+      const k = numText(v);
+      if (lookup(k)) labels.push({ row: r, col: c, key: k, order: orderOf(c, r) });
+    }
+    labels.sort((a, b) => a.order - b.order);
+    const owner = new Map(), count = new Map();
+    for (const l of labels) {
+      const list = lookup(l.key), j = count.get(l.key) || 0;
+      count.set(l.key, j + 1);
+      owner.set(l.row + ':' + l.col, list[Math.min(j, list.length - 1)]);
+    }
+    placed.sort((a, b) => orderOf(a.col, a.row) - orderOf(b.col, b.row) || a.imgRow - b.imgRow);
+    const seen = new Set();
+    for (const im of placed) {
+      const tree = owner.get(im.row + ':' + im.col) || lookup(im.key)[0];
+      const sub = /^\d+$/.test(im.key) && Core.normNum(tree.num) !== im.key ? +im.key : null;
+      const key = trees.indexOf(tree) + '|' + im.path;
       if (seen.has(key)) continue; // אותה תמונה פעמיים (תא התמונה ותא ההדפסה)
       seen.add(key);
       const f = zip.file(im.path);
       if (!f) continue;
-      const type = /\.png$/i.test(im.path) ? 'image/png' : 'image/jpeg';
+      const ext = (/\.(\w+)$/.exec(im.path) || [])[1].toLowerCase();
+      const type = { png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp' }[ext] || 'image/jpeg';
       (tree.images || (tree.images = [])).push({ blob: new Blob([await f.async('uint8array')], { type }), sub });
     }
+    // עץ עם טווח (4--6) שהתמונות שלו בנספח לפי מספר (4, 5, 6): כמו "פצל" באפליקציה, כדי שכל תמונה תישאר עם המספר שלה
+    for (const t of trees) if (!t.split && t.images && new Set(t.images.map(i => i.sub).filter(x => x != null)).size > 1) t.split = true;
     if (lost) warnings.push(`${lost} תמונות בלי עץ מתאים`);
   }
 
