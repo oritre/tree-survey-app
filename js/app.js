@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.23.0';
+  const APP_VERSION = '1.23.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1945,35 +1945,44 @@
             toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה לגוגל דרייב…', 3000);
           } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'))),
       h('div', { class: 'card stack' },
-        h('h2', { style: 'margin:0;font-size:20px' }, 'קובץ אקסל'),
-        h('div', { class: 'muted small' }, 'התבנית "סקר עצים להיתר בניה" עם כל העצים וההגדרות, והנוסחאות שלה מחשבות את השאר.'),
+        h('h2', { style: 'margin:0;font-size:20px' }, 'הורדת קבצים'),
+        h('div', { class: 'muted small' }, 'התבנית "סקר עצים להיתר בניה" עם כל העצים וההגדרות, והנוסחאות שלה מחשבות את השאר. אפשר לבחור באחת משתי הדרכים:'),
+        // אפשרות 1: אקסל אחד עם התמונות בנספח
+        h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
+          h('b', {}, '1. אקסל עם התמונות'),
+          h('div', { class: 'muted small' }, 'קובץ אחד: הטבלאות, ובנספח התמונות שסומנו לדוח ליד מספר העץ.'),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
+              await saveNow();
+              status.textContent = 'מכין את האקסל…';
+              const withPhotos = Object.assign({}, cur, { cset: Object.assign({}, Construction.settingsOf(cur), { embedPhotos: true }) });
+              const r = await buildReport(withPhotos);
+              await deliver(r.blob, r.name);
+              status.textContent = '✓ האקסל עם התמונות הורד.';
+              if (odOn) { status.textContent += ' מעלה לגוגל דרייב…'; await Sync.uploadReport(cur); status.textContent = '✓ האקסל עם התמונות הורד ונשמר גם בגוגל דרייב.'; }
+            }) }, 'הורד אקסל עם התמונות')),
+          status),
+        // אפשרות 2: אקסל של הטבלאות + PDF של התמונות
+        h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
+          h('b', {}, '2. אקסל של הטבלאות + PDF של התמונות'),
+          h('div', { class: 'muted small' }, 'שני קבצים: האקסל בלי התמונות, ו-PDF של התמונות שסומנו לדוח (6 בעמוד, עם מספר העץ מעל כל תמונה).'),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
+              await saveNow();
+              const files = await buildSplitFiles(cur, m => { splitStatus.textContent = m; });
+              for (const f of files) await deliver(f.blob, f.name);
+              splitStatus.textContent = '✓ שני הקבצים הורדו.';
+            }, splitStatus) }, 'הורד אקסל טבלאות + PDF תמונות'),
+            h('button', { class: 'btn big', onclick: e => busy(e.currentTarget, async () => {
+              if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
+              await saveNow();
+              const files = await buildSplitFiles(cur, m => { splitStatus.textContent = m; });
+              for (const f of files) { splitStatus.textContent = `מעלה לגוגל דרייב: ${f.name}…`; await Sync.uploadFile(cur, f.name, f.blob); }
+              splitStatus.textContent = '✓ נשמרו בגוגל דרייב, בתיקיית הפרויקט: ' + files.map(f => f.name).join(' , ');
+            }, splitStatus) }, 'שמור את שניהם בגוגל דרייב')),
+          splitStatus),
         h('div', { class: 'row' },
-          h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
-            await saveNow();
-            const r = await buildReport(cur);
-            await deliver(r.blob, r.name);
-            status.textContent = '✓ האקסל הורד.';
-            if (odOn) { status.textContent += ' מעלה לגוגל דרייב…'; await Sync.uploadReport(cur); status.textContent = '✓ האקסל הורד ונשמר גם בגוגל דרייב.'; }
-          }) }, 'הורד אקסל'),
-          h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
-        status),
-      h('div', { class: 'card stack' },
-        h('h2', { style: 'margin:0;font-size:20px' }, 'טבלאות ותמונות בנפרד'),
-        h('div', { class: 'muted small' }, 'שני קבצים: אקסל של הטבלאות בלי התמונות, ו-PDF של התמונות שסומנו לדוח (6 בעמוד, עם מספר העץ מעל כל תמונה).'),
-        h('div', { class: 'row' },
-          h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
-            if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
-            await saveNow();
-            const files = await buildSplitFiles(cur, m => { splitStatus.textContent = m; });
-            for (const f of files) { splitStatus.textContent = `מעלה לגוגל דרייב: ${f.name}…`; await Sync.uploadFile(cur, f.name, f.blob); }
-            splitStatus.textContent = '✓ נשמרו בגוגל דרייב, בתיקיית הפרויקט: ' + files.map(f => f.name).join(' , ');
-          }, splitStatus) }, 'שמור בגוגל דרייב'),
-          h('button', { class: 'btn big', onclick: e => busy(e.currentTarget, async () => {
-            await saveNow();
-            const files = await buildSplitFiles(cur, m => { splitStatus.textContent = m; });
-            for (const f of files) await deliver(f.blob, f.name);
-            splitStatus.textContent = '✓ שני הקבצים הורדו.';
-          }, splitStatus) }, 'הורד את שניהם')), splitStatus),
+          h('button', { class: 'btn', onclick: () => exportZip(status) }, 'כל התמונות בקובץ ZIP'))),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'שכבת GIS'),
         h('div', { class: 'muted small' }, `${cur.trees.filter(t => t.lat != null).length} עצים עם נ"צ.`),
