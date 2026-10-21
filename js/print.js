@@ -437,5 +437,48 @@
     return (place.name ? `${survey.code ? survey.code + ' ' : ''}${place.name}` : 'סקר בטיחות עצים').replace(/[\\/:*?"<>|]+/g, ' ');
   }
 
-  root.ReportPrint = { toPdf, pdfPages, buildPages, preloadFonts, fileTitle, CSS, fontCss, pageToJpeg, makePdf };
+  // ---------- PDF של תמונות בלבד (סקר לבנייה) ----------
+  // items: [{ label, id }] לפי הסדר. 6 תמונות בעמוד (2x3), מעל כל תמונה התווית שלה (מספר העץ או שם התמונה)
+  async function photosPdf(title, items, getPhotoBlob, onProgress) {
+    const M = 28, GAP = 12, HEAD = 26, LAB = 20, COLS = 2, ROWS = 3;
+    const cw = (PAGE_W - 2 * M - GAP) / COLS, rh = (PAGE_H - 2 * M - HEAD) / ROWS, ih = rh - LAB - 8;
+    const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const pics = new Array(items.length);
+    let n = 0, next = 0;
+    const work = async () => {
+      while (next < items.length) {
+        const i = next++;
+        const b = await getPhotoBlob(items[i].id);
+        if (b) {
+          const key = 'pp:' + items[i].id + ':' + b.size;
+          if (!shrunk.has(key)) shrunk.set(key, shrink(b, 1100).then(async sb => ({ url: await blobToDataUrl(sb), bmp: await createImageBitmap(sb) })));
+          const r = await shrunk.get(key);
+          pics[i] = { url: r.url, w: r.bmp.width, h: r.bmp.height };
+        }
+        if (onProgress) onProgress(++n, items.length);
+      }
+    };
+    await Promise.all([work(), work(), work()]);
+    const pages = [];
+    const per = COLS * ROWS, total = Math.max(1, Math.ceil(items.length / per));
+    for (let pg = 0; pg < total; pg++) {
+      let cells = '';
+      items.slice(pg * per, pg * per + per).forEach((it, j) => {
+        const c = j % COLS, r = Math.floor(j / COLS);
+        const right = M + c * (cw + GAP), top = M + HEAD + r * rh;
+        const p = pics[pg * per + j];
+        let img = '<div style="font-size:10pt;color:#888">התמונה לא נמצאה</div>';
+        if (p) { const k = Math.min(cw / p.w, ih / p.h); img = `<img src="${p.url}" style="width:${(p.w * k).toFixed(1)}pt;height:${(p.h * k).toFixed(1)}pt">`; }
+        cells += `<div class="pt" style="right:${right}pt;top:${top}pt;width:${cw}pt;height:${LAB}pt;justify-content:center;align-items:center;font-weight:700;font-size:13pt">${esc(it.label)}</div>` +
+          `<div class="pi" style="right:${right}pt;top:${top + LAB + 2}pt;width:${cw}pt;height:${ih}pt">${img}</div>`;
+      });
+      pages.push(`<div class="pg"><div class="pt" style="right:${M}pt;top:${M - 6}pt;width:${PAGE_W - 2 * M}pt;height:${HEAD - 6}pt;align-items:center;font-size:11pt">` +
+        `<span style="flex:1">${esc(title)}</span><span>עמוד ${pg + 1} מתוך ${total}</span></div>${cells}</div>`);
+    }
+    if (shrunk.size > 120) shrunk.clear();
+    ensureStyle();
+    return PdfVec.fromHtml(pages, { rootId: 'printRoot', widthPt: PAGE_W });
+  }
+
+  root.ReportPrint = { photosPdf, toPdf, pdfPages, buildPages, preloadFonts, fileTitle, CSS, fontCss, pageToJpeg, makePdf };
 })(self);
