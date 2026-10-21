@@ -305,7 +305,8 @@
       const [found, tree] = await Promise.all([
         OD._list(`(name contains ${t} or fullText contains ${t}) and (${types}) and trashed = false`, { pageSize: rootId ? '1000' : '150', orderBy: 'modifiedTime desc', fields: 'nextPageToken,files(id,name,parents,modifiedTime,mimeType,size)' }, 1),
         rootId ? OD.folderTree(rootId) : null]);
-      let files = found;
+      // קובצי "מעקב ביקורות" (טבלת המעקב והגיבויים שלה) הם לא סקרים
+      let files = found.filter(f => !/מעקב\s*ביקור/.test(f.name || ''));
       if (tree) files = files.filter(f => (f.parents || []).some(p => tree.has(p)));
       return files.slice(0, 60).map(shape);
     },
