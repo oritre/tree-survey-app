@@ -142,6 +142,11 @@
 
   // בתיקיית הדוחות: תיקייה לכל פרויקט, וכל קבצי הסקרים ישירות בתוכה (בלי תיקייה לכל סקר)
   async function reportFolder(s) {
+    // התיקייה שנשמרה בסקר: בודקים פעם אחת בכל הפעלה שלא הועברה לפח (אחרת הקבצים היו נשמרים בתוך תיקייה בפח)
+    if (s.odReportDir && !OD._verified.has(s.odReportDir)) {
+      const j = await OD.api('GET', `/files/${s.odReportDir}?fields=id,trashed&supportsAllDrives=true`).catch(() => null);
+      if (j && !j.trashed) OD._verified.add(s.odReportDir); else s.odReportDir = null;
+    }
     if (!s.odReportDir) {
       s.odReportDir = await OD.folder(await reportRoot(), s.project || 'ללא פרויקט');
       await DB.putSurvey(s, false);
@@ -495,7 +500,10 @@
     async uploadReport(s) { await syncFolders(s); await uploadReport(s, { pdf: false }); },
     async uploadPdf(s, pdf) { await syncFolders(s); await uploadPdf(s, pdf); },
     // קובץ נוסף לתיקיית הדוחות (למשל טבלאות ותמונות בנפרד בסקר לבנייה)
-    async uploadFile(s, name, blob) { await syncFolders(s); await putReportFile(s, name, blob); log('ok', name + ' נשמר בגוגל דרייב', s); await DB.putSurvey(s, false); },
+    async uploadFile(s, name, blob) {
+      await syncFolders(s); await putReportFile(s, name, blob); log('ok', name + ' נשמר בגוגל דרייב', s); await DB.putSurvey(s, false);
+      return { folderId: await reportFolder(s), path: [(await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים', s.project || 'ללא פרויקט'].join(' / ') };
+    },
     cloudIndex, allInCloud, freeLocal, log, hashSurvey, loadSurvey,
     // הגדרות הטלגרם השתנו בטאבלט: יישמרו בענן בגיבוי הבא
     settingsChanged() { settingsSynced = false; DB.setKV('tgUpdated', Date.now()).then(() => schedule(0)); },

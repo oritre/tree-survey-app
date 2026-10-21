@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.23.1';
+  const APP_VERSION = '1.23.2';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1977,8 +1977,13 @@
               if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
               await saveNow();
               const files = await buildSplitFiles(cur, m => { splitStatus.textContent = m; });
-              for (const f of files) { splitStatus.textContent = `מעלה לגוגל דרייב: ${f.name}…`; await Sync.uploadFile(cur, f.name, f.blob); }
-              splitStatus.textContent = '✓ נשמרו בגוגל דרייב, בתיקיית הפרויקט: ' + files.map(f => f.name).join(' , ');
+              let where = null;
+              for (const f of files) { splitStatus.textContent = `מעלה לגוגל דרייב: ${f.name}…`; where = await Sync.uploadFile(cur, f.name, f.blob); }
+              // התיקייה המדויקת ולינק אליה, כדי שלא יצטרכו לחפש
+              splitStatus.replaceChildren(
+                h('div', {}, `✓ נשמרו בגוגל דרייב בתיקייה "${where.path}":`),
+                h('ul', { style: 'margin:4px 0' }, files.map(f => h('li', {}, f.name))),
+                h('a', { href: 'https://drive.google.com/drive/folders/' + where.folderId, target: '_blank', rel: 'noopener', class: 'btn' }, 'פתח את התיקייה בגוגל דרייב'));
             }, splitStatus) }, 'שמור את שניהם בגוגל דרייב')),
           splitStatus),
         h('div', { class: 'row' },
