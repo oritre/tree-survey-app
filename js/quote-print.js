@@ -47,7 +47,9 @@
         const path = 'word/' + target.replace(/^\.?\//, '');
         if (!ctx.media[path] && zip.file(path)) {
           const ext = path.split('.').pop().toLowerCase();
-          const blob = new Blob([await zip.file(path).async('uint8array')], { type: ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : 'image/jpeg' });
+          const type = { png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', svg: 'image/svg+xml', jpg: 'image/jpeg', jpeg: 'image/jpeg' }[ext];
+          if (!type) { (ctx.unsupported = ctx.unsupported || new Set()).add(ext); continue; } // EMF / WMF: הדפדפן לא יודע לצייר
+          const blob = new Blob([await zip.file(path).async('uint8array')], { type });
           ctx.media[path] = await blobToDataUrl(blob);
         }
         map[id] = ctx.media[path];
@@ -64,8 +66,8 @@
       header: +(attr(s, 'pgMar', 'header') || 708) / TW, footer: +(attr(s, 'pgMar', 'footer') || 708) / TW,
     };
     const docRels = await read('word/_rels/document.xml.rels');
-    const part = type => {
-      const id = (new RegExp(`<w:${type}Reference w:type="default" r:id="([^"]+)"`).exec(s) || [])[1];
+    const part = (type, kind) => {
+      const id = (new RegExp(`<w:${type}Reference w:type="${kind || 'default'}" r:id="([^"]+)"`).exec(s) || [])[1];
       const t = id && (new RegExp(`Id="${id}"[^>]*Target="([^"]+)"|Target="([^"]+)"[^>]*Id="${id}"`).exec(docRels) || []);
       return t ? 'word/' + (t[1] || t[2]) : null;
     };
@@ -75,6 +77,14 @@
     ctx.docRels = await ctx.rels('word/document.xml');
     ctx.headerRels = ctx.headerPart ? await ctx.rels(ctx.headerPart) : {};
     ctx.footerRels = ctx.footerPart ? await ctx.rels(ctx.footerPart) : {};
+    // כותרת שונה לעמוד הראשון
+    if (/<w:titlePg\/>|<w:titlePg w:val="(1|true)"\/>/.test(s)) {
+      const fh = part('header', 'first'), ff = part('footer', 'first');
+      ctx.first = {
+        headerXml: fh ? await read(fh) : '', headerRels: fh ? await ctx.rels(fh) : {},
+        footerXml: ff ? await read(ff) : '', footerRels: ff ? await ctx.rels(ff) : {},
+      };
+    }
     return ctx;
   }
 
@@ -119,6 +129,8 @@
   // תוכן הפסקה: ריצות טקסט ותמונות
   function paraRuns(xml, p, rels) {
     const out = [], anchors = [];
+    // תוכן חלופי (mc:Fallback) הוא עותק ישן של אותה תמונה
+    xml = xml.replace(/<mc:Fallback>[\s\S]*?<\/mc:Fallback>/g, '');
     let inField = 0, fieldShow = true;
     for (const m of xml.matchAll(/<w:r\b[^>]*>([\s\S]*?)<\/w:r>/g)) {
       const body = m[1], rpr = rPrOf(body);
@@ -132,7 +144,17 @@
       const u = attr(rpr, 'u', 'val'); const color = attr(rpr, 'color', 'val');
       const style = `font-size:${sz / 2}pt;${b ? 'font-weight:700;' : ''}${u && u !== 'none' ? 'text-decoration:underline;' : ''}${color && color !== 'auto' ? `color:#${color};` : ''}`;
       let txt = '';
-      for (const t of body.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<w:tab\/>|<w:br\/>|<w:drawing>([\s\S]*?)<\/w:drawing>/g)) {
+      for (const t of body.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<w:tab\/>|<w:br\/>|<w:drawing>([\s\S]*?)<\/w:drawing>|<w:pict>([\s\S]*?)<\/w:pict>/g)) {
+        if (t[0].startsWith('<w:pict')) {
+          // תמונה בפורמט הישן של וורד (VML)
+          const d = t[3], id = /<v:imagedata\b[^>]*r:id="([^"]+)"/.exec(d), st = (/<v:shape\b[^>]*style="([^"]*)"/.exec(d) || [])[1] || '';
+          if (!id || !rels[id[1]]) continue;
+          const num = k => { const m = new RegExp(`(?:^|;)\\s*${k}:\\s*([\\d.]+)(pt|in|cm|mm|px)?`).exec(st); if (!m) return null; return +m[1] * ({ in: 72, cm: 28.35, mm: 2.835, px: 0.75 }[m[2]] || 1); };
+          const w = num('width'), hh = num('height');
+          if (txt) { out.push(`<span style="${style}">${esc(txt)}</span>`); txt = ''; }
+          out.push(`<img src="${rels[id[1]]}" style="${w ? `width:${w}pt;` : ''}${hh ? `height:${hh}pt;` : ''}vertical-align:bottom" />`);
+          continue;
+        }
         if (t[0].startsWith('<w:tab')) txt += '  ';
         else if (t[0].startsWith('<w:br')) txt += '\n';
         else if (t[0].startsWith('<w:drawing')) {
@@ -143,7 +165,7 @@
             const ph = /<wp:positionH relativeFrom="(\w+)">\s*(?:<wp:posOffset>(-?\d+)<\/wp:posOffset>|<wp:align>(\w+)<\/wp:align>)/.exec(d) || [];
             const pv = /<wp:positionV relativeFrom="(\w+)">\s*(?:<wp:posOffset>(-?\d+)<\/wp:posOffset>|<wp:align>(\w+)<\/wp:align>)/.exec(d) || [];
             anchors.push({ src: rels[emb[1]], w, h: hh, hRel: ph[1], hOff: ph[2] != null ? +ph[2] / EMU : null, hAlign: ph[3], vRel: pv[1], vOff: pv[2] != null ? +pv[2] / EMU : 0, behind: /behindDoc="1"/.test(d) });
-          } else out.push(`<img src="${rels[emb[1]]}" style="width:${w}pt;height:${hh}pt;vertical-align:bottom" />`);
+          } else { if (txt) { out.push(`<span style="${style}">${esc(txt)}</span>`); txt = ''; } out.push(`<img src="${rels[emb[1]]}" style="width:${w}pt;height:${hh}pt;vertical-align:bottom" />`); }
         } else txt += unesc(t[1]);
       }
       if (txt) out.push(`<span style="${style}">${esc(txt)}</span>`);
@@ -172,6 +194,53 @@
     const style = `padding:${before}pt ${p.left / TW}pt ${after}pt ${p.right / TW}pt;text-indent:${-(p.hanging - p.first) / TW}pt;` +
       `text-align:${jc};line-height:${lh};font-size:${(empty ? p.markSz : p.sz) / 2}pt;white-space:pre-wrap;overflow-wrap:break-word`;
     return { html: `<div class="qp" style="${style}">${prefix}${r.html || '​'}</div>`, anchors: r.anchors, props: p };
+  }
+
+  // טבלה מהתבנית (למשל חתימה ושם בשתי עמודות): עמודות, גבולות, ופסקאות בכל תא
+  function tableHtml(ctx, xml, rels) {
+    const tblPr = (/<w:tblPr>[\s\S]*?<\/w:tblPr>/.exec(xml) || [''])[0];
+    const rtl = has(tblPr, 'bidiVisual');
+    const grid = [...((/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/.exec(xml) || [''])[0]).matchAll(/<w:gridCol w:w="(\d+)"/g)].map(m => +m[1] / TW);
+    const bVal = (src, side) => {
+      const m = new RegExp(`<w:${side}\\b([^>]*)/?>`).exec(src || '');
+      if (!m) return null;
+      const v = (/w:val="([^"]+)"/.exec(m[1]) || [])[1] || 'single', sz = (/w:sz="(\d+)"/.exec(m[1]) || [])[1], c = (/w:color="([0-9A-Fa-f]{6})"/.exec(m[1]) || [])[1];
+      return { on: !/^(nil|none)$/.test(v), sz: sz ? Math.max(0.25, +sz / 8) : 0.5, color: c ? '#' + c : '#000' };
+    };
+    const tb = (/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/.exec(tblPr) || [''])[0];
+    const counters = {};
+    const trs = xml.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) || [];
+    const rows = trs.map((tr, ri) => {
+      const cells = tr.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) || [];
+      return '<tr>' + cells.map((tc, ci) => {
+        const tcPr = (/<w:tcPr>[\s\S]*?<\/w:tcPr>/.exec(tc) || [''])[0];
+        const span = +(attr(tcPr, 'gridSpan', 'val') || 1);
+        const w = attr(tcPr, 'tcW', 'w') && attr(tcPr, 'tcW', 'type') === 'dxa' ? +attr(tcPr, 'tcW', 'w') / TW : null;
+        const merged = /<w:vMerge\/>|<w:vMerge w:val="continue"/.test(tcPr);
+        const tcb = (/<w:tcBorders>[\s\S]*?<\/w:tcBorders>/.exec(tcPr) || [''])[0];
+        // צד בתא: מה שהוגדר בתא, אחרת הגבול של הטבלה (חיצוני או פנימי)
+        const first = ci === 0, last = ci === cells.length - 1;
+        const startSide = rtl ? 'right' : 'left', endSide = rtl ? 'left' : 'right';
+        const sides = [
+          ['top', bVal(tcb, 'top') || bVal(tb, ri === 0 ? 'top' : 'insideH')],
+          ['bottom', bVal(tcb, 'bottom') || bVal(tb, ri === trs.length - 1 ? 'bottom' : 'insideH')],
+          [startSide, bVal(tcb, 'start') || bVal(tcb, startSide) || bVal(tb, first ? 'start' : 'insideV') || (first ? bVal(tb, startSide) : null)],
+          [endSide, bVal(tcb, 'end') || bVal(tcb, endSide) || bVal(tb, last ? 'end' : 'insideV') || (last ? bVal(tb, endSide) : null)],
+        ];
+        const bs = sides.map(([sd, b]) => b && b.on ? `border-${sd}:${b.sz}pt solid ${b.color};` : '').join('');
+        const paras = merged ? [] : (tc.match(/<w:p\b[\s\S]*?<\/w:p>/g) || []);
+        const inner = paras.map((x, i) => {
+          const r = paraHtml(ctx, x, counters, paras[i + 1] && paraProps(ctx, paras[i + 1]), rels);
+          // תמונה צפה בתוך תא (חתימה, חותמת): מוצגת בתוך התא
+          return r.anchors.length ? r.html.replace(/<\/div>$/, r.anchors.map(a => `<img src="${a.src}" style="width:${a.w}pt;height:${a.h}pt;vertical-align:bottom" />`).join('') + '</div>') : r.html;
+        }).join('');
+        return `<td colspan="${span}" style="${w ? `width:${w}pt;` : ''}${bs}padding:0 5.4pt;vertical-align:top">${inner}</td>`;
+      }).join('') + '</tr>';
+    });
+    const jc = attr(tblPr, 'jc', 'val');
+    const total = grid.reduce((a, b) => a + b, 0);
+    return { html: `<div class="qp"><table dir="${rtl ? 'rtl' : 'ltr'}" style="border-collapse:collapse;table-layout:fixed;${total ? `width:${total}pt;` : ''}${jc === 'center' ? 'margin:0 auto;' : ''}">` +
+      (grid.length ? `<colgroup>${grid.map(g => `<col style="width:${g}pt">`).join('')}</colgroup>` : '') + rows.join('') + '</table></div>', anchors: [], props: null };
   }
 
   function partHtml(ctx, xml, rels) {
@@ -222,14 +291,20 @@
     const zip = await JSZip.loadAsync(bytes);
     const ctx = await context(zip);
     const pg = ctx.page, cw = pg.w - pg.left - pg.right;
-    const parts = Quotes.finalParts(q).filter(x => /^<w:p\b/.test(x));
+    const isP = x => /^<w:p\b/.test(x);
+    const parts = Quotes.finalParts(q).filter(x => isP(x) || /<w:tbl\b/.test(x));
     const counters = {};
-    const props = parts.map(x => paraProps(ctx, x));
-    const paras = parts.map((x, i) => paraHtml(ctx, x, counters, props[i + 1], ctx.docRels));
-    const hdr = partHtml(ctx, ctx.headerXml, ctx.headerRels), ftr = partHtml(ctx, ctx.footerXml, ctx.footerRels);
-    const hm = measure(hdr.map(x => x.html), cw), fm = measure(ftr.map(x => x.html), cw);
-    const bodyTop = Math.max(pg.top, pg.header + hm.total);
-    const bodyBottom = Math.min(pg.h - pg.bottom, pg.h - pg.footer - fm.total);
+    const props = parts.map(x => isP(x) ? paraProps(ctx, x) : null);
+    const paras = parts.map((x, i) => isP(x) ? paraHtml(ctx, x, counters, props[i + 1], ctx.docRels) : tableHtml(ctx, x, ctx.docRels));
+    // כותרת עליונה ותחתונה: ברירת המחדל, ובעמוד הראשון אחרת אם הוגדרה כך בוורד
+    const hf = (hx, hr, fx, fr) => {
+      const hdr = partHtml(ctx, hx, hr), ftr = partHtml(ctx, fx, fr);
+      return { hdr, ftr, hm: measure(hdr.map(x => x.html), cw), fm: measure(ftr.map(x => x.html), cw) };
+    };
+    const main = hf(ctx.headerXml, ctx.headerRels, ctx.footerXml, ctx.footerRels);
+    const first = ctx.first ? hf(ctx.first.headerXml, ctx.first.headerRels, ctx.first.footerXml, ctx.first.footerRels) : main;
+    const bodyTop = Math.max(pg.top, pg.header + main.hm.total, pg.header + first.hm.total);
+    const bodyBottom = Math.min(pg.h - pg.bottom, pg.h - pg.footer - main.fm.total, pg.h - pg.footer - first.fm.total);
     const avail = bodyBottom - bodyTop;
     const m = measure(paras.map(x => x.html), cw).res;
     // חלוקה לעמודים
@@ -240,17 +315,21 @@
       if (!curPage || (top + m[i].h > avail && curPage.items.length)) { curPage = { items: [] }; pageList.push(curPage); start = m[i].top; }
       curPage.items.push({ p, top: m[i].top - start });
     });
-    const hdrHtml = `<div class="qbox" style="left:${pg.left}pt;top:${pg.header}pt;width:${cw}pt">${hdr.map(x => x.html).join('')}</div>` +
-      hdr.flatMap((x, i) => x.anchors.map(a => `<img class="qa" src="${a.src}" style="${anchorStyle(a, pg, pg.header + hm.res[i].top)}" />`)).join('');
-    const ftrTop = pg.h - pg.footer - fm.total;
-    const ftrHtml = `<div class="qbox" style="left:${pg.left}pt;top:${ftrTop}pt;width:${cw}pt">${ftr.map(x => x.html).join('')}</div>` +
-      ftr.flatMap((x, i) => x.anchors.map(a => `<img class="qa" src="${a.src}" style="${anchorStyle(a, pg, ftrTop + fm.res[i].top)}" />`)).join('');
+    const hfHtml = ({ hdr, ftr, hm, fm }) => {
+      const ftrTop = pg.h - pg.footer - fm.total;
+      return [`<div class="qbox" style="left:${pg.left}pt;top:${pg.header}pt;width:${cw}pt">${hdr.map(x => x.html).join('')}</div>` +
+        hdr.flatMap((x, i) => x.anchors.map(a => `<img class="qa" src="${a.src}" style="${anchorStyle(a, pg, pg.header + hm.res[i].top)}" />`)).join(''),
+        `<div class="qbox" style="left:${pg.left}pt;top:${ftrTop}pt;width:${cw}pt">${ftr.map(x => x.html).join('')}</div>` +
+        ftr.flatMap((x, i) => x.anchors.map(a => `<img class="qa" src="${a.src}" style="${anchorStyle(a, pg, ftrTop + fm.res[i].top)}" />`)).join('')];
+    };
+    const mainHf = hfHtml(main), firstHf = ctx.first ? hfHtml(first) : mainHf;
     // עמוד אחרון שיש בו רק שורות ריקות לא נכנס ל-PDF
     while (pageList.length > 1 && pageList[pageList.length - 1].items.every(x => !x.p.anchors.length && /<div class="qp"[^>]*>\u200B<\/div>$/.test(x.p.html))) pageList.pop();
-    return pageList.map(page => `<section class="qpg" style="width:${pg.w}pt;height:${pg.h}pt">${hdrHtml}` +
+    return pageList.map((page, pi) => `<section class="qpg" style="width:${pg.w}pt;height:${pg.h}pt">${(pi ? mainHf : firstHf)[0]}` +
       `<div class="qbox" style="left:${pg.left}pt;top:${bodyTop}pt;width:${cw}pt">${page.items.map(x => x.p.html).join('')}</div>` +
       page.items.flatMap(x => x.p.anchors.map(a => `<img class="qa" src="${a.src}" style="${anchorStyle(a, pg, bodyTop + x.top)}" />`)).join('') +
-      `${ftrHtml}</section>`);
+      `${(pi ? mainHf : firstHf)[1]}</section>`);
+
   }
 
   // data: ההצעה עצמה נשמרת בתוך ה-PDF, כדי שאפשר יהיה לפתוח אותה לעריכה מהדרייב
