@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.22.3';
+  const APP_VERSION = '1.23.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1916,13 +1916,14 @@
   async function renderConstructionExport(body) {
     const warns = Construction.warnings(cur);
     const status = h('div', { class: 'small muted', role: 'status' });
+    const splitStatus = h('div', { class: 'small muted', role: 'status' });
     const odOn = await OD.connected();
     const n = cur.trees.filter(Core.hasContent).length;
     const st = Construction.settingsOf(cur);
     const calc = cur.trees.filter(Core.hasContent).map(t => Construction.compute(t, st));
     const byCat = k => calc.filter(c => c.cat === k).length;
     const totalP = calc.reduce((a, c) => a + (c.P || 0), 0);
-    const busy = async (btn, fn) => { btn.disabled = true; try { await fn(); } catch (err) { console.error(err); status.textContent = 'נכשל: ' + err.message; } finally { btn.disabled = false; } };
+    const busy = async (btn, fn, out) => { btn.disabled = true; try { await fn(); } catch (err) { console.error(err); (out || status).textContent = 'נכשל: ' + err.message; } finally { btn.disabled = false; } };
     const hm = t => new Date(t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     body.append(h('div', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
@@ -1956,6 +1957,23 @@
           }) }, 'הורד אקסל'),
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
         status),
+      h('div', { class: 'card stack' },
+        h('h2', { style: 'margin:0;font-size:20px' }, 'טבלאות ותמונות בנפרד'),
+        h('div', { class: 'muted small' }, 'שני קבצים: אקסל של הטבלאות בלי התמונות, ו-PDF של התמונות שסומנו לדוח (6 בעמוד, עם מספר העץ מעל כל תמונה).'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
+            if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
+            await saveNow();
+            const files = await buildSplitFiles(cur, m => { splitStatus.textContent = m; });
+            for (const f of files) { splitStatus.textContent = `מעלה לגוגל דרייב: ${f.name}…`; await Sync.uploadFile(cur, f.name, f.blob); }
+            splitStatus.textContent = '✓ נשמרו בגוגל דרייב, בתיקיית הפרויקט: ' + files.map(f => f.name).join(' , ');
+          }, splitStatus) }, 'שמור בגוגל דרייב'),
+          h('button', { class: 'btn big', onclick: e => busy(e.currentTarget, async () => {
+            await saveNow();
+            const files = await buildSplitFiles(cur, m => { splitStatus.textContent = m; });
+            for (const f of files) await deliver(f.blob, f.name);
+            splitStatus.textContent = '✓ שני הקבצים הורדו.';
+          }, splitStatus) }, 'הורד את שניהם')), splitStatus),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'שכבת GIS'),
         h('div', { class: 'muted small' }, `${cur.trees.filter(t => t.lat != null).length} עצים עם נ"צ.`),
@@ -2022,6 +2040,23 @@
       return blob ? { blob, w: p && p.w, h: p && p.h } : null;
     }, { embedPhotos: true });
     return { blob: new Blob([r.bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }), name: fileBase(s) + '.xlsm', placed: r.placed };
+  }
+
+  // סקר לבנייה, טבלאות ותמונות בנפרד: אקסל בלי תמונות + PDF של התמונות שסומנו לדוח (באותו סדר ובאותן תוויות כמו בנספח באקסל)
+  async function buildSplitFiles(s, say) {
+    say('מכין את האקסל של הטבלאות…');
+    const res = await fetch('template/construction.xltm');
+    if (!res.ok) throw new Error('לא נמצאה תבנית סקר הבנייה');
+    const noPhotos = Object.assign({}, s, { cset: Object.assign({}, Construction.settingsOf(s), { embedPhotos: false }) });
+    const bytes = await Construction.buildWorkbook(new Uint8Array(await res.arrayBuffer()), noPhotos, () => null);
+    const base = fileBase(s);
+    const files = [{ name: base + ' - טבלאות.xlsm', blob: new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }) }];
+    const items = Construction.photoSlots(s.trees).map(sl => ({ label: sl.label, id: sl.photo.id }));
+    if (!items.length) { toast('אין תמונות שסומנו לדוח, אז נוצר רק האקסל', 4000); return files; }
+    const title = ['סקר עצים לבנייה', s.site, fmtDate(s.date)].filter(Boolean).join(' · ');
+    const pdf = await ReportPrint.photosPdf(title, items, id => photoBlob(s, id), (i, n) => say(`מכין PDF של התמונות… ${i}/${n}`));
+    files.push({ name: base + ' - תמונות.pdf', blob: pdf });
+    return files;
   }
 
   // דוח PDF (אותו שם כמו האקסל, כדי שיופיעו אחד ליד השני בגוגל דרייב)
