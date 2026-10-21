@@ -312,8 +312,15 @@
     let wb = await zip.file('xl/workbook.xml').async('string');
     wb = wb.replace(/<calcPr([^>]*?)\s*\/>/, (m, a) => `<calcPr${a.replace(/\sfullCalcOnLoad="\d"/, '')} fullCalcOnLoad="1"/>`);
     zip.file('xl/workbook.xml', wb);
+    // calcChain של התבנית מצביע גם על תאים שהאפליקציה מחקה מהם נוסחה (שרשרת התמונות), ואז אקסל "מתקן" את הקובץ.
+    // מוחקים אותו, ואקסל בונה אותו מחדש בפתיחה (יש fullCalcOnLoad)
+    zip.remove('xl/calcChain.xml');
+    let rels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    rels = rels.replace(/<Relationship\b[^>]*Target="[^"]*calcChain\.xml"[^>]*\/>/g, '');
+    zip.file('xl/_rels/workbook.xml.rels', rels);
     let ct = await zip.file('[Content_Types].xml').async('string');
     ct = ct.replace('application/vnd.ms-excel.template.macroEnabled.main+xml', 'application/vnd.ms-excel.sheet.macroEnabled.main+xml');
+    ct = ct.replace(/<Override\b[^>]*PartName="\/xl\/calcChain\.xml"[^>]*\/>/g, '');
     zip.file('[Content_Types].xml', ct);
     for (const [p, f] of Object.entries(zip.files)) if (f.dir) delete zip.files[p];
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.ms-excel.sheet.macroEnabled.12' });
