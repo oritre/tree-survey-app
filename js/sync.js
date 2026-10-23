@@ -437,6 +437,7 @@
 
   let stopped = false; // אחרי כיבוי: לא מגבים יותר עד שהאפליקציה נפתחת מחדש
   function stop() { stopped = true; clearTimeout(timer); }
+  const holding = new Map();
   async function run() {
     if (stopped) return;
     if (running) { again = true; return; }
@@ -455,7 +456,10 @@
       // הסקר הפתוח קודם
       surveys.sort((a, b) => (live(b) !== b) - (live(a) !== a) || (b.updated || 0) - (a.updated || 0));
       for (const s0 of surveys) {
-        const s = live(s0);
+        // העותק העדכני: הסקר הפתוח, ואם הוא לא פתוח — מה שבטאבלט עכשיו (ייתכן שנערך אחרי תחילת הסבב)
+        const s = live(s0) !== s0 ? live(s0) : (await DB.getSurvey(s0.id)) || s0;
+        // סקר שנפתח בזמן שהוא עולה: האפליקציה עובדת על אותו עותק, כדי שהשמירות של הגיבוי לא ידרסו עריכות
+        holding.set(s.id, s);
         // טלגרם וגוגל דרייב במקביל: "סיום סקר" לא מחכה שכל התמונות יישלחו קודם לטלגרם
         await Promise.all([
           tgOn && (async () => {
@@ -469,6 +473,7 @@
               else { state.error = 'גוגל דרייב: ' + e.message; log('error', state.error, s); }
             }
           })()]);
+        holding.delete(s.id);
       }
       surveys = await DB.allSurveys();
       countPending(surveys, tgOn, odOn);
@@ -477,6 +482,7 @@
       state.error = e.message;
       log('error', 'שגיאה כללית בגיבוי: ' + e.message);
     } finally {
+      holding.clear();
       running = false; state.busy = false; emit();
       if (root.App && root.App.onSynced) root.App.onSynced();
       if (again) kick(true);
@@ -494,6 +500,7 @@
   setInterval(() => { if (!running) run(); }, 3 * 60 * 1000);
 
   root.Sync = { stop, importSurvey, flushImported, preparing,
+    holding: id => holding.get(id) || null,
     kick, state,
     now() { state.odNeedsLogin = false; schedule(0); },
     // פעולות ידניות: עובדות על הסקר הפתוח ומחכות לסיום
