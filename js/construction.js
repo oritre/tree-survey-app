@@ -115,15 +115,17 @@
   const photoName = (t, p) => manualName(p) || String((t && t.num) || '').trim();
 
   // ---------- מילוי התבנית ----------
-  // שורות העצים בגיליון סקר: עמוד 1 שורות 11-35, ואז עמודים של 32 עצים (53-84, 99-130, ...).
+  // שורות העצים בגיליון סקר: עמוד 1 שורות 11-34, ואז עמודים של 32 עצים (53-84, 99-130, ...).
+  // שורה 35 תמיד מוסתרת (לפי ori): במקומה יש מקום לחתימה, כדי ש"יערן עירוני וגוזם מומחה" לא ירד לעמוד הבא
   // עמוד נוסף k תופס את השורות 45+46k עד 90+46k. בתבנית יש 18 עמודים מוסתרים; כשצריך יותר,
   // מוסיפים עמודים זהים לפני הטבלאות המסכמות (שורה 873), כך שהמבנה נשאר אחיד
   const TPL_PAGES = 18, MAX_PAGES = 38;
   const MAX_TREES = 1225;   // השורות של לשונית "טעינת עצים" (2-1226)
+  const PAGE1 = 24;
   const TREE_ROWS = [];
-  for (let r = 11; r <= 35; r++) TREE_ROWS.push(r);
+  for (let r = 11; r <= 34; r++) TREE_ROWS.push(r);
   for (let k = 0; k < MAX_PAGES; k++) for (let r = 53 + 46 * k; r <= 84 + 46 * k; r++) TREE_ROWS.push(r);
-  const pagesFor = n => Math.min(MAX_PAGES, Math.max(0, Math.ceil((n - 25) / 32)));
+  const pagesFor = n => Math.min(MAX_PAGES, Math.max(0, Math.ceil((n - PAGE1) / 32)));
 
   // ---------- נספח תמונות (עמודות BF:BK) ----------
   // בכל עמוד 2 שורות של 6 משבצות. לכל משבצת: תווית (מספר העץ), תא תמונה ממוזג (img עד end), ושרשרת נוסחאות
@@ -409,11 +411,12 @@
       sheet.cached('I' + r, c.I); sheet.cached('L' + r, c.L); sheet.cached('N' + r, c.N);
       sheet.cached('O' + r, c.O); sheet.cached('P' + r, c.P);
     });
-    // לשונית "טעינת עצים": שורה לכל עץ (2-602 בתבנית). מעבר לזה מעתיקים את שורה 602 ומפנים לשורת העץ
-    if (trees.length > 601) {
+    // לשונית "טעינת עצים": שורה לכל עץ. בתבנית שורות 2-602 מפנות לשורות 11-35, 53-84, ...; כיוון ששורה 35 לא בשימוש,
+    // מהעץ ה-25 ואילך כותבים את השורות מחדש לפי שורה 602 עם הפניה לשורת העץ
+    if (trees.length > PAGE1) {
       const load = new RowSheet(await zip.file('xl/worksheets/sheet2.xml').async('string'));
       const tpl = load.rows[load.row(602)].replace(/<f t="shared" si="\d+"\/>/, '<f>IF(SUM(K602:N602)=0,"",SUM(K602:N602))</f>');
-      for (let i = 601; i < trees.length; i++) {
+      for (let i = PAGE1; i < trees.length; i++) {
         const r = 2 + i, tr = TREE_ROWS[i];
         if (load.idx.get(r) == null) break;
         load.rows[load.idx.get(r)] = mapRow(tpl, r, x => ({ col: x.col, row: x.sheet === SHEET ? tr : x.row === 602 ? r : x.row }), 'טעינת עצים')
@@ -446,7 +449,7 @@
     // שורת עץ ריקה בתוך תא תמונה ממוזג: הסתרה מקטינה את התמונה. בשורת התמונות העליונה של עמוד משאירים אותה,
     // ובתחתונה מסתירים ומעבירים את הגובה לשורה ריקה מתחת לטבלה (comp), כך שהתמונה נשארת באותו גודל
     const comp = new Map();
-    for (let i = trees.length; i < 25 + 32 * pages; i++) {
+    for (let i = trees.length; i < PAGE1 + 32 * pages; i++) {
       const r = TREE_ROWS[i];
       const pr = PHOTO_ROWS.findIndex((x, ri) => usedRows.has(ri) && r >= x.label && r <= x.end);
       if (pr >= 0) {
@@ -457,9 +460,18 @@
       sheet.hide(r);
     }
     for (const [r, h] of comp) sheet.setHeight(r, sheet.height(r) + h);
+    sheet.hide(35);
+    if (!embed) sheet.hide(4);   // שורת התוויות של התמונות, ריקה באקסל בלי תמונות: עוד מקום בעמוד 1
+    // בעמודים הנוספים: שורות ריקות בראש העמוד ובסופו (45, 89, 90) מוסתרות, כדי שהעמוד ייכנס לדף אחד
+    for (let k = 0; k < avail; k++) for (const r of [45, 89, 90]) sheet.hide(r + 46 * k);
     const spLast = 918 + off + moreSp;
     for (let r = 885 + off + Math.max(1, species); r <= spLast; r++) sheet.hide(r);
     // אקסל בלי התמונות: מסתירים את עמודות הנספח BF:BK
+    // מעברי עמוד: כל עמוד של הסקר בדף משלו, והטבלאות המסכמות בדף חדש
+    const breaks = [44, ...Array.from({ length: pages }, (_, k) => 90 + 46 * k)];
+    breaks[breaks.length - 1] = 882 + off;
+    sheet.tail = sheet.tail.replace(/<rowBreaks[\s\S]*?<\/rowBreaks>/, '').replace(/(<\/headerFooter>|<headerFooter\/>)/, '$1' +
+      `<rowBreaks count="${breaks.length}" manualBreakCount="${breaks.length}">` + breaks.map(r => `<brk id="${r}" max="16383" man="1"/>`).join('') + '</rowBreaks>');
     if (!embed) sheet.head = sheet.head.replace(/<col min="58" max="69"([^>]*?)\/>/, (m, a) => / hidden="1"/.test(a) ? m : `<col min="58" max="69"${a} hidden="1"/>`);
 
     zip.file('xl/worksheets/sheet1.xml', sheet.toXml());
