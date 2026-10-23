@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.24.0';
+  const APP_VERSION = '1.24.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1924,6 +1924,21 @@
     const byCat = k => calc.filter(c => c.cat === k).length;
     const totalP = calc.reduce((a, c) => a + (c.P || 0), 0);
     const busy = async (btn, fn, out) => { btn.disabled = true; try { await fn(); } catch (err) { console.error(err); (out || status).textContent = 'נכשל: ' + err.message; } finally { btn.disabled = false; } };
+    // אפשרות 2: אקסל הטבלאות או PDF התמונות, כל אחד בנפרד, להורדה או לגוגל דרייב
+    const splitAction = (e, kind, drive) => busy(e.currentTarget, async () => {
+      if (drive && !odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
+      await saveNow();
+      const say = m => { splitStatus.textContent = m; };
+      const f = kind === 'xlsx' ? await buildTablesFile(cur, say) : await buildPhotosPdfFile(cur, say);
+      if (!f) { say('אין תמונות שסומנו לדוח.'); return; }
+      if (!drive) { await deliver(f.blob, f.name); say(`✓ הורד: ${f.name}`); return; }
+      say(`מעלה לגוגל דרייב: ${f.name}…`);
+      const where = await Sync.uploadFile(cur, f.name, f.blob);
+      // התיקייה המדויקת ולינק אליה, כדי שלא יצטרכו לחפש
+      splitStatus.replaceChildren(
+        h('div', {}, `✓ "${f.name}" נשמר בגוגל דרייב בתיקייה "${where.path}".`),
+        h('a', { href: 'https://drive.google.com/drive/folders/' + where.folderId, target: '_blank', rel: 'noopener', class: 'btn' }, 'פתח את התיקייה בגוגל דרייב'));
+    }, splitStatus);
     const hm = t => new Date(t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     body.append(h('div', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
@@ -1964,27 +1979,15 @@
           status),
         // אפשרות 2: אקסל של הטבלאות + PDF של התמונות
         h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
-          h('b', {}, '2. אקסל של הטבלאות + PDF של התמונות'),
-          h('div', { class: 'muted small' }, 'שני קבצים: האקסל בלי התמונות, ו-PDF של התמונות שסומנו לדוח (6 בעמוד, עם מספר העץ מעל כל תמונה).'),
+          h('b', {}, '2. אקסל בלי תמונות, ו-PDF של התמונות בנפרד'),
+          h('div', { class: 'muted small' }, 'כל קובץ לבד: האקסל בלי התמונות, או PDF של התמונות שסומנו לדוח (6 בעמוד, עם מספר העץ מעל כל תמונה).'),
+          // כל קובץ לבד (לפי ori: שלא יהיו תלויים אחד בשני)
           h('div', { class: 'row' },
-            h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
-              await saveNow();
-              const files = await buildSplitFiles(cur, m => { splitStatus.textContent = m; });
-              for (const f of files) await deliver(f.blob, f.name);
-              splitStatus.textContent = '✓ שני הקבצים הורדו.';
-            }, splitStatus) }, 'הורד אקסל טבלאות + PDF תמונות'),
-            h('button', { class: 'btn big', onclick: e => busy(e.currentTarget, async () => {
-              if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
-              await saveNow();
-              const files = await buildSplitFiles(cur, m => { splitStatus.textContent = m; });
-              let where = null;
-              for (const f of files) { splitStatus.textContent = `מעלה לגוגל דרייב: ${f.name}…`; where = await Sync.uploadFile(cur, f.name, f.blob); }
-              // התיקייה המדויקת ולינק אליה, כדי שלא יצטרכו לחפש
-              splitStatus.replaceChildren(
-                h('div', {}, `✓ נשמרו בגוגל דרייב בתיקייה "${where.path}":`),
-                h('ul', { style: 'margin:4px 0' }, files.map(f => h('li', {}, f.name))),
-                h('a', { href: 'https://drive.google.com/drive/folders/' + where.folderId, target: '_blank', rel: 'noopener', class: 'btn' }, 'פתח את התיקייה בגוגל דרייב'));
-            }, splitStatus) }, 'שמור את שניהם בגוגל דרייב')),
+            h('button', { class: 'btn primary big', onclick: e => splitAction(e, 'xlsx', false) }, 'הורד אקסל בלי תמונות'),
+            h('button', { class: 'btn primary big', onclick: e => splitAction(e, 'pdf', false) }, 'הורד PDF תמונות')),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn big', onclick: e => splitAction(e, 'xlsx', true) }, 'שמור אקסל בגוגל דרייב'),
+            h('button', { class: 'btn big', onclick: e => splitAction(e, 'pdf', true) }, 'שמור PDF בגוגל דרייב')),
           splitStatus),
         h('div', { class: 'row' },
           h('button', { class: 'btn', onclick: () => exportZip(status) }, 'כל התמונות בקובץ ZIP'))),
@@ -2057,20 +2060,21 @@
   }
 
   // סקר לבנייה, טבלאות ותמונות בנפרד: אקסל בלי תמונות + PDF של התמונות שסומנו לדוח (באותו סדר ובאותן תוויות כמו בנספח באקסל)
-  async function buildSplitFiles(s, say) {
-    say('מכין את האקסל של הטבלאות…');
+  async function buildTablesFile(s, say) {
+    say('מכין את האקסל בלי התמונות…');
     const res = await fetch('template/construction.xltm');
     if (!res.ok) throw new Error('לא נמצאה תבנית סקר הבנייה');
     const noPhotos = Object.assign({}, s, { cset: Object.assign({}, Construction.settingsOf(s), { embedPhotos: false }) });
     const bytes = await Construction.buildWorkbook(new Uint8Array(await res.arrayBuffer()), noPhotos, () => null);
-    const base = fileBase(s);
-    const files = [{ name: base + ' - טבלאות.xlsm', blob: new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }) }];
+    return { name: fileBase(s) + ' - טבלאות.xlsm', blob: new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }) };
+  }
+  // PDF של התמונות שסומנו לדוח (באותו סדר ובאותן תוויות כמו בנספח באקסל). null כשאין תמונות
+  async function buildPhotosPdfFile(s, say) {
     const items = Construction.photoSlots(s.trees).map(sl => ({ label: sl.label, id: sl.photo.id }));
-    if (!items.length) { toast('אין תמונות שסומנו לדוח, אז נוצר רק האקסל', 4000); return files; }
+    if (!items.length) return null;
     const pdf = await ReportPrint.photosPdf(items, id => photoBlob(s, id), (i, n) => say(`מכין PDF של התמונות… ${i}/${n}`));
     // שם הקובץ לפי ori: "תמונות" ושם הפרויקט (הכתובת של הסקר)
-    files.push({ name: safeName(`תמונות - ${s.site || s.project || 'סקר עצים לבנייה'}`) + '.pdf', blob: pdf });
-    return files;
+    return { name: safeName(`תמונות - ${s.site || s.project || 'סקר עצים לבנייה'}`) + '.pdf', blob: pdf };
   }
 
   // דוח PDF (אותו שם כמו האקסל, כדי שיופיעו אחד ליד השני בגוגל דרייב)
