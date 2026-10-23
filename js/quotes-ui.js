@@ -34,8 +34,30 @@
     } else {
       bytes = await DB.getKV('qtpl:' + id, null);
       if (!bytes) throw new Error('התבנית של ההצעה הזו נמחקה מהאפליקציה. אפשר להעלות אותה שוב באותו שם.');
+      bytes = await newFooter(bytes);
     }
     return (bytesCache[id] = bytes);
+  }
+  // תבנית שהועלתה עם השורה התחתונה הישנה (PNG בגודל 1474x44) מקבלת את החדשה, החדה, של template/footer.png
+  async function newFooter(bytes) {
+    try {
+      const zip = await JSZip.loadAsync(bytes);
+      const pngs = zip.file(/^word\/media\/[^/]+\.png$/i);
+      let footer = null, changed = false;
+      for (const f of pngs) {
+        const b = await f.async('uint8array');
+        const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+        if (b.length < 24 || dv.getUint32(16) !== 1474 || dv.getUint32(20) !== 44) continue;
+        if (!footer) {
+          const res = await fetch('template/footer.png');
+          if (!res.ok) return bytes;
+          footer = new Uint8Array(await res.arrayBuffer());
+        }
+        zip.file(f.name, footer);
+        changed = true;
+      }
+      return changed ? await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }) : bytes;
+    } catch (e) { return bytes; }
   }
   async function uploadTemplate(file) {
     const name = file.name.replace(/\.(dotx|docx)$/i, '').trim();
