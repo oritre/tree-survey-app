@@ -93,7 +93,7 @@
   function warnings(s) {
     const w = [];
     const trees = s.trees.filter(Core.hasContent);
-    if (trees.length > TREE_ROWS.length) w.push(`יש ${trees.length} עצים, ובתבנית יש מקום ל-${TREE_ROWS.length} בלבד.`);
+    if (trees.length > MAX_TREES) w.push(`יש ${trees.length} עצים, ובקובץ יש מקום ל-${MAX_TREES} בלבד.`);
     const covered = coveredNums(trees);
     for (const t of Core.sortTrees(trees)) {
       const name = 'עץ ' + (t.num || t.species);
@@ -115,27 +115,34 @@
   const photoName = (t, p) => manualName(p) || String((t && t.num) || '').trim();
 
   // ---------- מילוי התבנית ----------
-  // שורות העצים בגיליון סקר: עמוד 1 שורות 11-35, ואז 18 עמודים של 32 עצים (53-84, 99-130, ...)
+  // שורות העצים בגיליון סקר: עמוד 1 שורות 11-35, ואז עמודים של 32 עצים (53-84, 99-130, ...).
+  // עמוד נוסף k תופס את השורות 45+46k עד 90+46k. בתבנית יש 18 עמודים מוסתרים; כשצריך יותר,
+  // מוסיפים עמודים זהים לפני הטבלאות המסכמות (שורה 873), כך שהמבנה נשאר אחיד
+  const TPL_PAGES = 18, MAX_PAGES = 38;
+  const MAX_TREES = 1225;   // השורות של לשונית "טעינת עצים" (2-1226)
   const TREE_ROWS = [];
   for (let r = 11; r <= 35; r++) TREE_ROWS.push(r);
-  for (let k = 0; k < 18; k++) for (let r = 53 + 46 * k; r <= 84 + 46 * k; r++) TREE_ROWS.push(r);
-  // עמוד נוסף k (0..17) תופס את השורות 45+46k עד 90+46k, מוסתרות בתבנית
-  const pagesFor = n => Math.min(18, Math.max(0, Math.ceil((n - 25) / 32)));
+  for (let k = 0; k < MAX_PAGES; k++) for (let r = 53 + 46 * k; r <= 84 + 46 * k; r++) TREE_ROWS.push(r);
+  const pagesFor = n => Math.min(MAX_PAGES, Math.max(0, Math.ceil((n - 25) / 32)));
 
   // ---------- נספח תמונות (עמודות BF:BK) ----------
-  // בכל עמוד 2 שורות של 6 משבצות. לכל משבצת: תווית (מספר העץ), תא תמונה ממוזג, ושרשרת נוסחאות
-  // (מספר -> נתיב Pictures -> העתק) שהמאקרו ReplacePathWithImage הופך לתמונה במחשב
+  // בכל עמוד 2 שורות של 6 משבצות. לכל משבצת: תווית (מספר העץ), תא תמונה ממוזג (img עד end), ושרשרת נוסחאות
+  // (מספר -> נתיב Pictures -> העתק) שהמאקרו ReplacePathWithImage הופך לתמונה במחשב.
+  // comp: שורה ריקה בתוך התא הממוזג התחתון, שמקבלת את הגובה של שורות עצים ריקות שהוסתרו, כדי שהתמונה לא תקטן
   const PHOTO_COLS = ['BF', 'BG', 'BH', 'BI', 'BJ', 'BK'];
-  const PHOTO_ROWS = [{ label: 4, img: 8, chain: [5, 6, 7] }, { label: 23, img: 24, chain: [41, 42, 43] }];
-  for (let k = 0; k < 18; k++) {
+  const PHOTO_ROWS = [{ page: 0, label: 4, img: 8, end: 22, chain: [5, 6, 7] }, { page: 0, label: 23, img: 24, end: 40, comp: 36, chain: [41, 42, 43] }];
+  for (let k = 0; k < MAX_PAGES; k++) {
     const b = 46 * k;
-    PHOTO_ROWS.push({ label: 50 + b, img: 51 + b, chain: [46 + b, 47 + b, 48 + b] }, { label: 68 + b, img: 69 + b, chain: [86 + b, 87 + b, 88 + b] });
+    PHOTO_ROWS.push({ page: k + 1, label: 50 + b, img: 51 + b, end: 67 + b, chain: [46 + b, 47 + b, 48 + b] },
+      { page: k + 1, label: 68 + b, img: 69 + b, end: 85 + b, comp: 85 + b, chain: [86 + b, 87 + b, 88 + b] });
   }
-  const SLOT_CELLS = PHOTO_ROWS.flatMap(r => PHOTO_COLS.map(c => ({ label: c + r.label, img: c + r.img, chain: r.chain.map(x => c + x) })));
+  const SLOT_CELLS = PHOTO_ROWS.flatMap((r, ri) => PHOTO_COLS.map(c => ({ row: ri, page: r.page, label: c + r.label, img: c + r.img, chain: r.chain.map(x => c + x) })));
+  // שורות צהובות (שרשרת הנוסחאות של התמונות): תמיד מוסתרות
+  const yellowRows = pages => [5, 6, 41, 42, 43, ...Array.from({ length: pages }, (_, k) => [46, 47, 48, 86, 87, 88].map(r => r + 46 * k)).flat()];
   // תמונות שסומנו לדוח, לפי סדר העצים (כמו בסקר יציבות: פצל = משבצת לכל מספר בטווח)
   function photoSlots(trees) {
     const slots = [];
-    for (const t of Core.sortTrees(trees).filter(Core.hasContent).slice(0, TREE_ROWS.length)) {
+    for (const t of Core.sortTrees(trees).filter(Core.hasContent).slice(0, MAX_TREES)) {
       const photos = (t.photos || []).filter(p => p.inReport);
       if (Core.splitActive(t)) {
         for (const n of Core.expandNum(t.num)) for (const p of photos.filter(x => x.sub === n)) slots.push({ tree: t, sub: n, label: String(n), photo: p });
@@ -155,7 +162,7 @@
     return set;
   }
   // דף התבנית שמכיל את משבצת i (0 = עמוד ראשון), כדי לפתוח את השורות המוסתרות
-  const photoPagesFor = n => n <= 12 ? 0 : Math.min(18, Math.ceil((n - 12) / 12));
+  const photoPagesFor = n => n <= 12 ? 0 : Math.min(MAX_PAGES, Math.ceil((n - 12) / 12));
 
   // תמונות בתוך התא: בתבנית כבר יש 2 ערכי rich (שגיאות של FILTER), מוסיפים אחריהם
   const RD = 'http://schemas.microsoft.com/office/spreadsheetml/2017/richdata';
@@ -193,6 +200,33 @@
 
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const colNum = l => { let n = 0; for (const ch of l) n = n * 26 + (ch.charCodeAt(0) - 64); return n; };
+
+  const colName = n => { let s = ''; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
+
+  // ---------- הפניות בנוסחאות (להוספת שורות, כמו "הוספת שורות מועתקות" באקסל) ----------
+  const SHEET = 'סקר';
+  const REF = /(?<![\w.$'!֐-׿])(?:('(?:[^']|'')+'|[A-Za-z_֐-׿][\w.֐-׿]*)!)?(\$?)([A-Z]{1,3})(\$?)(\d+)(?::(\$?)([A-Z]{1,3})(\$?)(\d+))?(?![\w(!֐-׿])/g;
+  // fn({sheet, col, colAbs, row, rowAbs}) -> {col, row}. מחרוזות בתוך מרכאות לא נוגעים
+  function mapRefs(f, cur, fn) {
+    return f.split(/("(?:[^"]|"")*")/).map((part, i) => i % 2 ? part : part.replace(REF, (m, sh, ca, c, ra, r, ca2, c2, ra2, r2) => {
+      const sheet = sh ? sh.replace(/^'|'$/g, '').replace(/''/g, "'") : cur;
+      const one = (cAbs, col, rAbs, row) => { const o = fn({ sheet, col: colNum(col), colAbs: !!cAbs, row: +row, rowAbs: !!rAbs }); return cAbs + colName(o.col) + rAbs + o.row; };
+      return (sh ? sh + '!' : '') + one(ca, c, ra, r) + (c2 ? ':' + one(ca2, c2, ra2, r2) : '');
+    })).join('');
+  }
+  // הוספת n שורות לפני at בגיליון target: כל הפניה לשורה at ומטה זזה ב-n (טווח שעובר את at מתרחב)
+  const shiftFn = (target, at, n) => x => ({ col: x.col, row: x.sheet === target && x.row >= at ? x.row + n : x.row });
+  // העתקה: הפניות יחסיות זזות, מוחלטות ($) נשארות
+  const moveFn = (dr, dc) => x => ({ col: x.colAbs ? x.col : x.col + dc, row: x.rowAbs ? x.row : x.row + dr });
+  const rangeRows = a => { const [p, q = p] = a.split(':'); const m1 = /^\$?([A-Z]+)\$?(\d+)$/.exec(p), m2 = /^\$?([A-Z]+)\$?(\d+)$/.exec(q); return { c1: m1[1], r1: +m1[2], c2: m2[1], r2: +m2[2] }; };
+  // שורה בגיליון: מספר חדש לשורה ולתאים, והפניות הנוסחאות לפי fn
+  function mapRow(row, newR, fn, cur = SHEET) {
+    return row.replace(/^<row r="\d+"/, `<row r="${newR}"`).replace(/<c r="([A-Z]+)\d+"/g, `<c r="$1${newR}"`)
+      .replace(/<f\b([^>]*?)>([^<]*)<\/f>/g, (m, a, t) => `<f${a.replace(/ ref="([^"]+)"/, (x, v) => ` ref="${mapRefs(v, cur, fn)}"`)}>${mapRefs(t, cur, fn)}</f>`);
+  }
+  // נוסחאות בגיליון אחר שמפנות לסקר
+  const shiftOtherSheet = (xml, at, n) => xml.replace(/(<(f|formula|formula1|formula2|xm:f)\b[^>]*>)([^<]+)(<\/\2>)/g,
+    (m, a, tag, t, b) => t.includes(SHEET) ? a + mapRefs(t, '', shiftFn(SHEET, at, n)) + b : m);
 
   // גיליון גדול (3.5MB): מפרקים פעם אחת לשורות ועורכים כל שורה לבד
   class RowSheet {
@@ -247,6 +281,76 @@
       const i = this.idx.get(r);
       if (i != null) this.rows[i] = this.rows[i].replace(/^(<row [^>]*?) hidden="1"/, '$1');
     }
+    hide(r) {
+      const i = this.idx.get(r);
+      if (i != null && !/^<row [^>]*? hidden="1"/.test(this.rows[i])) this.rows[i] = this.rows[i].replace(/^<row r="\d+"/, '$& hidden="1"');
+    }
+    height(r) {
+      const i = this.idx.get(r), m = i == null ? null : /^<row [^>]*? ht="([\d.]+)"/.exec(this.rows[i]);
+      return m ? +m[1] : +((/defaultRowHeight="([\d.]+)"/.exec(this.head) || [0, 15])[1]);
+    }
+    setHeight(r, h) {
+      const i = this.idx.get(r);
+      if (i == null) return;
+      const tag = /^<row [^>]*?>/.exec(this.rows[i])[0];
+      const t = tag.replace(/ ht="[\d.]+"/, '').replace(/ customHeight="1"/, '').replace(/^<row r="\d+"/, `$& ht="${Math.round(h * 100) / 100}" customHeight="1"`);
+      this.rows[i] = t + this.rows[i].slice(tag.length);
+    }
+    // נוסחאות משותפות שמגיעות לשורה from ומטה הופכות לנוסחאות רגילות, כדי שאפשר להזיז ולהעתיק את השורות
+    unshare(from) {
+      const groups = new Map();
+      for (const row of this.rows) {
+        if (!row.includes('t="shared"')) continue;
+        for (const m of row.matchAll(/<c r="([A-Z]+)(\d+)"[^>]*?><f\b([^>]*?)>([^<]*)<\/f>/g)) {
+          const ref = / ref="([^"]+)"/.exec(m[3]), si = / si="(\d+)"/.exec(m[3]);
+          if (/ t="shared"/.test(m[3]) && ref && si && rangeRows(ref[1]).r2 >= from) groups.set(si[1], { col: colNum(m[1]), row: +m[2], text: m[4] });
+        }
+      }
+      if (!groups.size) return;
+      this.rows = this.rows.map(row => !row.includes('t="shared"') ? row : row.replace(/<c r="([A-Z]+)(\d+)"([^>]*?)>(<f\b([^>]*?)(?:\/>|>([^<]*)<\/f>))/g, (m, c, r, a, f, fa) => {
+        const si = / si="(\d+)"/.exec(fa), g = si && / t="shared"/.test(fa) && groups.get(si[1]);
+        if (!g) return m;
+        return `<c r="${c}${r}"${a}><f>${mapRefs(g.text, SHEET, moveFn(+r - g.row, colNum(c) - g.col))}</f>`;
+      }));
+    }
+    // מוסיפה לפני at את השורות s0..s1, times פעמים, עם הנוסחאות, העיצוב, המיזוגים, העיצוב המותנה ורשימות הבחירה
+    insertCopies(at, s0, s1, times) {
+      const block = s1 - s0 + 1, n = block * times, shift = shiftFn(SHEET, at, n);
+      this.unshare(s0);
+      const out = [], src = [];
+      for (const row of this.rows) {
+        const r = +/ r="(\d+)"/.exec(row)[1];
+        const x = mapRow(row, r >= at ? r + n : r, shift);
+        if (r >= s0 && r <= s1) src.push([r, x]);
+        out.push([r >= at ? r + n : r, x]);
+      }
+      for (let j = 0; j < times; j++) for (const [r, x] of src) {
+        const nr = r + at - s0 + j * block;
+        out.push([nr, mapRow(x, nr, moveFn(nr - r, 0))]);
+      }
+      out.sort((a, b) => a[0] - b[0]);
+      this.rows = out.map(x => x[1]);
+      this.idx = new Map(out.map((x, i) => [x[0], i]));
+      // טווחים: הזזה, ואז העתקה של מה שבתוך השורות המועתקות
+      const sq = v => mapRefs(v, SHEET, shift);
+      const copies = a => { const { c1, r1, c2, r2 } = rangeRows(a), lo = Math.max(r1, s0), hi = Math.min(r2, s1), res = [];
+        if (lo <= hi) for (let j = 0; j < times; j++) { const d = at - s0 + j * block; res.push(c1 + (lo + d) + (a.includes(':') ? ':' + c2 + (hi + d) : '')); }
+        return res; };
+      const extend = v => {
+        const parts = sq(v).split(/\s+/).filter(Boolean), have = parts.map(rangeRows);
+        const add = parts.flatMap(copies).filter(a => { const x = rangeRows(a); return !have.some(h => colNum(h.c1) <= colNum(x.c1) && colNum(h.c2) >= colNum(x.c2) && h.r1 <= x.r1 && h.r2 >= x.r2); });
+        return parts.concat(add).join(' ');
+      };
+      this.head = this.head.replace(/(\s(?:sqref|ref|activeCell|topLeftCell)=")([^"]+)"/g, (m, a, v) => a + sq(v) + '"');
+      let tail = this.tail.replace(/(<(formula|formula1|formula2|xm:f)>)([^<]*)/g, (m, a, t, v) => a + mapRefs(v, SHEET, shift));
+      tail = tail.replace(/<mergeCell ref="([^"]+)"\/>/g, (m, v) => {
+        const nv = sq(v), { r1, r2 } = rangeRows(nv);
+        return `<mergeCell ref="${nv}"/>` + (r1 >= s0 && r2 <= s1 ? copies(nv).map(a => `<mergeCell ref="${a}"/>`).join('') : '');
+      });
+      tail = tail.replace(/<mergeCells count="\d+">/, () => `<mergeCells count="${(tail.match(/<mergeCell /g) || []).length}">`);
+      tail = tail.replace(/(\ssqref=")([^"]+)"/g, (m, a, v) => a + extend(v) + '"').replace(/(<xm:sqref>)([^<]+)/g, (m, a, v) => a + extend(v));
+      this.tail = tail;
+    }
     toXml() { return this.head + this.rows.join('') + this.tail; }
   }
 
@@ -261,6 +365,25 @@
     const zip = await JSZip.loadAsync(templateBytes);
     const st = settingsOf(survey);
     const sheet = new RowSheet(await zip.file('xl/worksheets/sheet1.xml').async('string'));   // סקר
+    const trees = Core.sortTrees(survey.trees).filter(Core.hasContent).slice(0, MAX_TREES);
+    const slots = photoSlots(survey.trees);
+    const embed = !!st.embedPhotos;
+    // עמודים פתוחים: לפי העצים, ובאקסל עם התמונות גם לפי התמונות
+    const pages = embed ? Math.max(pagesFor(trees.length), photoPagesFor(slots.length)) : pagesFor(trees.length);
+    const extra = Math.max(0, pages - TPL_PAGES), off = 46 * extra;
+    if (extra) {
+      // עמודים נוספים: העתק של העמוד האחרון בתבנית (827-872) לפני שורה 873. הנוסחאות בגיליונות האחרים
+      // (חד גזעי, טעינת עצים) שמפנות לטווחי הסקר מתרחבות בהתאם
+      sheet.insertCopies(873, 827, 872, extra);
+      for (const f of Object.keys(zip.files).filter(f => /^xl\/worksheets\/sheet\d+\.xml$/.test(f) && f !== 'xl/worksheets/sheet1.xml')) {
+        const x = await zip.file(f).async('string');
+        if (x.includes(SHEET + '!')) zip.file(f, shiftOtherSheet(x, 873, 46 * extra));
+      }
+    }
+    // טבלאות מסכמות: שורה לכל מין (FILTER), 34 שורות בתבנית (885-918). כשיש יותר מינים מוסיפים שורות לפני 918
+    const species = new Set(trees.map(t => compute(t, st).name).filter(n => SPECIES.has(n))).size;
+    const moreSp = Math.max(0, species - 34);
+    if (moreSp) sheet.insertCopies(918 + off, 917 + off, 917 + off, moreSp);
     const params = new RowSheet(await zip.file('xl/worksheets/sheet4.xml').async('string'));  // חד גזעי
 
     // כותרת: B3 גוש וחלקה, B7 כתובת, Q1 תאריך קבוע (בתבנית NOW() שמתעדכן)
@@ -274,7 +397,6 @@
     params.set('AN7', num(st.oliveDiam));
 
     // עצים
-    const trees = Core.sortTrees(survey.trees).filter(Core.hasContent).slice(0, TREE_ROWS.length);
     trees.forEach((t, i) => {
       const r = TREE_ROWS[i];
       const c = compute(t, st);
@@ -287,15 +409,29 @@
       sheet.cached('I' + r, c.I); sheet.cached('L' + r, c.L); sheet.cached('N' + r, c.N);
       sheet.cached('O' + r, c.O); sheet.cached('P' + r, c.P);
     });
+    // לשונית "טעינת עצים": שורה לכל עץ (2-602 בתבנית). מעבר לזה מעתיקים את שורה 602 ומפנים לשורת העץ
+    if (trees.length > 601) {
+      const load = new RowSheet(await zip.file('xl/worksheets/sheet2.xml').async('string'));
+      const tpl = load.rows[load.row(602)].replace(/<f t="shared" si="\d+"\/>/, '<f>IF(SUM(K602:N602)=0,"",SUM(K602:N602))</f>');
+      for (let i = 601; i < trees.length; i++) {
+        const r = 2 + i, tr = TREE_ROWS[i];
+        if (load.idx.get(r) == null) break;
+        load.rows[load.idx.get(r)] = mapRow(tpl, r, x => ({ col: x.col, row: x.sheet === SHEET ? tr : x.row === 602 ? r : x.row }), 'טעינת עצים')
+          .replace(/<row r="\d+"[^>]*>/, m => m.replace(/ hidden="1"/, ''));
+      }
+      zip.file('xl/worksheets/sheet2.xml', load.toXml());
+    }
     // נספח תמונות: תוויות לפי מספר העץ. עם "צרף תמונות" התמונות עצמן נכנסות לתאים,
     // ובלי — נשארות נוסחאות הנתיב של התבנית (C:\\Users\\origr\\Pictures\\<מספר>.jpg) למאקרו במחשב
-    const slots = photoSlots(survey.trees);
-    const images = [];
-    if (st.embedPhotos) for (const c of SLOT_CELLS) { for (const x of c.chain) sheet.set(x, null); sheet.set(c.img, null); }
+    const images = [], usedRows = new Set();
+    const avail = TPL_PAGES + extra;   // עמודים שקיימים בקובץ
+    if (embed) for (const c of SLOT_CELLS) if (c.page <= avail) { for (const x of c.chain) sheet.set(x, null); sheet.set(c.img, null); }
     for (const slot of slots) {
       const c = SLOT_CELLS[slot.index - 1];
+      if (c.page > avail) break;
       sheet.set(c.label, numOrText(slot.label));
-      if (!st.embedPhotos || !getPhoto) continue;
+      if (embed) usedRows.add(c.row);
+      if (!embed || !getPhoto) continue;
       const blob = await getPhoto(slot.photo.id);
       if (!blob) continue;
       images.push(blob);
@@ -303,8 +439,28 @@
       sheet.edit(c.img, s => `<c r="${c.img}"${s ? ` s="${s}"` : ''} t="e" vm="${vm}"><v>#VALUE!</v></c>`);
     }
     await addCellImages(zip, images);
-    const pages = Math.max(pagesFor(trees.length), photoPagesFor(slots.length));
-    if (pages) for (let r = 45; r <= 90 + 46 * (pages - 1); r++) sheet.unhide(r);
+
+    // מה מוצג: העמודים שצריך, בלי השורות הצהובות, בלי שורות עצים ריקות ובלי שורות מינים ריקות
+    for (let k = 0; k < pages; k++) for (let r = 45 + 46 * k; r <= 90 + 46 * k; r++) sheet.unhide(r);
+    for (const r of yellowRows(avail)) sheet.hide(r);
+    // שורת עץ ריקה בתוך תא תמונה ממוזג: הסתרה מקטינה את התמונה. בשורת התמונות העליונה של עמוד משאירים אותה,
+    // ובתחתונה מסתירים ומעבירים את הגובה לשורה ריקה מתחת לטבלה (comp), כך שהתמונה נשארת באותו גודל
+    const comp = new Map();
+    for (let i = trees.length; i < 25 + 32 * pages; i++) {
+      const r = TREE_ROWS[i];
+      const pr = PHOTO_ROWS.findIndex((x, ri) => usedRows.has(ri) && r >= x.label && r <= x.end);
+      if (pr >= 0) {
+        const x = PHOTO_ROWS[pr];
+        if (!x.comp || r === x.label) continue;
+        comp.set(x.comp, (comp.get(x.comp) || 0) + sheet.height(r));
+      }
+      sheet.hide(r);
+    }
+    for (const [r, h] of comp) sheet.setHeight(r, sheet.height(r) + h);
+    const spLast = 918 + off + moreSp;
+    for (let r = 885 + off + Math.max(1, species); r <= spLast; r++) sheet.hide(r);
+    // אקסל בלי התמונות: מסתירים את עמודות הנספח BF:BK
+    if (!embed) sheet.head = sheet.head.replace(/<col min="58" max="69"([^>]*?)\/>/, (m, a) => / hidden="1"/.test(a) ? m : `<col min="58" max="69"${a} hidden="1"/>`);
 
     zip.file('xl/worksheets/sheet1.xml', sheet.toXml());
     zip.file('xl/worksheets/sheet4.xml', params.toXml());
@@ -328,6 +484,6 @@
 
   root.Construction = {
     TYPES, typeOf, TRANSPLANT, transplantOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
-    compute, category, warnings, buildWorkbook, TREE_ROWS, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
+    compute, category, warnings, buildWorkbook, TREE_ROWS: TREE_ROWS.slice(0, MAX_TREES), MAX_TREES, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
   };
 })(this);
