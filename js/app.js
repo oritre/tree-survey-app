@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.24.3';
+  const APP_VERSION = '1.24.4';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -117,7 +117,8 @@
     if (m) {
       if (!cur || cur.id !== m[1]) {
         await saveNow();
-        cur = await DB.getSurvey(m[1]);
+        // אם הגיבוי עובד עכשיו על הסקר הזה, עורכים את אותו עותק (אחרת השמירה שלו דורסת את העריכה)
+        cur = Sync.holding(m[1]) || await DB.getSurvey(m[1]);
         if (!cur) { location.hash = '#/'; return; }
         const next = await onOpenSurvey(cur);
         if (next !== cur) { cur = null; go('#/s/' + next.id + '/details'); return; }
