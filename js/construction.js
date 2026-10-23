@@ -415,6 +415,7 @@
     // מהעץ ה-25 ואילך כותבים את השורות מחדש לפי שורה 602 עם הפניה לשורת העץ
     if (trees.length > PAGE1) {
       const load = new RowSheet(await zip.file('xl/worksheets/sheet2.xml').async('string'));
+      load.unshare(2 + PAGE1);   // נוסחה משותפת שחלק מהתאים שלה נכתבים מחדש: אקסל מבקש לתקן את הקובץ
       const tpl = load.rows[load.row(602)].replace(/<f t="shared" si="\d+"\/>/, '<f>IF(SUM(K602:N602)=0,"",SUM(K602:N602))</f>');
       for (let i = PAGE1; i < trees.length; i++) {
         const r = 2 + i, tr = TREE_ROWS[i];
