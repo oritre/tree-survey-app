@@ -115,15 +115,14 @@
   const photoName = (t, p) => manualName(p) || String((t && t.num) || '').trim();
 
   // ---------- מילוי התבנית ----------
-  // שורות העצים בגיליון סקר: עמוד 1 שורות 11-34, ואז עמודים של 32 עצים (53-84, 99-130, ...).
-  // שורה 35 תמיד מוסתרת (לפי ori): במקומה יש מקום לחתימה, כדי ש"יערן עירוני וגוזם מומחה" לא ירד לעמוד הבא
+  // שורות העצים בגיליון סקר: עמוד 1 שורות 11-35, ואז עמודים של 32 עצים (53-84, 99-130, ...).
   // עמוד נוסף k תופס את השורות 45+46k עד 90+46k. בתבנית יש 18 עמודים מוסתרים; כשצריך יותר,
   // מוסיפים עמודים זהים לפני הטבלאות המסכמות (שורה 873), כך שהמבנה נשאר אחיד
   const TPL_PAGES = 18, MAX_PAGES = 38;
   const MAX_TREES = 1225;   // השורות של לשונית "טעינת עצים" (2-1226)
-  const PAGE1 = 24;
+  const PAGE1 = 25;
   const TREE_ROWS = [];
-  for (let r = 11; r <= 34; r++) TREE_ROWS.push(r);
+  for (let r = 11; r <= 35; r++) TREE_ROWS.push(r);
   for (let k = 0; k < MAX_PAGES; k++) for (let r = 53 + 46 * k; r <= 84 + 46 * k; r++) TREE_ROWS.push(r);
   const pagesFor = n => Math.min(MAX_PAGES, Math.max(0, Math.ceil((n - PAGE1) / 32)));
 
@@ -140,7 +139,7 @@
   }
   const SLOT_CELLS = PHOTO_ROWS.flatMap((r, ri) => PHOTO_COLS.map(c => ({ row: ri, page: r.page, label: c + r.label, img: c + r.img, chain: r.chain.map(x => c + x) })));
   // שורות צהובות (שרשרת הנוסחאות של התמונות): תמיד מוסתרות
-  const yellowRows = pages => [5, 6, 41, 42, 43, ...Array.from({ length: pages }, (_, k) => [46, 47, 48, 86, 87, 88].map(r => r + 46 * k)).flat()];
+  const yellowRows = pages => [5, 6, 7, 41, 42, 43, ...Array.from({ length: pages }, (_, k) => [46, 47, 48, 86, 87, 88].map(r => r + 46 * k)).flat()];
   // תמונות שסומנו לדוח, לפי סדר העצים (כמו בסקר יציבות: פצל = משבצת לכל מספר בטווח)
   function photoSlots(trees) {
     const slots = [];
@@ -411,13 +410,12 @@
       sheet.cached('I' + r, c.I); sheet.cached('L' + r, c.L); sheet.cached('N' + r, c.N);
       sheet.cached('O' + r, c.O); sheet.cached('P' + r, c.P);
     });
-    // לשונית "טעינת עצים": שורה לכל עץ. בתבנית שורות 2-602 מפנות לשורות 11-35, 53-84, ...; כיוון ששורה 35 לא בשימוש,
-    // מהעץ ה-25 ואילך כותבים את השורות מחדש לפי שורה 602 עם הפניה לשורת העץ
-    if (trees.length > PAGE1) {
+    // לשונית "טעינת עצים": שורה לכל עץ (2-602 בתבנית). מעבר לזה מעתיקים את שורה 602 ומפנים לשורת העץ
+    if (trees.length > 601) {
       const load = new RowSheet(await zip.file('xl/worksheets/sheet2.xml').async('string'));
-      load.unshare(2 + PAGE1);   // נוסחה משותפת שחלק מהתאים שלה נכתבים מחדש: אקסל מבקש לתקן את הקובץ
+      load.unshare(603);   // נוסחה משותפת שחלק מהתאים שלה נכתבים מחדש: אקסל מבקש לתקן את הקובץ
       const tpl = load.rows[load.row(602)].replace(/<f t="shared" si="\d+"\/>/, '<f>IF(SUM(K602:N602)=0,"",SUM(K602:N602))</f>');
-      for (let i = PAGE1; i < trees.length; i++) {
+      for (let i = 601; i < trees.length; i++) {
         const r = 2 + i, tr = TREE_ROWS[i];
         if (load.idx.get(r) == null) break;
         load.rows[load.idx.get(r)] = mapRow(tpl, r, x => ({ col: x.col, row: x.sheet === SHEET ? tr : x.row === 602 ? r : x.row }), 'טעינת עצים')
@@ -461,7 +459,6 @@
       sheet.hide(r);
     }
     for (const [r, h] of comp) sheet.setHeight(r, sheet.height(r) + h);
-    sheet.hide(35);
     if (!embed) sheet.hide(4);   // שורת התוויות של התמונות, ריקה באקסל בלי תמונות: עוד מקום בעמוד 1
     // בעמודים הנוספים: שורות ריקות בראש העמוד ובסופו (45, 89, 90) מוסתרות, כדי שהעמוד ייכנס לדף אחד
     for (let k = 0; k < avail; k++) for (const r of [45, 89, 90]) sheet.hide(r + 46 * k);
