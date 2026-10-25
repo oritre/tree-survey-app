@@ -222,7 +222,7 @@
       for (const a of L.anchors) {
         if (!onPage.has(a.row) || a.col < c0 || a.col > c1) continue;
         const xr = xRight[a.col] - a.colOff * KY, yt = top[a.row] + a.rowOff * KY;
-        parts.push(`<img class="pa" src="template/${a.img}.png" style="left:${xr - a.w * KY}pt;top:${yt}pt;width:${a.w * KY}pt;height:${a.h * KY}pt">`);
+        parts.push(`<img class="pa" src="${a.img === 'stamp' ? Sig.src : `template/${a.img}.png`}" style="left:${xr - a.w * KY}pt;top:${yt}pt;width:${a.w * KY}pt;height:${a.h * KY}pt">`);
       }
 
       if (content) out.push(parts.join(''));
@@ -269,12 +269,13 @@
     for (const ref of ['A48', 'A49', 'A50', 'A51']) { const s = t(ref); if (s) { parts.push(line(s, y - 12, { left: 38, width: 549 })); y += 13; } }
     parts.push(line(t('E52'), y - 12, { b: 1, sz: 11.5 })); y += 14;
     parts.push(line(t('E53'), y - 12));
-    parts.push(`<img class="pa" src="template/stamp.png" style="left:67.2pt;top:${PAGE_H - 111.3 - 49.7}pt;width:58.8pt;height:49.7pt">`);
+    parts.push(`<img class="pa" src="${Sig.src}" style="left:67.2pt;top:${PAGE_H - 111.3 - 49.7}pt;width:58.8pt;height:49.7pt">`);
     return pageHtml(L, parts.join(''));
   }
 
   async function buildPages(survey, photoUrls) {
     const L = await getLayout();
+    await Sig.load(); // החתימה נשמרת רק במכשיר ובדרייב, לא באתר
     const slots = Core.reportSlots(survey.trees).slice(0, Core.MAX_PRINTED);
     const vals = sheetValues(survey, slots);
     if (!vals.trees.length) return [letterHtml(L, survey)];

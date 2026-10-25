@@ -30,7 +30,7 @@
     if (b) {
       const res = await fetch(b.file);
       if (!res.ok) throw new Error('לא נמצאה התבנית ' + b.name);
-      bytes = new Uint8Array(await res.arrayBuffer());
+      bytes = await Sig.patch(new Uint8Array(await res.arrayBuffer()));
     } else {
       bytes = await DB.getKV('qtpl:' + id, null);
       if (!bytes) throw new Error('התבנית של ההצעה הזו נמחקה מהאפליקציה. אפשר להעלות אותה שוב באותו שם.');

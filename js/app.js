@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.24.6';
+  const APP_VERSION = '1.24.7';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1807,9 +1807,11 @@
   }
 
   // ---------- הפקה ----------
+  const NO_SIG = 'אין במכשיר הזה חתימה וחותמת, והדוח ייצא בלעדיהן. מוסיפים בהגדרות, או מתחברים לגוגל דרייב והיא תיטען משם.';
   async function renderExport(body) {
     if (Construction.isConstruction(cur)) return renderConstructionExport(body);
     const warns = Core.warnings(cur);
+    if (!(await Sig.load())) warns.push(NO_SIG);
     const rs = Core.reportSlots(cur.trees);
     const status = h('div', { class: 'small muted', role: 'status' });
     const syncBox = h('div', { class: 'small', role: 'status' });
@@ -1916,6 +1918,7 @@
   // הפקה לסקר לבנייה: טבלת אקסל, תמונות ו-GIS. "סיום סקר" מעלה את האקסל לגוגל דרייב ומפנה את התמונות
   async function renderConstructionExport(body) {
     const warns = Construction.warnings(cur);
+    if (!(await Sig.load())) warns.push(NO_SIG);
     const status = h('div', { class: 'small muted', role: 'status' });
     const splitStatus = h('div', { class: 'small muted', role: 'status' });
     const odOn = await OD.connected();
@@ -2011,7 +2014,7 @@
   async function templateBytes() {
     const res = await fetch('template/survey.xltm');
     if (!res.ok) throw new Error('לא נמצאה התבנית');
-    return new Uint8Array(await res.arrayBuffer());
+    return Sig.patch(new Uint8Array(await res.arrayBuffer()));
   }
 
   function fileBase(s) {
@@ -2049,7 +2052,7 @@
     if (Construction.isConstruction(s)) {
       const res = await fetch('template/construction.xltm');
       if (!res.ok) throw new Error('לא נמצאה תבנית סקר הבנייה');
-      const bytes = await Construction.buildWorkbook(new Uint8Array(await res.arrayBuffer()), s, id => photoBlob(s, id));
+      const bytes = await Construction.buildWorkbook(await Sig.patch(new Uint8Array(await res.arrayBuffer())), s, id => photoBlob(s, id));
       return { blob: new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }), name: fileBase(s) + '.xlsm', placed: 0 };
     }
     const r = await SurveyExcel.buildWorkbook(await templateBytes(), s, async id => {
@@ -2066,7 +2069,7 @@
     const res = await fetch('template/construction.xltm');
     if (!res.ok) throw new Error('לא נמצאה תבנית סקר הבנייה');
     const noPhotos = Object.assign({}, s, { cset: Object.assign({}, Construction.settingsOf(s), { embedPhotos: false }) });
-    const bytes = await Construction.buildWorkbook(new Uint8Array(await res.arrayBuffer()), noPhotos, () => null);
+    const bytes = await Construction.buildWorkbook(await Sig.patch(new Uint8Array(await res.arrayBuffer())), noPhotos, () => null);
     return { name: fileBase(s) + ' - טבלאות.xlsm', blob: new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }) };
   }
   // PDF של התמונות שסומנו לדוח (באותו סדר ובאותן תוויות כמו בנספח באקסל). null כשאין תמונות
@@ -2274,6 +2277,11 @@
     const odRootIn = h('input', { class: 'in', value: await DB.getKV('odRoot', 'סקרי עצים') });
     const odConnected = await OD.connected();
     const odUser = await DB.getKV('odUser', '');
+    const hasSig = await Sig.load();
+    const sigInput = h('input', { type: 'file', accept: 'image/png', hidden: true, onchange: async e => {
+      const f = e.target.files[0]; if (!f) return;
+      try { await Sig.set(f); toast('החתימה נשמרה במכשיר ובגוגל דרייב'); renderSettings(); } catch (err) { toast(err.message, 4000); }
+    } });
     const odStatus = h('div', { class: 'small', role: 'status' },
       Sync.state.odNeedsLogin ? 'צריך להתחבר מחדש.' : odConnected ? `✓ מחובר${odUser ? ' כ-' + odUser : ''}` : '');
 
@@ -2333,6 +2341,14 @@
             } }, odConnected && !Sync.state.odNeedsLogin ? 'התחבר מחדש' : 'התחבר לגוגל דרייב'),
             odConnected ? h('button', { class: 'btn', onclick: async () => { await OD.logout(); renderSettings(); } }, 'נתק') : null,
             h('button', { class: 'btn', onclick: async () => { await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים'); toast('נשמר'); } }, 'שמור תיקייה'))),
+        h('div', { class: 'card stack' },
+          h('h2', { style: 'margin:0;font-size:20px' }, 'חתימה וחותמת'),
+          h('div', { class: 'muted small' }, 'נכנסת לדוחות ולהצעות המחיר. נשמרת רק במכשיר ובתיקיית הגיבוי בגוגל דרייב, לא באתר של האפליקציה. מכשיר שמתחבר לגוגל דרייב טוען אותה לבד. קובץ PNG עם רקע שקוף.'),
+          hasSig ? h('img', { src: Sig.src, alt: 'חתימה וחותמת', style: 'max-width:180px;max-height:160px;background:#fff;border:1px solid var(--line, #ddd);border-radius:8px;padding:6px' })
+            : h('div', { class: 'small' }, 'אין חתימה במכשיר הזה.'),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary', onclick: () => { sigInput.value = ''; sigInput.click(); } }, hasSig ? 'החלף' : 'הוסף חתימה')),
+          sigInput),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'עבודה בשטח'),
           inAppCamera, annotateAfter, shareFiles, field('כיוון המסך באפליקציה', orientSel)),

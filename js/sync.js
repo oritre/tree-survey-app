@@ -376,6 +376,7 @@
       if (!local.tgUpdated) { local.tgUpdated = Date.now(); await DB.setKV('tgUpdated', local.tgUpdated); }
       await OD.upload(r, SETTINGS, new Blob([JSON.stringify(Object.assign(cloud, local))], { type: 'application/json' }), true);
     }
+    await Sig.sync(r).catch(() => {}); // החתימה והחותמת, שלא נמצאות באתר הציבורי
     settingsSynced = true;
   }
 
