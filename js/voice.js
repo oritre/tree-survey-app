@@ -237,11 +237,12 @@
         <video playsinline muted autoplay></video>
         <div class="cam-top">
           <span class="cam-title"></span>
+          <button class="cam-btn" data-act="rec" title="הקלטת הדיבור (גיבוי)"></button>
           <button class="cam-btn" data-act="speak" title="הקראת אישור"></button>
           <button class="cam-btn" data-act="mic" title="השהיית ההקשבה"></button>
         </div>
         <div class="voice-panel">
-          <div class="voice-status"><span class="voice-dot"></span><span class="voice-state"></span></div>
+          <div class="voice-status"><span class="voice-dot"></span><span class="voice-state"></span><span class="voice-rec"></span></div>
           <div class="voice-heard"></div>
           <div class="voice-card"></div>
           <div class="voice-log"></div>
@@ -270,6 +271,48 @@
       const setState = (cls, text) => { ov.dataset.state = cls; $('.voice-state').textContent = text; };
       const showMic = () => { micBtn.textContent = paused ? '▶' : '⏸'; micBtn.classList.toggle('on', paused); };
       showMic();
+
+      // ---------- הקלטה: גיבוי של כל מה שנאמר, בקטעים של 3 דקות (כל קטע נשמר מיד, גם אם האפליקציה תיסגר) ----------
+      const SEG_MS = 3 * 60 * 1000;
+      let recOn = !!opts.onRecording && !!root.MediaRecorder;
+      try { if (localStorage.getItem('voiceRecord') === '0') recOn = false; } catch (_) {}
+      let micStream = null, mr = null, segTimer = null, recNote = '';
+      const recBtn = $('[data-act="rec"]');
+      const showRec = () => {
+        recBtn.hidden = !opts.onRecording || !root.MediaRecorder;
+        recBtn.textContent = '⏺';
+        recBtn.classList.toggle('rec-on', !!mr);
+        $('.voice-rec').textContent = mr ? '● מקליט' : recNote;
+      };
+      async function startRecording() {
+        if (!recOn || mr || !active) return;
+        try {
+          if (!micStream) micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+          if (!active || mr) return;
+          const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find(m => root.MediaRecorder.isTypeSupported(m)) || '';
+          const m = new root.MediaRecorder(micStream, Object.assign({ audioBitsPerSecond: 24000 }, mime ? { mimeType: mime } : {}));
+          const chunks = [], start = Date.now();
+          m.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+          m.onstop = () => {
+            const blob = new Blob(chunks, { type: m.mimeType || mime || 'audio/webm' });
+            if (blob.size > 2000) opts.onRecording(blob, { start, end: Date.now() });
+          };
+          m.start(5000);
+          mr = m; recNote = '';
+          segTimer = setTimeout(() => stopRecording(true), SEG_MS);
+        } catch (e) { recOn = false; recNote = 'ההקלטה לא זמינה'; console.warn(e); }
+        showRec();
+      }
+      function stopRecording(restart) {
+        clearTimeout(segTimer);
+        if (mr && mr.state !== 'inactive') { try { mr.stop(); } catch (_) {} }
+        mr = null;
+        if (restart && recOn && active) startRecording();
+        else if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+        showRec();
+      }
+      showRec();
+      startRecording();
 
       // מסך דולק כל הזמן
       let lock = null;
@@ -333,6 +376,7 @@
         if (e.error === 'no-speech' || e.error === 'aborted') return;
         errStreak++;
         if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { paused = true; showMic(); setState('err', 'אין הרשאה למיקרופון. צריך לאשר בדפדפן.'); }
+        else if (e.error === 'audio-capture' && mr) { recOn = false; stopRecording(false); recNote = 'ההקלטה כובתה: המיקרופון תפוס'; showRec(); }
         else if (e.error === 'network') setState('err', 'זיהוי הדיבור צריך חיבור לרשת. אפשר לצלם בכפתור.');
         else if (e.error === 'language-not-supported') { paused = true; showMic(); setState('err', 'אין זיהוי דיבור בעברית במכשיר הזה'); }
         else setState('err', 'תקלה בזיהוי דיבור (' + e.error + ')');
@@ -438,6 +482,7 @@
         active = false;
         stopListening();
         if (root.speechSynthesis) root.speechSynthesis.cancel();
+        stopRecording(false);
         if (lock) lock.release().catch(() => {});
         document.removeEventListener('visibilitychange', onVis);
         cam.stream.getTracks().forEach(t => t.stop());
@@ -452,6 +497,12 @@
         if (!b) return;
         const act = b.dataset.act;
         if (act === 'done') close();
+        else if (act === 'rec') {
+          recOn = !mr;
+          try { localStorage.setItem('voiceRecord', recOn ? '1' : '0'); } catch (_) {}
+          recNote = recOn ? '' : 'ההקלטה כבויה';
+          if (recOn) startRecording(); else stopRecording(false);
+        }
         else if (act === 'speak') { speakOn = !speakOn; showSpeak(); try { localStorage.setItem('voiceSpeak', speakOn ? '1' : '0'); } catch (_) {} }
         else if (act === 'mic') {
           paused = !paused; showMic();
