@@ -289,8 +289,9 @@ a.btn { text-decoration: none; color: inherit; }
 .annot-bar .sp { flex: 1; }
 .annot-bar .txt { font-size: 17px; padding: 0 16px; background: #444; }
 .annot-bar .txt.save { background: #2f6b2f; }
-.annot-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
-.annot-stage canvas { touch-action: none; display: block; }
+.annot-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; position: relative; }
+.annot-stage canvas { touch-action: none; display: block; transform-origin: 0 0; }
+.annot-bar button[hidden] { display: none; }
 
 /* בקרת גיבוי */
 .checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
