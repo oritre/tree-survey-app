@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.25.0';
+  const APP_VERSION = '1.25.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1604,15 +1604,17 @@
     inp.click();
   }
   // שומרת תמונה אחת לעץ: (סימון אם ביקשו) -> טאבלט -> רישום בסקר. מחזירה false אם לא נשמרה,
-  // ו-'retake' אם במסך הסימון בחרו לצלם שוב (רק כשמגיעים מהמצלמה של האפליקציה)
+  // 'cancel' אם במסך הסימון לחצו ביטול, ו-'retake' אם בחרו לצלם שוב (רק כשמגיעים מהמצלמה של האפליקציה)
   async function addPhoto(t, file, annotate, canRetake) {
     try {
       const p = await processImage(file);
       let rec = { id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h };
       if (annotate) {
-        const strokes = await Annotate.open(p.blob, [], { saveLabel: 'שמור עם סימון', cancelLabel: 'שמור בלי סימון', retakeLabel: canRetake ? 'צלם שוב' : '' });
+        // שמור: עם הסימונים אם ציירו, בלי אם לא. ביטול: התמונה לא נשמרת
+        const strokes = await Annotate.open(p.blob, [], { saveLabel: 'שמור', cancelLabel: 'ביטול', retakeLabel: canRetake ? 'צלם שוב' : '' });
         if (strokes === 'retake') return 'retake';
-        if (strokes && strokes.length) rec = await applyStrokes(rec, p.blob, strokes);
+        if (!strokes) return 'cancel';
+        if (strokes.length) rec = await applyStrokes(rec, p.blob, strokes);
       }
       await DB.putPhoto(rec);
       // בעץ מפוצל: התמונה עוברת למספר הראשון שעוד אין לו תמונה

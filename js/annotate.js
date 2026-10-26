@@ -31,6 +31,31 @@
     }
   }
 
+  // כפתור החזרה של הטאבלט סוגר את המסך העליון (מצלמה / סימון) במקום לצאת למסך הראשי.
+  // push(fn) מוסיף רשומה בהיסטוריה; fn נקרא כשלוחצים חזרה. מחזיר release() לסגירה רגילה מהכפתורים
+  const BackGuard = (() => {
+    const stack = [];
+    let skip = 0;
+    window.addEventListener('popstate', () => {
+      if (skip) { skip--; return; }
+      const fn = stack.pop();
+      if (fn) fn();
+    });
+    return {
+      push(fn) {
+        history.pushState({ backGuard: stack.length + 1 }, '', location.href);
+        stack.push(fn);
+        return () => {
+          const i = stack.indexOf(fn);
+          if (i < 0) return; // כבר נסגר בכפתור החזרה
+          stack.splice(i, 1);
+          skip++;
+          history.back();
+        };
+      },
+    };
+  })();
+
   function render(ctx, img, strokes, W, H) {
     ctx.drawImage(img, 0, 0, W, H);
     for (const s of strokes) drawStroke(ctx, s, W, H);
@@ -45,7 +70,7 @@
     return new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
   }
 
-  // פותח עורך במסך מלא. מחזיר את רשימת הקווים החדשה, null אם בוטל, או 'retake' (עם opts.retakeLabel) לצילום מחדש
+  // פותח עורך במסך מלא. מחזיר את רשימת הקווים (ריקה אם לא סימנו), null אם בוטל (גם בכפתור החזרה), או 'retake' (עם opts.retakeLabel) לצילום מחדש
   function open(blob, strokes, opts) {
     opts = opts || {};
     return new Promise(async resolve => {
@@ -69,6 +94,7 @@
             <button data-act="undo" title="בטל">↶</button>
             <button data-act="redo" title="חזור">↷</button>
             <button data-act="clear" title="מחק הכל">🧽</button>
+            <button data-act="fit" title="חזרה לגודל מלא" hidden>⤢</button>
           </div>
           <span class="sp"></span>
           ${opts.retakeLabel ? `<button data-act="retake" class="txt">${opts.retakeLabel}</button>` : ''}
@@ -82,14 +108,27 @@
       const ctx = cv.getContext('2d');
       let W = 0, H = 0;
 
+      // הגדלה בצביטה של שתי אצבעות: zoom והזזה (tx, ty) כ-CSS transform על הקנבס; אחרי הצביטה הקנבס מצויר מחדש ברזולוציה מתאימה
+      let zoom = 1, tx = 0, ty = 0;
+      function applyZoom() {
+        cv.style.transform = zoom > 1 ? `translate(${tx}px, ${ty}px) scale(${zoom})` : '';
+        ov.querySelector('[data-act=fit]').hidden = zoom <= 1;
+      }
+      function resize() {
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        // לא יותר מהרזולוציה של התמונה עצמה ולא יותר מ-16 מגה-פיקסל
+        const k = Math.min(dpr * zoom, img.width / W, Math.sqrt(16e6 / (W * H)));
+        const nw = Math.round(W * Math.max(dpr, k)), nh = Math.round(H * Math.max(dpr, k));
+        if (nw !== cv.width || nh !== cv.height) { cv.width = nw; cv.height = nh; }
+        draw();
+      }
       function layout() {
         const r = stage.getBoundingClientRect();
-        const s = Math.min(r.width / img.width, r.height / img.height);
-        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const s = Math.min((r.width - 16) / img.width, (r.height - 16) / img.height);
         W = Math.max(1, Math.round(img.width * s)); H = Math.max(1, Math.round(img.height * s));
         cv.style.width = W + 'px'; cv.style.height = H + 'px';
-        cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-        draw();
+        zoom = 1; tx = ty = 0; applyZoom();
+        resize();
       }
       function draw() {
         render(ctx, img, cur ? list.concat([cur]) : list, cv.width, cv.height);
@@ -105,31 +144,70 @@
         const r = cv.getBoundingClientRect();
         return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
       };
-      cv.addEventListener('pointerdown', e => {
+      // אצבע אחת מציירת. אצבע שנייה מבטלת את הקו שהתחיל ועוברת להגדלה/הזזה, ואין ציור עד שכל האצבעות מורמות
+      const ptrs = new Map();
+      let pinch = null, noDraw = false;
+      const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      function startPinch() {
+        const [a, b] = [...ptrs.values()];
+        const sr = stage.getBoundingClientRect();
+        pinch = { d: dist(a, b), m: mid(a, b), z: zoom, tx, ty, bx: sr.left + cv.offsetLeft, by: sr.top + cv.offsetTop };
+      }
+      stage.addEventListener('pointerdown', e => {
         e.preventDefault();
-        cv.setPointerCapture(e.pointerId);
+        stage.setPointerCapture(e.pointerId);
+        ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (ptrs.size >= 2) {
+          cur = null; noDraw = true; draw();
+          if (ptrs.size === 2) startPinch();
+          return;
+        }
+        if (noDraw) return;
         cur = { t: tool, c: color, w: width, p: [pt(e)] };
         draw();
       });
-      cv.addEventListener('pointermove', e => {
+      stage.addEventListener('pointermove', e => {
+        if (!ptrs.has(e.pointerId)) return;
+        ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch && ptrs.size >= 2) {
+          const [a, b] = [...ptrs.values()];
+          const m = mid(a, b);
+          zoom = Math.min(8, Math.max(1, pinch.z * dist(a, b) / pinch.d));
+          // הנקודה שהייתה בין האצבעות נשארת בין האצבעות
+          const px = (pinch.m.x - pinch.bx - pinch.tx) / pinch.z, py = (pinch.m.y - pinch.by - pinch.ty) / pinch.z;
+          tx = m.x - pinch.bx - px * zoom; ty = m.y - pinch.by - py * zoom;
+          if (zoom <= 1) tx = ty = 0;
+          applyZoom();
+          return;
+        }
         if (!cur) return;
         const p = pt(e);
         if (cur.t === 'free') cur.p.push(p); else cur.p[1] = p;
         draw();
       });
-      const end = () => {
+      const end = e => {
+        if (!ptrs.delete(e.pointerId)) return;
+        if (pinch) {
+          if (ptrs.size === 2) return startPinch();
+          if (ptrs.size < 2) { pinch = null; resize(); }
+        }
+        if (!ptrs.size) noDraw = false;
         if (!cur) return;
         if (cur.t === 'free' || cur.p.length > 1) { list.push(cur); redo.length = 0; }
         cur = null; draw(); sync();
       };
-      cv.addEventListener('pointerup', end);
-      cv.addEventListener('pointercancel', end);
+      stage.addEventListener('pointerup', end);
+      stage.addEventListener('pointercancel', end);
 
+      let release = null;
       function close(result) {
         window.removeEventListener('resize', layout);
         ov.remove();
+        if (release) release();
         resolve(result);
       }
+      release = BackGuard.push(() => { release = null; close(null); });
       ov.querySelector('.annot-bar').addEventListener('click', e => {
         const b = e.target.closest('button');
         if (!b) return;
@@ -141,6 +219,7 @@
         else if (b.dataset.act === 'clear') { if (list.length && confirm('למחוק את כל הסימונים?')) { list = []; redo.length = 0; } }
         else if (b.dataset.act === 'cancel') return close(null);
         else if (b.dataset.act === 'retake') return close('retake');
+        else if (b.dataset.act === 'fit') { zoom = 1; tx = ty = 0; applyZoom(); resize(); }
         else if (b.dataset.act === 'save') return close(list);
         draw(); sync();
       });
@@ -151,4 +230,5 @@
   }
 
   root.Annotate = { open, flatten };
+  root.BackGuard = BackGuard;
 })(self);
