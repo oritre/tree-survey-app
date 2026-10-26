@@ -1603,13 +1603,15 @@
     inp.value = '';
     inp.click();
   }
-  // שומרת תמונה אחת לעץ: (סימון אם ביקשו) -> טאבלט -> רישום בסקר. מחזירה false אם לא נשמרה
-  async function addPhoto(t, file, annotate) {
+  // שומרת תמונה אחת לעץ: (סימון אם ביקשו) -> טאבלט -> רישום בסקר. מחזירה false אם לא נשמרה,
+  // ו-'retake' אם במסך הסימון בחרו לצלם שוב (רק כשמגיעים מהמצלמה של האפליקציה)
+  async function addPhoto(t, file, annotate, canRetake) {
     try {
       const p = await processImage(file);
       let rec = { id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h };
       if (annotate) {
-        const strokes = await Annotate.open(p.blob, [], { saveLabel: 'שמור', cancelLabel: 'בלי סימון' });
+        const strokes = await Annotate.open(p.blob, [], { saveLabel: 'שמור עם סימון', cancelLabel: 'שמור בלי סימון', retakeLabel: canRetake ? 'צלם שוב' : '' });
+        if (strokes === 'retake') return 'retake';
         if (strokes && strokes.length) rec = await applyStrokes(rec, p.blob, strokes);
       }
       await DB.putPhoto(rec);
@@ -1638,7 +1640,8 @@
     }
   }
 
-  // "צלם": המצלמה של האפליקציה (מהירה, צילום ברצף). אם אין גישה — אפליקציית המצלמה של המכשיר
+  // "צלם": המצלמה של האפליקציה (מהירה). עם סימון: לחיצה מצלמת ועוברת ישר לסימון, ומשם שומרים או מצלמים שוב.
+  // בלי סימון (סקר לבנייה) המצלמה נשארת פתוחה לצילום ברצף. אם אין גישה — אפליקציית המצלמה של המכשיר
   async function takePhotos() {
     const t = treeById(curTreeId);
     if (!t) return;
@@ -1646,7 +1649,10 @@
       // בסקר לבנייה לא צריך מסך סימון אחרי הצילום
       const annotate = !Construction.isConstruction(cur) && await DB.getKV('annotateAfter', true);
       try {
-        await Camera.open(blob => addPhoto(t, blob, annotate), { title: `עץ ${t.num || ''} ${t.species || ''}`.trim() });
+        await Camera.open(async blob => {
+          const r = await addPhoto(t, blob, annotate, annotate);
+          return annotate && r === true ? 'close' : r;
+        }, { title: `עץ ${t.num || ''} ${t.species || ''}`.trim(), doneLabel: annotate ? 'סגור' : 'סיום', onError: m => toast(m, 2500) });
         return;
       } catch (e) {
         toast('המצלמה של האפליקציה לא זמינה (' + e.message + '), פותח את מצלמת המכשיר', 3000);
@@ -1675,10 +1681,14 @@
     };
     const findTree = num => cur.trees.find(x => String(x.num || '').replace(/\s/g, '') === num);
     const refresh = () => { renderTreeList(); renderEditor(); };
+    // מחזירה false אם התמונה לא יצאה (שחורה או לא נשמרה)
     async function photo(t, shoot, u) {
       const blob = await shoot();
-      if (await addPhoto(t, blob, false)) u.photos.push(t.photos[t.photos.length - 1].id);
+      if (!blob || !(await addPhoto(t, blob, false))) return false;
+      u.photos.push(t.photos[t.photos.length - 1].id);
+      return true;
     }
+    const NO_SHOT = 'התמונה לא יצאה, תגיד צלם';
     const start = (t, created) => {
       const u = { t, created, before: { species: t.species, notes: t.notes, urgency: t.urgency, pines: t.pines, split: t.split }, photos: [] };
       undo.push(u);
@@ -1737,10 +1747,11 @@
       }
       await saveNow();
       // עץ חדש, מספר עץ שנאמר או "צלם": תמונה של מה שמול המצלמה
-      if (created || p.num != null || p.photo) await photo(t, shoot, u);
+      const shot = created || p.num != null || p.photo ? await photo(t, shoot, u) : null;
       afterNew(t, created);
       refresh();
       const what = [label(t), t.species].filter(Boolean).join(' ');
+      if (shot === false) return { say: what + ', ' + NO_SHOT, card: card(t).concat(NO_SHOT), warn: true };
       return { say: (p.photo && !created && p.num == null ? 'צולם' : what + (created ? ', נשמר' : ', עודכן')) + ask(t), card: card(t) };
     }
 
@@ -1749,10 +1760,10 @@
       let t = treeById(curTreeId), created = false;
       if (!t) { t = newTree(Core.nextNum(cur.trees)); created = true; }
       const u = start(t, created);
-      await photo(t, shoot, u);
+      const ok = await photo(t, shoot, u);
       afterNew(t, created);
       await saveNow(); refresh();
-      return { card: card(t) };
+      return ok ? { card: card(t) } : { card: card(t).concat('התמונה לא יצאה, צלם שוב'), warn: true };
     }
 
     try {

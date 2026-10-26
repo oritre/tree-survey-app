@@ -1,9 +1,10 @@
-// מצלמה בתוך האפליקציה: נפתחת מיד, צילום בלחיצה אחת, ואפשר לצלם כמה תמונות ברצף בלי לצאת.
-// onShot(blob) נקרא לכל תמונה (שם נפתח מסך הסימון ונשמרת התמונה), והמצלמה ממשיכה אחריו.
+// מצלמה בתוך האפליקציה: נפתחת מיד, צילום בלחיצה אחת.
+// onShot(blob) נקרא לכל תמונה. אם הוא מחזיר 'close' המצלמה נסגרת (עברנו לסימון ושמרנו),
+// 'retake' חוזרים למצלמה לצילום חדש, false התמונה לא נשמרה, וכל דבר אחר: נשמרה והמצלמה ממשיכה (צילום ברצף).
 (function (root) {
   'use strict';
 
-  // פותח את המצלמה האחורית עם חשיפה/פוקוס אוטומטיים. משמש גם את מצב הדיבור (js/voice.js)
+  // פותח את המצלמה האחורית עם חשיפה/פוקוס אוטומטיים
   async function start() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('אין גישה למצלמה בדפדפן הזה');
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -21,20 +22,44 @@
     return { stream, track, caps, ic };
   }
 
-  // תמונה אחת: צילום של המצלמה, ואם לא הצליח פריים מהווידאו
+  // פריים מהווידאו
+  function frame(video) {
+    if (!video.videoWidth) return null;
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth; c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    return c;
+  }
+  // תמונה שחורה כמעט לגמרי (המצלמה עוד לא "התעוררה" או שהצילום נכשל)
+  async function isBlack(src) {
+    try {
+      const bmp = src instanceof Blob ? await createImageBitmap(src) : src;
+      const c = document.createElement('canvas');
+      c.width = 24; c.height = 24;
+      const g = c.getContext('2d');
+      g.drawImage(bmp, 0, 0, 24, 24);
+      const d = g.getImageData(0, 0, 24, 24).data;
+      let max = 0;
+      for (let i = 0; i < d.length; i += 4) max = Math.max(max, d[i], d[i + 1], d[i + 2]);
+      return max < 14;
+    } catch (_) { return false; }
+  }
+
+  // תמונה אחת: צילום של המצלמה, ואם לא הצליח פריים מהווידאו. null אם יצא שחור.
+  // takePhoto נתקע לפעמים באנדרואיד ולא חוזר עד שסוגרים את המצלמה (ואז הפריים מהווידאו כבר שחור),
+  // לכן הוא מוגבל בזמן, ופריים מהווידאו נשמר מראש
   async function grab(video, ic, torch) {
+    const backup = frame(video);
     let blob = null;
     if (ic) {
-      try { blob = await ic.takePhoto(torch ? {} : { fillLightMode: 'off' }); } catch (_) {
-        try { blob = await ic.takePhoto(); } catch (__) { blob = null; }
-      }
-      if (blob && !blob.size) blob = null;
+      const attempt = o => ic.takePhoto(o).then(b => (b && b.size ? b : null));
+      const p = attempt(torch ? {} : { fillLightMode: 'off' }).catch(() => attempt().catch(() => null));
+      blob = await Promise.race([p, new Promise(r => setTimeout(() => r(null), 3500))]);
+      if (blob && await isBlack(blob)) blob = null;
     }
     if (!blob) {
-      const c = document.createElement('canvas');
-      c.width = video.videoWidth; c.height = video.videoHeight;
-      c.getContext('2d').drawImage(video, 0, 0);
-      blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+      const c = backup && !(await isBlack(backup)) ? backup : frame(video);
+      if (c && !(await isBlack(c))) blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
     }
     return blob;
   }
@@ -66,7 +91,7 @@
           ${caps.torch ? '<button class="cam-btn" data-act="torch" title="פנס">🔦</button>' : ''}
         </div>
         <div class="cam-bottom">
-          <button class="cam-btn txt" data-act="done">סיום</button>
+          <button class="cam-btn txt" data-act="done">${opts.doneLabel || 'סיום'}</button>
           <button class="cam-shutter" data-act="shot" aria-label="צלם"></button>
           <div class="cam-last"><img alt=""><b></b></div>
         </div>
@@ -92,19 +117,25 @@
         busy = true;
         const fl = ov.querySelector('.cam-flash');
         fl.classList.remove('on'); void fl.offsetWidth; fl.classList.add('on');
+        ov.classList.add('busy');
         try {
           const blob = await grab(video, ic, torch);
-          ov.classList.add('paused');
+          ov.classList.remove('busy');
+          if (!blob) { opts.onError && opts.onError('התמונה יצאה שחורה, צלם שוב'); return; }
+          ov.classList.add('hidden');
           const kept = await onShot(blob);
-          ov.classList.remove('paused');
-          if (kept !== false) {
+          if (kept === 'close') { n++; return close(); }
+          ov.classList.remove('hidden');
+          if (video.paused) video.play().catch(() => {});
+          ov.focus();
+          if (kept !== false && kept !== 'retake') {
             n++;
             count.textContent = n;
             if (lastImg.src) URL.revokeObjectURL(lastImg.src);
             lastImg.src = URL.createObjectURL(blob);
             ov.querySelector('.cam-last').classList.add('on');
           }
-        } finally { busy = false; }
+        } finally { busy = false; ov.classList.remove('busy'); }
       }
 
       ov.addEventListener('click', e => {

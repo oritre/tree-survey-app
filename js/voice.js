@@ -310,6 +310,7 @@
         const fl = $('.cam-flash');
         fl.classList.remove('on'); void fl.offsetWidth; fl.classList.add('on');
         const blob = await root.Camera.grab(video, cam.ic, false);
+        if (!blob) return null; // תמונה שחורה / המצלמה לא החזירה תמונה
         shots++;
         const last = $('.cam-last');
         $('.cam-last b').textContent = shots;
