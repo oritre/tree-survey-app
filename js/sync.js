@@ -252,6 +252,25 @@
       }
     }
 
+    // הקלטות של מצב הדיבור: כל קטע עולה פעם אחת לתיקייה "הקלטות"
+    const recs = (s.recordings || []).filter(r => !r.odId);
+    if (recs.length) {
+      const rf = await OD.folder(s.odFolderId, 'הקלטות');
+      const two = n => String(n).padStart(2, '0');
+      for (const r of recs) {
+        const d = await DB.getPhoto(r.id);
+        if (!d || !d.blob) continue;
+        const dt = new Date(r.start);
+        const ext = /mp4/.test(r.type) ? 'm4a' : /ogg/.test(r.type) ? 'ogg' : 'webm';
+        const name = `הקלטה ${dt.getFullYear()}-${two(dt.getMonth() + 1)}-${two(dt.getDate())} ${two(dt.getHours())}-${two(dt.getMinutes())}-${two(dt.getSeconds())}.${ext}`;
+        const item = await OD.upload(rf, name, d.blob, false);
+        if (!item) break;
+        r.odId = item.id; r.odName = name;
+        await DB.putSurvey(s, false);
+        emit();
+      }
+    }
+
     // נתוני הסקר ושכבת GIS: אחרי כל שינוי
     const hash = hashSurvey(s);
     if (s.odDataHash !== hash) {

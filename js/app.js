@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.26.0';
+  const APP_VERSION = '1.27.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1211,6 +1211,7 @@
   async function deleteSurvey() {
     if (!confirm('למחוק את כל הסקר, כולל התמונות? אי אפשר לבטל.')) return;
     for (const t of cur.trees) for (const p of t.photos || []) await DB.deletePhoto(p.id);
+    for (const r of cur.recordings || []) await DB.deletePhoto(r.id);
     await DB.deleteSurvey(cur.id);
     cur = null;
     go('#/');
@@ -1771,13 +1772,22 @@
       await saveNow(); refresh();
       return { card: card(t) };
     }
+    // הקלטת הדיבור: כל קטע נשמר בטאבלט מיד ונרשם בסקר, והגיבוי מעלה אותו לתיקייה "הקלטות" בגוגל דרייב
+    const surv = cur;
+    async function onRecording(blob, meta) {
+      const id = uid();
+      await DB.putPhoto({ id, blob, audio: true });
+      surv.recordings = (surv.recordings || []).concat({ id, start: meta.start, end: meta.end, type: blob.type, size: blob.size });
+      if (cur === surv) await saveNow(); else await DB.putSurvey(surv);
+      Sync.kick(true);
+    }
     // מה נשמע ומה נכנס, נשמר בסקר (ומגיע לגוגל דרייב) כדי לבדוק את הזיהוי
     const log = e => { cur.voiceLog = (cur.voiceLog || []).concat(e).slice(-300); saveSoon(); };
 
     try {
       await Voice.open({
         context: () => ({ species: [...new Set([...sugCache.speciesAll, ...safetySpecies()])], phrases: sugCache.phrasesTop }),
-        handle, manualShot, log,
+        handle, manualShot, log, onRecording,
         title: () => { const t = treeById(curTreeId); return t ? `מצב דיבור · ${label(t)} ${t.species || ''}`.trim() : 'מצב דיבור'; },
       });
     } catch (e) {
