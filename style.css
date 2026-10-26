@@ -390,3 +390,19 @@ textarea.doc-text.b { font-weight: 700; }
   ::-webkit-scrollbar-track { background: transparent; }
 }
 .cam-ev { min-width: 34px; text-align: center; font-size: 16px; color: #fff; }
+/* מצב דיבור: מעל הווידאו, בצד ימין (לא מסתיר את כפתורי המצלמה) */
+.voice-panel { position: absolute; top: 72px; right: 12px; width: min(560px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 8px; color: #fff; pointer-events: none; }
+@media (orientation: landscape) { .voice-panel { width: min(560px, 62%); } .voice .cam-top { left: 120px; } }
+.voice-status { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.voice-dot { width: 14px; height: 14px; border-radius: 50%; background: #888; flex: none; }
+.voice[data-state="on"] .voice-dot { background: #2e7d32; box-shadow: 0 0 0 4px #2e7d3255; }
+.voice[data-state="hear"] .voice-dot { background: #43a047; animation: voicepulse 1s infinite; }
+.voice[data-state="work"] .voice-dot, .voice[data-state="say"] .voice-dot { background: #ffb300; }
+.voice[data-state="err"] .voice-dot { background: #e53935; }
+@keyframes voicepulse { 50% { box-shadow: 0 0 0 8px #43a04733; } }
+.voice-heard { font-size: 18px; min-height: 1.4em; text-shadow: 0 1px 3px #000; }
+.voice-card { background: #000b; border-radius: 12px; padding: 10px 14px; font-size: 20px; line-height: 1.35; }
+.voice-card:empty { display: none; }
+.voice-card div:first-child { font-weight: 700; font-size: 24px; }
+.voice-card.warn { background: #7a1d1dd9; }
+.voice-help { font-size: 13px; opacity: .8; text-shadow: 0 1px 3px #000; }

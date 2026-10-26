@@ -3,8 +3,8 @@
 (function (root) {
   'use strict';
 
-  async function open(onShot, opts) {
-    opts = opts || {};
+  // פותח את המצלמה האחורית עם חשיפה/פוקוס אוטומטיים. משמש גם את מצב הדיבור (js/voice.js)
+  async function start() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('אין גישה למצלמה בדפדפן הזה');
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
@@ -12,11 +12,37 @@
     });
     const track = stream.getVideoTracks()[0];
     const caps = track.getCapabilities ? track.getCapabilities() : {};
-    let torch = false;
     // חשיפה, איזון לבן ופוקוס אוטומטיים ורציפים (אם המצלמה תומכת)
     const auto = {};
     for (const k of ['exposureMode', 'whiteBalanceMode', 'focusMode']) if ((caps[k] || []).includes('continuous')) auto[k] = 'continuous';
     if (Object.keys(auto).length) track.applyConstraints({ advanced: [auto] }).catch(() => {});
+    // צילום אמיתי של המצלמה (עם עיבוד התמונה של המכשיר, בהיר וחד יותר מפריים מהווידאו)
+    const ic = 'ImageCapture' in root ? new root.ImageCapture(track) : null;
+    return { stream, track, caps, ic };
+  }
+
+  // תמונה אחת: צילום של המצלמה, ואם לא הצליח פריים מהווידאו
+  async function grab(video, ic, torch) {
+    let blob = null;
+    if (ic) {
+      try { blob = await ic.takePhoto(torch ? {} : { fillLightMode: 'off' }); } catch (_) {
+        try { blob = await ic.takePhoto(); } catch (__) { blob = null; }
+      }
+      if (blob && !blob.size) blob = null;
+    }
+    if (!blob) {
+      const c = document.createElement('canvas');
+      c.width = video.videoWidth; c.height = video.videoHeight;
+      c.getContext('2d').drawImage(video, 0, 0);
+      blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+    }
+    return blob;
+  }
+
+  async function open(onShot, opts) {
+    opts = opts || {};
+    const { stream, track, caps, ic } = await start();
+    let torch = false;
     // תיקון בהירות (פיצוי חשיפה), נשמר בין פתיחות
     const ec = caps.exposureCompensation;
     let ev = 0;
@@ -28,8 +54,6 @@
       try { localStorage.setItem('camEv', ev); } catch (_) {}
     };
     if (ec && ev) setEv(ev);
-    // צילום אמיתי של המצלמה (עם עיבוד התמונה של המכשיר, בהיר וחד יותר מפריים מהווידאו)
-    const ic = 'ImageCapture' in root ? new root.ImageCapture(track) : null;
 
     return new Promise(resolve => {
       const ov = document.createElement('div');
@@ -69,19 +93,7 @@
         const fl = ov.querySelector('.cam-flash');
         fl.classList.remove('on'); void fl.offsetWidth; fl.classList.add('on');
         try {
-          let blob = null;
-          if (ic) {
-            try { blob = await ic.takePhoto(torch ? {} : { fillLightMode: 'off' }); } catch (_) {
-              try { blob = await ic.takePhoto(); } catch (__) { blob = null; }
-            }
-            if (blob && !blob.size) blob = null;
-          }
-          if (!blob) {
-            const c = document.createElement('canvas');
-            c.width = video.videoWidth; c.height = video.videoHeight;
-            c.getContext('2d').drawImage(video, 0, 0);
-            blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
-          }
+          const blob = await grab(video, ic, torch);
           ov.classList.add('paused');
           const kept = await onShot(blob);
           ov.classList.remove('paused');
@@ -113,5 +125,5 @@
     });
   }
 
-  root.Camera = { open };
+  root.Camera = { open, start, grab };
 })(self);
