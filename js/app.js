@@ -1735,6 +1735,9 @@
       const known = p.species || p.matched || p.urgency || p.pines != null || p.split || p.photo || p.free;
       if (!created && p.num == null && !known) return { card: ['לא הבנתי: «' + p.raw + '»', 'אפשר להתחיל ב"עץ" ומספר, או "הערה" ואז הטקסט'], warn: true };
       if (!t) { t = newTree(Core.nextNum(cur.trees)); created = true; }
+      // עץ שכבר רשום בסקר: אומרים מה היה בו, כדי שלא יתעדכן בטעות (אפשר "בטל")
+      const existed = !created && p.num != null && Core.hasContent(t) && (t.species || t.notes || t.photos.length)
+        ? [t.species, t.notes].filter(Boolean).join(', ') || `${t.photos.length} תמונות` : null;
       const u = start(t, created);
       if (p.species) { t.species = p.species; delete t.speciesAuto; }
       if (p.pines != null) t.pines = p.pines;
@@ -1752,6 +1755,8 @@
       refresh();
       const what = [label(t), t.species].filter(Boolean).join(' ');
       if (shot === false) return { say: what + ', ' + NO_SHOT, card: card(t).concat(NO_SHOT), warn: true };
+      if (existed != null) return { say: `שים לב, ${label(t)} כבר רשום: ${existed}. עדכנתי אותו. לביטול תגיד בטל.` + ask(t),
+        card: [`${label(t)} כבר היה רשום: ${existed}`, 'עודכן ל: ' + card(t)[0] + '. לביטול: "בטל"'].concat(card(t).slice(1)), warn: true };
       return { say: (p.photo && !created && p.num == null ? 'צולם' : what + (created ? ', נשמר' : ', עודכן')) + ask(t), card: card(t) };
     }
 
