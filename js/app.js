@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.24.7';
+  const APP_VERSION = '1.24.8';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1601,13 +1601,15 @@
     inp.value = '';
     inp.click();
   }
-  // שומרת תמונה אחת לעץ: (סימון אם ביקשו) -> טאבלט -> רישום בסקר. מחזירה false אם לא נשמרה
-  async function addPhoto(t, file, annotate) {
+  // שומרת תמונה אחת לעץ: (סימון אם ביקשו) -> טאבלט -> רישום בסקר. מחזירה false אם לא נשמרה,
+  // ו-'retake' אם במסך הסימון בחרו לצלם שוב (רק כשמגיעים מהמצלמה של האפליקציה)
+  async function addPhoto(t, file, annotate, canRetake) {
     try {
       const p = await processImage(file);
       let rec = { id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h };
       if (annotate) {
-        const strokes = await Annotate.open(p.blob, [], { saveLabel: 'שמור', cancelLabel: 'בלי סימון' });
+        const strokes = await Annotate.open(p.blob, [], { saveLabel: 'שמור עם סימון', cancelLabel: 'שמור בלי סימון', retakeLabel: canRetake ? 'צלם שוב' : '' });
+        if (strokes === 'retake') return 'retake';
         if (strokes && strokes.length) rec = await applyStrokes(rec, p.blob, strokes);
       }
       await DB.putPhoto(rec);
@@ -1636,7 +1638,8 @@
     }
   }
 
-  // "צלם": המצלמה של האפליקציה (מהירה, צילום ברצף). אם אין גישה — אפליקציית המצלמה של המכשיר
+  // "צלם": המצלמה של האפליקציה (מהירה). עם סימון: לחיצה מצלמת ועוברת ישר לסימון, ומשם שומרים או מצלמים שוב.
+  // בלי סימון (סקר לבנייה) המצלמה נשארת פתוחה לצילום ברצף. אם אין גישה — אפליקציית המצלמה של המכשיר
   async function takePhotos() {
     const t = treeById(curTreeId);
     if (!t) return;
@@ -1644,7 +1647,10 @@
       // בסקר לבנייה לא צריך מסך סימון אחרי הצילום
       const annotate = !Construction.isConstruction(cur) && await DB.getKV('annotateAfter', true);
       try {
-        await Camera.open(blob => addPhoto(t, blob, annotate), { title: `עץ ${t.num || ''} ${t.species || ''}`.trim() });
+        await Camera.open(async blob => {
+          const r = await addPhoto(t, blob, annotate, annotate);
+          return annotate && r === true ? 'close' : r;
+        }, { title: `עץ ${t.num || ''} ${t.species || ''}`.trim(), doneLabel: annotate ? 'סגור' : 'סיום', onError: m => toast(m, 2500) });
         return;
       } catch (e) {
         toast('המצלמה של האפליקציה לא זמינה (' + e.message + '), פותח את מצלמת המכשיר', 3000);

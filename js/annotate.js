@@ -45,7 +45,7 @@
     return new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
   }
 
-  // פותח עורך במסך מלא. מחזיר את רשימת הקווים החדשה, או null אם בוטל
+  // פותח עורך במסך מלא. מחזיר את רשימת הקווים החדשה, null אם בוטל, או 'retake' (עם opts.retakeLabel) לצילום מחדש
   function open(blob, strokes, opts) {
     opts = opts || {};
     return new Promise(async resolve => {
@@ -71,6 +71,7 @@
             <button data-act="clear" title="מחק הכל">🧽</button>
           </div>
           <span class="sp"></span>
+          ${opts.retakeLabel ? `<button data-act="retake" class="txt">${opts.retakeLabel}</button>` : ''}
           <button data-act="cancel" class="txt">${opts.cancelLabel || 'ביטול'}</button>
           <button data-act="save" class="txt save">${opts.saveLabel || 'שמור'}</button>
         </div>
@@ -139,6 +140,7 @@
         else if (b.dataset.act === 'redo') { if (redo.length) list.push(redo.pop()); }
         else if (b.dataset.act === 'clear') { if (list.length && confirm('למחוק את כל הסימונים?')) { list = []; redo.length = 0; } }
         else if (b.dataset.act === 'cancel') return close(null);
+        else if (b.dataset.act === 'retake') return close('retake');
         else if (b.dataset.act === 'save') return close(list);
         draw(); sync();
       });
