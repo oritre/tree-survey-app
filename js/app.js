@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.24.8';
+  const APP_VERSION = '1.25.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -50,6 +50,7 @@
     trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
     next: 'M19 12H5M11 6l-6 6 6 6',
     sprout: 'M12 21v-8M12 13c0-4 3-7 8-7 0 4-3 7-8 7zM12 13c0-3-2-5-6-5 0 3 2 5 6 5z',
+    mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3',
   };
   function icon(name, cls) {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -1267,6 +1268,7 @@
     if (!search) treeFilter = '';
     pane.replaceChildren(...[
       h('button', { class: 'btn primary big block', onclick: addTree }, icon('plus'), 'עץ חדש'),
+      Construction.isConstruction(cur) ? null : h('button', { class: 'btn big block', onclick: voiceMode }, icon('mic'), 'מצב דיבור'),
       h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > Core.MAX_TREES ? ` (בתבנית יש מקום ל-${Core.MAX_TREES})` : ''))),
       search,
       trees.length ? list : h('div', { class: 'empty' }, icon('sprout'), 'עוד אין עצים'),
@@ -1657,6 +1659,128 @@
       }
     }
     pickPhoto('camInput');
+  }
+
+  // ---------- מצב דיבור (סקר בטיחות) ----------
+  // המצלמה פתוחה והאפליקציה מקשיבה: "עץ 1, אשל, הפחתת משקלים" יוצר/מעדכן את העץ, מצלם ולוקח נ"צ (js/voice.js).
+  // זו תוספת בלבד: כל מה שנשמר כאן הוא אותו עץ רגיל, ואפשר לתקן אותו אחר כך במסך העץ
+  async function voiceMode() {
+    if (!Voice.supported()) { toast('זיהוי דיבור לא נתמך בדפדפן הזה (צריך Chrome)', 3500); return; }
+    await saveNow();
+    refreshSuggestions();
+    const undo = []; // { t, created, before, photos }
+    let askPinesFor = null;
+    const label = t => ('עץ ' + (t.num || '')).trim();
+    const pinesOf = t => t.pines == null || t.pines === '' ? null : t.pines;
+    const card = t => [label(t) + (t.species ? ' · ' + t.species : ''), t.notes || '',
+      [t.urgency ? 'דחיפות ' + t.urgency : '', pinesOf(t) != null ? t.pines + ' אורנים' : '', t.lat != null ? 'נ"צ ✓' : '', t.photos.length ? '📷 ' + t.photos.length : ''].filter(Boolean).join(' · ')].filter(Boolean);
+    const newTree = num => {
+      const t = { id: uid(), num, species: '', notes: '', urgency: '', pines: null, split: false, photos: [], created: Date.now() };
+      cur.trees.push(t);
+      return t;
+    };
+    const findTree = num => cur.trees.find(x => String(x.num || '').replace(/\s/g, '') === num);
+    const refresh = () => { renderTreeList(); renderEditor(); };
+    // מחזירה false אם התמונה לא יצאה (שחורה או לא נשמרה)
+    async function photo(t, shoot, u) {
+      const blob = await shoot();
+      if (!blob || !(await addPhoto(t, blob, false))) return false;
+      u.photos.push(t.photos[t.photos.length - 1].id);
+      return true;
+    }
+    const NO_SHOT = 'התמונה לא יצאה, תגיד צלם';
+    const start = (t, created) => {
+      const u = { t, created, before: { species: t.species, notes: t.notes, urgency: t.urgency, pines: t.pines, split: t.split }, photos: [] };
+      undo.push(u);
+      curTreeId = t.id;
+      return u;
+    };
+    const afterNew = (t, created) => { if (created && t.lat == null) captureGps(t, true); };
+    const ask = t => {
+      askPinesFor = Core.isPine(t.species) && pinesOf(t) == null ? t : null;
+      return askPinesFor ? ' כמה אורנים?' : '';
+    };
+
+    async function handle(p, shoot) {
+      if (p.cmd === 'undo') {
+        const u = undo.pop();
+        if (!u) return { say: 'אין מה לבטל', warn: true };
+        for (const id of u.photos) {
+          const ph = u.t.photos.find(x => x.id === id);
+          if (!ph) continue;
+          u.t.photos = u.t.photos.filter(x => x !== ph);
+          Core.ensureReportPhoto(u.t, Core.groupKey(u.t, ph));
+          await DB.deletePhoto(id);
+        }
+        if (u.created) {
+          cur.trees = cur.trees.filter(x => x !== u.t);
+          curTreeId = (undo[undo.length - 1] || {}).t ? undo[undo.length - 1].t.id : null;
+        } else Object.assign(u.t, u.before);
+        askPinesFor = null;
+        await saveNow(); refresh();
+        return { say: 'בוטל', card: ['בוטל: ' + label(u.t) + (u.photos.length ? ` (${u.photos.length} תמונות)` : '')] };
+      }
+      // תשובה ל"כמה אורנים?": מספר לבד
+      if (askPinesFor && askPinesFor.id === curTreeId && p.num != null && /^\d+$/.test(p.num) && !p.species && !p.notes.length && !p.urgency && !p.photo) {
+        p.pines = +p.num; p.num = null;
+      }
+      let t = treeById(curTreeId), created = false;
+      if (p.num != null || p.newTree) {
+        const num = p.num != null ? p.num : Core.nextNum(cur.trees);
+        t = (p.num != null && findTree(num)) || null;
+        if (!t) { t = newTree(num); created = true; }
+      }
+      // בלי מספר עץ, מקבלים רק מה שזוהה (מין, טיפול מהרשימה, דחיפות, אורנים, "צלם", "הערה ...").
+      // כך דיבור של אנשים מסביב לא נכנס להערות
+      const known = p.species || p.matched || p.urgency || p.pines != null || p.split || p.photo || p.free;
+      if (!created && p.num == null && !known) return { card: ['לא הבנתי: «' + p.raw + '»', 'אפשר להתחיל ב"עץ" ומספר, או "הערה" ואז הטקסט'], warn: true };
+      if (!t) { t = newTree(Core.nextNum(cur.trees)); created = true; }
+      // עץ שכבר רשום בסקר: אומרים מה היה בו, כדי שלא יתעדכן בטעות (אפשר "בטל")
+      const existed = !created && p.num != null && Core.hasContent(t) && (t.species || t.notes || t.photos.length)
+        ? [t.species, t.notes].filter(Boolean).join(', ') || `${t.photos.length} תמונות` : null;
+      const u = start(t, created);
+      if (p.species) { t.species = p.species; delete t.speciesAuto; }
+      if (p.pines != null) t.pines = p.pines;
+      if (p.urgency) t.urgency = p.urgency;
+      if (p.split) t.split = true;
+      if (p.notes.length) {
+        const parts = (t.notes || '').split(/\s*[,.]\s*/).map(x => x.trim()).filter(Boolean);
+        for (const n of p.notes) if (!parts.includes(n)) parts.push(n);
+        t.notes = parts.join(', ');
+      }
+      await saveNow();
+      // עץ חדש, מספר עץ שנאמר או "צלם": תמונה של מה שמול המצלמה
+      const shot = created || p.num != null || p.photo ? await photo(t, shoot, u) : null;
+      afterNew(t, created);
+      refresh();
+      const what = [label(t), t.species].filter(Boolean).join(' ');
+      if (shot === false) return { say: what + ', ' + NO_SHOT, card: card(t).concat(NO_SHOT), warn: true };
+      if (existed != null) return { say: `שים לב, ${label(t)} כבר רשום: ${existed}. עדכנתי אותו. לביטול תגיד בטל.` + ask(t),
+        card: [`${label(t)} כבר היה רשום: ${existed}`, 'עודכן ל: ' + card(t)[0] + '. לביטול: "בטל"'].concat(card(t).slice(1)), warn: true };
+      return { say: (p.photo && !created && p.num == null ? 'צולם' : what + (created ? ', נשמר' : ', עודכן')) + ask(t), card: card(t) };
+    }
+
+    // הכפתור במסך: צילום לעץ הנוכחי (או לעץ חדש אם אין)
+    async function manualShot(shoot) {
+      let t = treeById(curTreeId), created = false;
+      if (!t) { t = newTree(Core.nextNum(cur.trees)); created = true; }
+      const u = start(t, created);
+      const ok = await photo(t, shoot, u);
+      afterNew(t, created);
+      await saveNow(); refresh();
+      return ok ? { card: card(t) } : { card: card(t).concat('התמונה לא יצאה, צלם שוב'), warn: true };
+    }
+
+    try {
+      await Voice.open({
+        context: () => ({ species: [...new Set([...sugCache.speciesAll, ...safetySpecies()])], phrases: sugCache.phrasesTop }),
+        handle, manualShot,
+        title: () => { const t = treeById(curTreeId); return t ? `מצב דיבור · ${label(t)} ${t.species || ''}`.trim() : 'מצב דיבור'; },
+      });
+    } catch (e) {
+      toast('לא הצלחתי לפתוח את מצב הדיבור: ' + e.message, 4000);
+    }
+    if (curTreeId && treeById(curTreeId)) selectTree(curTreeId); else refresh();
   }
 
   for (const id of ['camInput', 'galInput']) {
