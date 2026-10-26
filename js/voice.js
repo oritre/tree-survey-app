@@ -225,7 +225,9 @@
 
   // opts: { context(): {species, phrases}, handle(parsed, shoot): Promise<{say, card, close}>, manualShot(shoot), title() }
   async function open(opts) {
-    if (!Rec) throw new Error('זיהוי דיבור לא נתמך בדפדפן הזה (צריך Chrome)');
+    // ai: ההקלטות נשלחות ל-Gemini (js/gemini.js) במקום זיהוי הדיבור של הדפדפן
+    const ai = !!opts.gemini;
+    if (!Rec && !ai) throw new Error('זיהוי דיבור לא נתמך בדפדפן הזה (צריך Chrome)');
     const cam = await root.Camera.start();
     let speakOn = true;
     try { speakOn = localStorage.getItem('voiceSpeak') !== '0'; } catch (_) {}
@@ -275,8 +277,10 @@
       // ---------- הקלטה: גיבוי של כל מה שנאמר, בקטעים של 3 דקות (כל קטע נשמר מיד, גם אם האפליקציה תיסגר) ----------
       const SEG_MS = 3 * 60 * 1000;
       // כבויה כברירת מחדל: בטאבלט של ori ההקלטה תפסה את המיקרופון וזיהוי הדיבור לא שמע כלום
+      // עם Gemini אין התנגשות (אותו מיקרופון), אז ההקלטה דולקת כברירת מחדל
+      const REC_KEY = ai ? 'voiceRecordAI' : 'voiceRecord2';
       let recOn = false;
-      try { recOn = !!opts.onRecording && !!root.MediaRecorder && localStorage.getItem('voiceRecord2') === '1'; } catch (_) {}
+      try { const v = localStorage.getItem(REC_KEY); recOn = !!opts.onRecording && !!root.MediaRecorder && (ai ? v !== '0' : v === '1'); } catch (_) {}
       let micStream = null, mr = null, segTimer = null, recNote = '';
       const recBtn = $('[data-act="rec"]');
       const showRec = () => {
@@ -309,7 +313,7 @@
         if (mr && mr.state !== 'inactive') { try { mr.stop(); } catch (_) {} }
         mr = null;
         if (restart && recOn && active) startRecording();
-        else if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+        else if (micStream && !(ai && active)) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
         showRec();
       }
       showRec();
@@ -322,8 +326,24 @@
       const onVis = () => { if (document.visibilityState === 'visible') { keepAwake(); listen(); } };
       document.addEventListener('visibilitychange', onVis);
 
-      // ---------- זיהוי דיבור ----------
-      const rec = new Rec();
+      // ---------- Gemini: כל משפט (עד שקט קצר) מוקלט ונשלח ----------
+      let vad = null;
+      async function startVad() {
+        if (vad || !active) return;
+        try {
+          if (!micStream) micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+          if (!active || vad) return;
+          vad = root.Gemini.listen(micStream, {
+            isMuted: () => paused || speaking || !active,
+            onLevel: on => { if (on) setState('hear', 'שומע…'); else if (!working) setState('on', 'מקשיב…'); },
+            onSegment: blob => { queue.push({ audio: blob }); pump(); },
+          });
+          if (!working) setState('on', 'מקשיב…');
+        } catch (e) { setState('err', 'אין גישה למיקרופון: ' + e.message); if (opts.log) opts.log({ at: Date.now(), error: 'mic: ' + e.message }); }
+      }
+
+      // ---------- זיהוי דיבור של הדפדפן ----------
+      const rec = ai ? {} : new Rec();
       rec.lang = 'he-IL';
       rec.continuous = true;
       rec.interimResults = true;
@@ -385,10 +405,11 @@
       };
       rec.onend = () => { listening = false; if (pending.length || lastInterim) { if (!pending.length) pending.push([lastInterim]); commit(); } if (active && !paused && !speaking) setTimeout(listen, Math.min(250 * 2 ** errStreak, 8000)); };
       function listen() {
+        if (ai) { if (!paused && !speaking && !working) setState(vad ? 'on' : 'off', vad ? 'מקשיב…' : 'מתחיל…'); return startVad(); }
         if (!active || paused || speaking || listening || document.visibilityState !== 'visible') return;
         try { rec.start(); } catch (_) { /* כבר פועל */ }
       }
-      const stopListening = () => { try { rec.abort(); } catch (_) {} };
+      const stopListening = () => { if (ai) { if (vad) vad.flush(); return; } try { rec.abort(); } catch (_) {} };
 
       // הקראה בקול. בזמן ההקראה לא מקשיבים, שלא יזהה את עצמו
       const voices = () => (root.speechSynthesis ? root.speechSynthesis.getVoices() : []).filter(v => /^he|^iw/i.test(v.lang));
@@ -455,8 +476,21 @@
         working = true;
         try {
           while (queue.length && active) {
-            const alts = queue.shift();
-            const list = parseAll(alts, opts.context());
+            const item = queue.shift();
+            let alts = item, list;
+            if (item.audio) {
+              setState('work', 'מפענח…');
+              try { list = await opts.gemini(item.audio); }
+              catch (err) {
+                console.error(err);
+                showResult({ card: ['לא פוענח: ' + err.message], warn: true });
+                if (opts.log) opts.log({ at: Date.now(), error: 'gemini: ' + err.message });
+                continue;
+              }
+              if (!active) return;
+              alts = [list.length ? list[0].raw : ''];
+              if (!list.length) { addLog('…', { card: ['לא נשמע משהו לסקר'] }); continue; }
+            } else list = parseAll(alts, opts.context());
             $('.voice-heard').textContent = '';
             const says = [];
             for (const p of list) {
@@ -474,7 +508,7 @@
               if (res && res.say) says.push(res.say);
             }
             await say(says.join('. '));
-            if (!speaking && !paused) setState(listening ? 'on' : 'off', listening ? 'מקשיב…' : '');
+            if (!speaking && !paused) setState(listening || vad ? 'on' : 'off', listening || vad ? 'מקשיב…' : '');
           }
         } finally { working = false; }
       }
@@ -485,6 +519,8 @@
         stopListening();
         if (root.speechSynthesis) root.speechSynthesis.cancel();
         stopRecording(false);
+        if (vad) vad.stop();
+        if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
         if (lock) lock.release().catch(() => {});
         document.removeEventListener('visibilitychange', onVis);
         cam.stream.getTracks().forEach(t => t.stop());
@@ -501,7 +537,7 @@
         if (act === 'done') close();
         else if (act === 'rec') {
           recOn = !mr;
-          try { localStorage.setItem('voiceRecord2', recOn ? '1' : '0'); } catch (_) {}
+          try { localStorage.setItem(REC_KEY, recOn ? '1' : '0'); } catch (_) {}
           recNote = recOn ? '' : 'ההקלטה כבויה';
           if (recOn) startRecording(); else stopRecording(false);
         }
