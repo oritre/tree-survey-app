@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.29.0';
+  const APP_VERSION = '1.30.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1747,8 +1747,10 @@
       const photoOnly = t && !(t.species || '').trim() && !(t.notes || '').trim() && t.photos.length && t.byShot;
       if (p.num != null || p.newTree) {
         const num = p.num != null ? p.num : Core.nextNum(cur.trees);
+        const shot = photoOnly ? treeById(curTreeId) : null;
         t = (p.num != null && findTree(num)) || null;
-        if (!t && photoOnly) { t = treeById(curTreeId); if (p.num != null) t.num = num; }
+        if (t && shot && t !== shot) moveShot(shot, t); // צילם ואמר מספר של עץ שכבר רשום: התמונות עוברות אליו
+        else if (shot) { t = shot; if (p.num != null) t.num = num; }
         else if (!t) { t = newTree(num); created = true; }
       }
       if (t) delete t.byShot;
@@ -1780,12 +1782,22 @@
       return { say: what + (created ? ', נשמר' : ', עודכן') + ask(t), card: card(t) };
     }
 
-    // הכפתור במסך: צילום לעץ הנוכחי (או לעץ חדש אם אין), ואחריו מסך הסימון
+    // התמונות של עץ שצולם ועוד לא תואר עוברות לעץ שנאמר
+    function moveShot(from, to) {
+      for (const ph of from.photos) { ph.sub = null; ph.inReport = false; to.photos.push(ph); }
+      Core.ensureReportPhoto(to, Core.groupKey(to, to.photos[to.photos.length - 1]));
+      cur.trees = cur.trees.filter(x => x !== from);
+      for (const u of undo) if (u.t === from) { u.t = to; u.created = false; u.before = { species: to.species, notes: to.notes, urgency: to.urgency, pines: to.pines, split: to.split }; }
+    }
+
+    // הכפתור במסך: קודם מצלמים ואז מתארים (ori). צילום אחרי שהעץ הנוכחי כבר תואר פותח עץ חדש,
+    // וכמה צילומים לפני הדיבור נכנסים לאותו עץ. אחרי הצילום מסך הסימון
+    const described = t => !!((t.species || '').trim() || (t.notes || '').trim() || t.urgency);
     async function manualShot(shoot) {
       const blob = await shoot();
       if (!blob) return { card: ['התמונה יצאה שחורה, צלם שוב'], warn: true };
       let t = treeById(curTreeId), created = false;
-      if (!t) { t = newTree(Core.nextNum(cur.trees)); created = true; t.byShot = true; }
+      if (!t || (!t.byShot && described(t))) { t = newTree(Core.nextNum(cur.trees)); created = true; t.byShot = true; }
       const annotate = await DB.getKV('annotateAfter', true);
       const r = await addPhoto(t, blob, annotate, annotate);
       if (r === 'retake' || r === 'cancel' || !r) {
@@ -1796,7 +1808,7 @@
       u.photos.push(t.photos[t.photos.length - 1].id);
       afterNew(t, created);
       await saveNow(); refresh();
-      return { card: card(t) };
+      return { card: card(t).concat(created ? ['עכשיו תאר את העץ: מין, מיקום, ממצאים, טיפול'] : []) };
     }
     // הקלטת הדיבור: כל קטע נשמר בטאבלט מיד ונרשם בסקר, והגיבוי מעלה אותו לתיקייה "הקלטות" בגוגל דרייב
     const surv = cur;
@@ -1817,7 +1829,7 @@
         // עם מפתח Gemini: כל משפט מוקלט נשלח ל-Gemini, שמחזיר ישר את השדות
         gemini: geminiKey ? async blob => {
           const t = treeById(curTreeId);
-          const ctx = { current: t ? [label(t), t.species, t.notes].filter(Boolean).join(', ') : '', numbers: cur.trees.map(x => x.num).filter(Boolean),
+          const ctx = { current: t ? (t.byShot && !described(t) ? label(t) + ' (צולם עכשיו ועוד לא תואר: מה שנאמר עכשיו מתאר אותו, new_tree=false)' : [label(t), t.species, t.notes].filter(Boolean).join(', ')) : '', numbers: cur.trees.map(x => x.num).filter(Boolean),
             species: [...new Set([...sugCache.speciesAll, ...safetySpecies()])], phrases: sugCache.phrasesTop };
           const out = await Gemini.understand(geminiKey, blob, ctx);
           log({ at: Date.now(), gemini: out });
