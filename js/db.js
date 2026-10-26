@@ -34,9 +34,11 @@
   const req2p = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
 
   const DB = {
-    async allSurveys() {
+    // סקרים שנמחקו ועוד לא סונכרנו לענן לא מוצגים (withDeleted=true: גם אותם, בשביל הגיבוי)
+    async allSurveys(withDeleted) {
       const db = await open();
-      return req2p(db.transaction('surveys').objectStore('surveys').getAll());
+      const all = await req2p(db.transaction('surveys').objectStore('surveys').getAll());
+      return withDeleted ? all : all.filter(s => !s.deleted);
     },
     async getSurvey(id) {
       const db = await open();

@@ -205,7 +205,7 @@
         // הקובץ כבר מוכר: מחליפים את התוכן ישר, בלי לחפש אותו (אם נמחק או בפח, ממשיכים כרגיל)
         const known = (await OD._idMap()).get(key);
         if (known) {
-          const j = await OD.api('PATCH', `${UPLOAD}/files/${known}?uploadType=media&fields=id,name,trashed&supportsAllDrives=true`, blob, { 'Content-Type': type }).catch(() => null);
+          const j = await OD.api('PATCH', `${UPLOAD}/files/${known}?uploadType=media&fields=id,name,trashed,version&supportsAllDrives=true`, blob, { 'Content-Type': type }).catch(() => null);
           if (j && !j.trashed) return j;
           await OD._forget(key);
         }
@@ -220,12 +220,12 @@
         const boundary = 'b' + Math.random().toString(36).slice(2);
         const body = new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`, JSON.stringify({ name, parents: [parentId || 'root'] }),
           `\r\n--${boundary}\r\nContent-Type: ${type}\r\n\r\n`, blob, `\r\n--${boundary}--`]);
-        out = await OD.api('POST', `${UPLOAD}/files?uploadType=multipart&fields=id,name&supportsAllDrives=true`, body, { 'Content-Type': `multipart/related; boundary=${boundary}` });
+        out = await OD.api('POST', `${UPLOAD}/files?uploadType=multipart&fields=id,name,version&supportsAllDrives=true`, body, { 'Content-Type': `multipart/related; boundary=${boundary}` });
         if (!out) { await OD._forgetParent(parentId); return null; } // תיקיית היעד נמחקה
       } else {
         // קובץ גדול: העלאה בהמשכים
         const tok = await OD.accessToken();
-        const init = await fetch(`${UPLOAD}/files?uploadType=resumable&fields=id,name&supportsAllDrives=true`, {
+        const init = await fetch(`${UPLOAD}/files?uploadType=resumable&fields=id,name,version&supportsAllDrives=true`, {
           method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': type },
           body: JSON.stringify({ name, parents: [parentId || 'root'] }) });
         if (init.status === 404) { await OD._forgetParent(parentId); return null; }
@@ -246,7 +246,7 @@
 
     // מחליף את התוכן של קובץ קיים (תמונה אחרי ציור, נתוני סקר), בלי לשנות את שמו
     async replaceContent(itemId, blob) {
-      const j = await OD.api('PATCH', `${UPLOAD}/files/${itemId}?uploadType=media&fields=id,name&supportsAllDrives=true`, blob, { 'Content-Type': blob.type || 'application/octet-stream' });
+      const j = await OD.api('PATCH', `${UPLOAD}/files/${itemId}?uploadType=media&fields=id,name,version&supportsAllDrives=true`, blob, { 'Content-Type': blob.type || 'application/octet-stream' });
       if (!j) { const e = new Error('הקובץ לא נמצא בגוגל דרייב'); e.status = 404; throw e; }
       return j;
     },

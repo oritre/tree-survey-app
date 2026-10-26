@@ -271,18 +271,8 @@
       }
     }
 
-    // נתוני הסקר ושכבת GIS: אחרי כל שינוי
-    const hash = hashSurvey(s);
-    if (s.odDataHash !== hash) {
-      // שני הקבצים עולים במקביל
-      const [item] = await Promise.all([
-        OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([JSON.stringify(s, null, 1)], { type: 'application/json' }), true),
-        OD.upload(s.odFolderId, 'שכבת עצים.geojson', new Blob([root.Gis.geojson([s])], { type: 'application/geo+json' }), true)]);
-      if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי בגוגל דרייב נמחקה, יוצר אותה מחדש'); }
-      if (item.id) s.odDataId = item.id;
-      s.odDataHash = hash;
-      await DB.putSurvey(s, false);
-    }
+    // נתוני הסקר ושכבת GIS: אחרי כל שינוי (גם מספרי הודעות טלגרם ומזהי תמונות, כדי שמכשיר אחר לא ישלח שוב)
+    await pushData(s);
     await updateIndex(s);
 
     // "סיום סקר": כשכל התמונות כבר בענן, מעלים אקסל ו-PDF לאותה תיקייה ומפנים את התמונות מהטאבלט
@@ -291,12 +281,186 @@
       await uploadReport(s, { pdf: true });
       s.finishPending = false; s.finished = true; s.finishedAt = Date.now();
       await DB.putSurvey(s, false);
+      await pushData(s); // שאר המכשירים יראו מיד שהסקר הסתיים
       await updateIndex(s);
       await freeLocal(s);
       log('ok', 'סיום סקר: אקסל ו-PDF נשמרו בגוגל דרייב, והתמונות פונו מהטאבלט', s);
       emit();
     }
   }
+
+  async function pushData(s) {
+    const hash = hashSurvey(s), full = syncHash(s);
+    if (s.odDataHash === hash && s.odSyncHash === full) return;
+    const text = JSON.stringify(s, null, 1);
+    // שני הקבצים עולים במקביל
+    const [item] = await Promise.all([
+      OD.upload(s.odFolderId, 'נתוני סקר.json', new Blob([text], { type: 'application/json' }), true),
+      s.deleted ? null : OD.upload(s.odFolderId, 'שכבת עצים.geojson', new Blob([root.Gis.geojson([s])], { type: 'application/geo+json' }), true)]);
+    if (!item) { s.odFolderId = s.odPhotosId = null; await DB.putSurvey(s, false); throw new Error('תיקיית הגיבוי בגוגל דרייב נמחקה, יוצר אותה מחדש'); }
+    if (item.id) s.odDataId = item.id;
+    s.odDataHash = hash; s.odSyncHash = full;
+    if (item.version != null) s.odDataVer = String(item.version);
+    await DB.setKV('base:' + s.id, JSON.parse(text)); // מה שבענן עכשיו: הבסיס למיזוג הבא
+    await DB.putSurvey(s, false);
+  }
+
+  // ---------- סנכרון בין מכשירים (טלפון, טאבלט) ----------
+  // כל מכשיר מעלה את נתוני הסקר לקובץ "נתוני סקר.json", ובודק בכל סבב אם מכשיר אחר שינה אותו (מספר הגרסה של הקובץ בגוגל דרייב).
+  // אם כן: מיזוג לפי עץ ולפי תמונה מול הבסיס (מה שהיה בענן בפעם האחרונה שהמכשיר הזה סונכרן), כך ששינויים משני המכשירים נשמרים.
+  // כששני המכשירים שינו את אותו שדה, העריכה המאוחרת יותר קובעת.
+  // שדות של המכשיר הזה בלבד, שלא עוברים בין מכשירים
+  const LOCAL_KEYS = new Set(['odDataVer', 'odDataHash', 'odSyncHash', 'odIndexKey', 'updated', 'snapshotFrom', 'finishPending']);
+  function syncHash(s) {
+    const strip = JSON.stringify(s, (k, v) => (LOCAL_KEYS.has(k) || k.startsWith('_')) ? undefined : v);
+    let h = 5381;
+    for (let i = 0; i < strip.length; i++) h = ((h << 5) + h + strip.charCodeAt(i)) | 0;
+    return String(h >>> 0) + ':' + strip.length;
+  }
+  const plain = v => v && typeof v === 'object' && !Array.isArray(v);
+  // השוואה בלי שדות הגיבוי (od*, tg*) כשdata=true
+  function same(a, b, data) {
+    if (a === b) return true;
+    if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return a == null && b == null;
+    const keys = o => Object.keys(o).filter(k => o[k] !== undefined && !k.startsWith('_') && !(data && (k.startsWith('od') || k.startsWith('tg'))));
+    const ka = keys(a), kb = keys(b);
+    if (ka.length !== kb.length) return false;
+    return ka.every(k => Object.prototype.hasOwnProperty.call(b, k) && same(a[k], b[k], data));
+  }
+  const byId = (l, r) => Array.isArray(l) && Array.isArray(r) && l.concat(r).every(x => plain(x) && x.id != null);
+  // b בסיס, l המכשיר הזה, r הענן. pl: העריכה כאן מאוחרת יותר
+  function merge3(b, l, r, pl) {
+    if (same(l, r)) return l;
+    if (same(l, b)) return r;
+    if (same(r, b)) return l;
+    if (byId(l, r)) return mergeList(Array.isArray(b) ? b : [], l, r, pl);
+    if (plain(l) && plain(r)) {
+      const o = {}, bb = plain(b) ? b : {};
+      for (const k of new Set([...Object.keys(l), ...Object.keys(r)])) {
+        const v = merge3(bb[k], l[k], r[k], pl);
+        if (v !== undefined) o[k] = v;
+      }
+      return o;
+    }
+    return pl ? l : r;
+  }
+  // רשימות לפי מזהה (עצים, תמונות): מה שנוסף באחד המכשירים נכנס, מה שנמחק באחד מהם יוצא (אלא אם נערך במכשיר השני)
+  function mergeList(b, l, r, pl) {
+    const B = new Map(b.filter(plain).map(x => [x.id, x])), L = new Map(l.map(x => [x.id, x])), R = new Map(r.map(x => [x.id, x]));
+    const out = [];
+    for (const x of l) {
+      if (R.has(x.id)) out.push(merge3(B.get(x.id), x, R.get(x.id), pl));
+      else if (!B.has(x.id) || !same(x, B.get(x.id), true)) out.push(x);
+    }
+    for (const x of r) if (!L.has(x.id) && (!B.has(x.id) || !same(x, B.get(x.id), true))) out.push(x);
+    return out;
+  }
+  function mergeSurvey(base, l, r) {
+    const strip = o => { const c = {}; for (const k of Object.keys(o)) if (!LOCAL_KEYS.has(k) && !k.startsWith('_')) c[k] = o[k]; return c; };
+    const L = strip(l), R = strip(r);
+    // אין בסיס (סקר מלפני הגרסה הזו): אם לא נערך כאן מאז שעלה, הענן קובע. אחרת איחוד של שניהם
+    const m = Object.assign({}, !base && l.odDataHash === hashSurvey(l) && l.odSyncHash !== null ? R
+      : merge3(base ? strip(base) : undefined, L, R, (l.updated || 0) >= (r.updated || 0)));
+    for (const k of Object.keys(l)) if (LOCAL_KEYS.has(k) || k.startsWith('_')) m[k] = l[k];
+    m.updated = Math.max(l.updated || 0, r.updated || 0);
+    return { merged: m, changed: !same(L, strip(m)), needPush: !same(R, strip(m)) };
+  }
+
+  // מוריד את הגרסה מהענן אם מכשיר אחר שינה אותה, וממזג לתוך s (באותו אובייקט, כדי שהמסך הפתוח יראה אותו).
+  // מחזיר 'deleted' אם הסקר נמחק במכשיר אחר, 'busy' אם עורכים אותו עכשיו (ננסה בסבב הבא), true אם השתנה
+  async function pull(s) {
+    if (!s.odDataId || s.deleted) return false;
+    const meta = await OD.api('GET', `/files/${s.odDataId}?fields=version,trashed&supportsAllDrives=true`);
+    if (!meta || meta.trashed || meta.version == null) return false;
+    const ver = String(meta.version);
+    if (ver === s.odDataVer) return false;
+    const blob = await OD.download(s.odDataId);
+    if (!blob) return false;
+    const remote = JSON.parse(await blob.text());
+    if (!remote || remote.id !== s.id) return false;
+    const { merged, changed, needPush } = mergeSurvey(await DB.getKV('base:' + s.id, null), s, remote);
+    if (changed && root.App && root.App.isEditing && root.App.isEditing(s.id)) return 'busy';
+    const before = new Map(s.trees.flatMap(t => t.photos || []).map(p => [p.id, p]));
+    const beforeRec = (s.recordings || []).map(r => r.id);
+    if (changed) {
+      for (const k of Object.keys(s)) if (!(k in merged)) delete s[k];
+      Object.assign(s, merged);
+    }
+    s.odDataVer = ver;
+    if (!needPush) { s.odDataHash = hashSurvey(s); s.odSyncHash = syncHash(s); }
+    else s.odSyncHash = null; // יש כאן שינויים שעוד לא בענן: יעלו מיד
+    await DB.setKV('base:' + s.id, remote);
+    if (s.deleted) { await removeLocal(s, beforeRec); return 'deleted'; }
+    if (changed) {
+      // תמונות: חדשות ממכשיר אחר נטענות מגוגל דרייב כשצריך; תמונה שצוירה במכשיר אחר מתחלפת; שנמחקו נמחקות גם כאן
+      const now = new Set();
+      for (const t of s.trees) for (const p of t.photos || []) {
+        now.add(p.id);
+        const old = before.get(p.id), d = await DB.getPhoto(p.id);
+        if (!d) await DB.putPhoto({ id: p.id, thumb: null, w: p.w, h: p.h, cloud: true });
+        else if (old && (old.ver || 0) !== (p.ver || 0) && d.blob && p.odId) await DB.putPhoto({ id: p.id, thumb: null, w: p.w, h: p.h, cloud: true });
+      }
+      for (const id of before.keys()) if (!now.has(id)) await DB.deletePhoto(id);
+      const recNow = new Set((s.recordings || []).map(r => r.id));
+      for (const id of beforeRec) if (!recNow.has(id)) await DB.deletePhoto(id);
+    }
+    await DB.putSurvey(s, false);
+    if (changed) {
+      log('info', 'הסקר עודכן ממכשיר אחר', s);
+      if (s.finished) await freeLocal(s);
+      if (root.App && root.App.remoteUpdated) root.App.remoteUpdated(s.id);
+    }
+    return changed;
+  }
+
+  async function removeLocal(s, extraIds) {
+    for (const t of s.trees || []) for (const p of t.photos || []) await DB.deletePhoto(p.id);
+    for (const r of s.recordings || []) await DB.deletePhoto(r.id);
+    for (const id of extraIds || []) await DB.deletePhoto(id);
+    await DB.deleteSurvey(s.id);
+    await DB.delKV('base:' + s.id);
+    DB.delKV('pdf:' + s.id).catch(() => {}); DB.delKV('xlsm:' + s.id).catch(() => {});
+    if (root.App && root.App.remoteUpdated) root.App.remoteUpdated(s.id, true);
+  }
+
+  // סקר שנמחק בטאבלט: המחיקה עוברת לענן (סימון בקובץ ובאינדקס, הקבצים עצמם נשארים בגיבוי), ואז הוא נמחק מהטאבלט
+  async function pushDeleted(s) {
+    if (s.odDataId && s.odFolderId) { await pushData(s); await updateIndex(s); }
+    await removeLocal(s);
+  }
+
+  // סקרים שהתחילו או עודכנו היום במכשיר אחר ועוד לא נמצאים כאן, וסקרים שנמחקו במכשיר אחר
+  const DISCOVER_DAYS = 14;
+  async function discover() {
+    const list = await cloudIndex();
+    const local = new Map((await DB.allSurveys(true)).map(s => [s.id, s]));
+    const since = dayKey(Date.now() - DISCOVER_DAYS * 864e5), td = dayKey(Date.now());
+    let added = 0;
+    for (const e of list) {
+      const l = local.get(e.id);
+      if (e.deleted) {
+        // נמחק במכשיר אחר: נמחק גם כאן אם לא נערך כאן מאז הסנכרון האחרון
+        if (l && !holding.has(e.id) && l.odDataHash === hashSurvey(l)) await removeLocal(l);
+        continue;
+      }
+      if (l || !e.dataId || !e.upd || e.upd < since || (e.finished && e.upd !== td)) continue;
+      const meta = await OD.api('GET', `/files/${e.dataId}?fields=version,trashed&supportsAllDrives=true`);
+      if (!meta || meta.trashed) continue;
+      const b = await OD.download(e.dataId);
+      if (!b) continue;
+      const s = JSON.parse(await b.text());
+      if (!s || s.id !== e.id || s.deleted) continue;
+      await DB.setKV('base:' + s.id, JSON.parse(JSON.stringify(s)));
+      for (const t of s.trees || []) for (const p of t.photos || []) {
+        if (!(await DB.getPhoto(p.id))) await DB.putPhoto({ id: p.id, thumb: null, w: p.w, h: p.h, cloud: true });
+      }
+      s.odDataVer = String(meta.version); s.odDataHash = hashSurvey(s); s.odSyncHash = syncHash(s); s.finishPending = false;
+      await DB.putSurvey(s, false);
+      added++;
+    }
+    if (added) { log('info', `${added} סקרים נוספו ממכשיר אחר`); if (root.App && root.App.remoteUpdated) root.App.remoteUpdated(null); }
+  }
+  const dayKey = t => { const d = new Date(t || 0); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
   const preparing = new Set(); // סקרים שהאקסל וה-PDF שלהם נבנים עכשיו אחרי "סיום סקר"
   const allInCloud = s => s.trees.every(t => (t.photos || []).every(p => p.odId && (p.ver || 0) === (p.odVer || 0)));
@@ -316,7 +480,7 @@
     const n = s.trees.filter(Core.hasContent).length;
     return { id: s.id, project: s.project || '', siteName: s.siteName || '', street: s.street || '', city: s.city || '', site: s.site || '',
       code: s.code || '', manager: s.manager || '', date: s.date || '', trees: n, photos: s.trees.reduce((a, t) => a + (t.photos || []).length, 0),
-      folderId: s.odFolderId, dataId: s.odDataId || null, finished: !!s.finished };
+      folderId: s.odFolderId, dataId: s.odDataId || null, finished: !!s.finished, upd: dayKey(s.updated || s.created), deleted: s.deleted ? true : undefined };
   }
 
   const BACKUP_ROOT = 'גיבוי אפליקציית סקרי עצים';
@@ -456,11 +620,12 @@
     let tg = 0, od = 0;
     for (const s0 of surveys) {
       const s = live(s0);
+      if (s.deleted) { if (odOn) od++; continue; }
       for (const t of s.trees) for (const p of t.photos || []) {
         if (tgOn && !p.fromOld && (!p.tgMsgId || (p.ver || 0) !== (p.tgVer || 0))) tg++;
         if (odOn && (!p.odId || (p.ver || 0) !== (p.odVer || 0))) od++;
       }
-      if (odOn && s.trees.length && s.odDataHash !== hashSurvey(s)) od++;
+      if (odOn && s.trees.length && (s.odDataHash !== hashSurvey(s) || (s.odSyncHash !== syncHash(s) && s.odDataId))) od++;
       if (odOn && s.finishPending) od++;
     }
     state.tgPending = tg; state.odPending = od;
@@ -469,6 +634,7 @@
   let stopped = false; // אחרי כיבוי: לא מגבים יותר עד שהאפליקציה נפתחת מחדש
   function stop() { stopped = true; clearTimeout(timer); }
   const holding = new Map();
+  const pulledAt = new Map(); let discoveredAt = 0; // בדיקת שינויים ממכשירים אחרים: לא יותר מפעם בדקה
   async function run() {
     if (stopped) return;
     if (running) { again = true; return; }
@@ -481,16 +647,44 @@
       const token = await DB.getKV('tgToken', ''), chat = await DB.getKV('tgChat', '');
       const tgOn = !!(token && chat);
       const odOn = (await OD.connected()) && !!(await OD.clientId());
-      let surveys = await DB.allSurveys();
+      let surveys = await DB.allSurveys(true);
       countPending(surveys, tgOn, odOn); emit();
       if (state.offline || (!tgOn && !odOn)) return;
+      // סקרים חדשים או מחוקים ממכשירים אחרים
+      if (odOn && !state.odNeedsLogin && Date.now() - discoveredAt > 60000) {
+        discoveredAt = Date.now();
+        try { await discover(); surveys = await DB.allSurveys(true); }
+        catch (e) { if (e instanceof OD.AuthError) state.odNeedsLogin = true; else log('error', 'בדיקת סקרים ממכשירים אחרים נכשלה: ' + e.message); }
+      }
+      let busy = false;
       // הסקר הפתוח קודם
       surveys.sort((a, b) => (live(b) !== b) - (live(a) !== a) || (b.updated || 0) - (a.updated || 0));
       for (const s0 of surveys) {
         // העותק העדכני: הסקר הפתוח, ואם הוא לא פתוח — מה שבטאבלט עכשיו (ייתכן שנערך אחרי תחילת הסבב)
-        const s = live(s0) !== s0 ? live(s0) : (await DB.getSurvey(s0.id)) || s0;
+        const s = live(s0) !== s0 ? live(s0) : holding.get(s0.id) || (await DB.getSurvey(s0.id)) || s0;
         // סקר שנפתח בזמן שהוא עולה: האפליקציה עובדת על אותו עותק, כדי שהשמירות של הגיבוי לא ידרסו עריכות
         holding.set(s.id, s);
+        if (s.deleted) {
+          if (odOn && !state.odNeedsLogin) {
+            try { await pushDeleted(s); }
+            catch (e) { if (e instanceof OD.AuthError) state.odNeedsLogin = true; else { state.error = 'גוגל דרייב: ' + e.message; log('error', state.error, s); } }
+          } else if (!s.odDataId) await removeLocal(s);
+          holding.delete(s.id);
+          continue;
+        }
+        // קודם מושכים שינויים ממכשיר אחר (לפני הטלגרם, כדי לא לשלוח שוב תמונה שכבר נשלחה משם, ולפני ההעלאה, כדי לא לדרוס אותם)
+        // (סקר פתוח: בכל סבב. השאר: פעם בדקה, ורק סקרים פתוחים או מהשבועיים האחרונים; ישן נבדק כשפותחים אותו)
+        const recent = !s.finished || Date.now() - (s.updated || 0) < DISCOVER_DAYS * 864e5;
+        if (odOn && !state.odNeedsLogin && (live(s) === s || (recent && Date.now() - (pulledAt.get(s.id) || 0) > 60000))) {
+          pulledAt.set(s.id, Date.now());
+          let r = false;
+          try { r = await pull(s); }
+          catch (e) {
+            if (e instanceof OD.AuthError) state.odNeedsLogin = true;
+            else { log('error', 'משיכת עדכונים ממכשיר אחר נכשלה: ' + e.message, s); r = 'busy'; }
+          }
+          if (r === 'deleted' || r === 'busy') { if (r === 'busy') busy = true; holding.delete(s.id); continue; }
+        }
         // טלגרם וגוגל דרייב במקביל: "סיום סקר" לא מחכה שכל התמונות יישלחו קודם לטלגרם
         await Promise.all([
           tgOn && (async () => {
@@ -506,8 +700,9 @@
           })()]);
         holding.delete(s.id);
       }
-      surveys = await DB.allSurveys();
+      surveys = await DB.allSurveys(true);
       countPending(surveys, tgOn, odOn);
+      if (busy) state.odPending++;
       if (!state.error && !state.odNeedsLogin && !state.tgPending && !state.odPending) { state.lastOk = Date.now(); DB.setKV('syncLastOk', state.lastOk); }
     } catch (e) {
       state.error = e.message;
@@ -542,7 +737,17 @@
       await syncFolders(s); await putReportFile(s, name, blob); log('ok', name + ' נשמר בגוגל דרייב', s); await DB.putSurvey(s, false);
       return { folderId: await reportFolder(s), path: [(await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים', s.project || 'ללא פרויקט'].join(' / ') };
     },
-    cloudIndex, allInCloud, freeLocal, log, hashSurvey, loadSurvey,
+    cloudIndex, allInCloud, freeLocal, log, hashSurvey, loadSurvey, mergeSurvey,
+    // לפני פתיחת סקר: מושכים את הגרסה האחרונה מהענן (עד כמה שניות), על אותו עותק שהגיבוי מחזיק
+    async refresh(id) {
+      if (!navigator.onLine || running || !(await OD.connected())) return null;
+      const s = await DB.getSurvey(id);
+      if (!s || !s.odDataId) return s || null;
+      holding.set(id, s);
+      const p = pull(s).catch(() => false).finally(() => { if (holding.get(id) === s && !running) holding.delete(id); });
+      await Promise.race([p, new Promise(r => setTimeout(r, 4000))]);
+      return s;
+    },
     // הגדרות הטלגרם השתנו בטאבלט: יישמרו בענן בגיבוי הבא
     geminiChanged() { settingsSynced = false; DB.setKV('geminiUpdated', Date.now()).then(() => schedule(0)); },
     settingsChanged() { settingsSynced = false; DB.setKV('tgUpdated', Date.now()).then(() => schedule(0)); },
