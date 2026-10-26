@@ -142,7 +142,8 @@
     const ti = toks.findIndex(t => TREE.has(t.n) && !t.used);
     if (ti >= 0) {
       use(toks[ti]);
-      if (!readNum(ti + 1)) { r.newTree = true; if (['הבא', 'חדש'].includes(at(ti + 1).n)) use(toks[ti + 1]); }
+      // "עץ" בלי מספר לא פותח עץ (הזיהוי שומע "עץ" גם באמצע משפט). רק "עץ הבא" / "עץ חדש"
+      if (!readNum(ti + 1) && ['הבא', 'חדש'].includes(at(ti + 1).n)) { r.newTree = true; use(toks[ti + 1]); }
     } else if (at(0).num != null && !at(0).used) readNum(0);
     else if (['הבא', norm('עץ הבא')].includes(whole)) { r.newTree = true; use(...toks); }
     // דחיפות
@@ -160,6 +161,8 @@
     // מין העץ: ההתאמה הטובה ביותר מהרשימה
     const sp = bestMatch(toks, candidates(ctx.species));
     if (sp) { r.species = sp.value; toks.slice(sp.i, sp.i + sp.k).forEach(t => use(t)); r.matched++; }
+    // "עץ תאנה כריתה" (עץ ומין בלי מספר): עץ חדש במספר הבא
+    if (ti >= 0 && r.num == null && r.species) r.newTree = true;
     // הערות קבועות (טיפול מומלץ), לפי הסדר במשפט, ומה שנשאר נכנס כמו שנאמר
     const items = [];
     const phr = candidates(ctx.phrases);
@@ -192,6 +195,30 @@
     return best;
   }
 
+  // כמה עצים ברצף אחד ("עץ 1 אשל ... עץ 2 ברוש ..."): חותכים לפני כל "עץ" + מספר / "עץ הבא"
+  function segments(text) {
+    const words = String(text || '').replace(/(\d)\s*[-–]\s*(\d)/g, '$1 עד $2').split(/\s+/).filter(Boolean);
+    const starts = (w, nx) => TREE.has(norm(w)) && nx != null && (/^\d/.test(norm(nx)) || !!wordVal(norm(nx)) || ['מספר', 'הבא', 'חדש'].includes(norm(nx)));
+    const out = [];
+    let cur = [];
+    words.forEach((w, i) => {
+      if (cur.length && starts(w, words[i + 1])) { out.push(cur.join(' ')); cur = []; }
+      cur.push(w);
+    });
+    if (cur.length) out.push(cur.join(' '));
+    return out;
+  }
+  // כל האפשרויות של הזיהוי -> רשימת משפטים מפוענחים (של האפשרות עם הניקוד הגבוה ביותר)
+  function parseAll(alts, ctx) {
+    let best = null, bestScore = -Infinity;
+    for (const a of alts) {
+      const list = segments(a).map(x => parse(x, ctx)).filter(r => r.raw);
+      const sc = list.reduce((n, r) => n + score(r), 0);
+      if (list.length && sc > bestScore) { best = list; bestScore = sc; }
+    }
+    return best || [];
+  }
+
   // ---------- מסך מצב הדיבור ----------
   const Rec = root.SpeechRecognition || root.webkitSpeechRecognition;
   const supported = () => !!Rec;
@@ -217,7 +244,8 @@
           <div class="voice-status"><span class="voice-dot"></span><span class="voice-state"></span></div>
           <div class="voice-heard"></div>
           <div class="voice-card"></div>
-          <div class="voice-help">לדוגמה: "עץ 1, אשל, הפחתת משקלים, דחיפות 1" · "עוד תמונה" · "בטל" · "הערה …" · "סיום"</div>
+          <div class="voice-log"></div>
+          <div class="voice-help">לדוגמה: "עץ 1, אשל, הפחתת משקלים, דחיפות 1" · "בטל" · "הערה …" · "סיום". צילום: בכפתור</div>
         </div>
         <div class="cam-bottom">
           <button class="cam-btn txt" data-act="done">סיום</button>
@@ -258,17 +286,48 @@
       rec.maxAlternatives = 4;
       // בלי רשת: זיהוי בתוך המכשיר, אם הדפדפן תומך ויש לו עברית
       if (!navigator.onLine && 'processLocally' in rec) rec.processLocally = true;
-      rec.onstart = () => { listening = true; if (!speaking && !paused) setState('on', 'מקשיב…'); };
+      rec.onstart = () => { listening = true; committed = ''; if (!speaking && !paused) setState('on', 'מקשיב…'); };
+      // חלקי משפט נאספים, ונשלחים לפענוח רק אחרי הפסקה קצרה בדיבור. כך "עץ 1" ... "אשל" ... "הפחתת משקלים" הם משפט אחד.
+      // באנדרואיד התוצאה הסופית לפעמים מצטברת (חוזרת על מה שכבר נאמר) או קצרה מהביניים, ולכן משווים לשניהם
+      let pending = [], commitT = null, lastInterim = '', committed = '';
+      const heardNow = () => pending.map(a => a[0]).concat(lastInterim).join(' ').trim();
+      function addFinal(alts) {
+        alts = alts.map(a => a.trim()).filter(Boolean);
+        if (!alts.length) return;
+        // מה שכבר נשלח בסשן הזה וחוזר בתחילת התוצאה: מורידים
+        if (committed && norm(alts[0]).startsWith(norm(committed))) {
+          const rest = alts[0].split(/\s+/).slice(committed.split(/\s+/).length).join(' ');
+          if (!rest) return;
+          alts = [rest];
+        }
+        if (lastInterim && norm(lastInterim).length > norm(alts[0]).length + 3 && norm(lastInterim).includes(norm(alts[0]).split(' ')[0])) alts = alts.concat(lastInterim);
+        const last = pending[pending.length - 1];
+        if (last && norm(alts[0]).startsWith(norm(last[0]))) pending[pending.length - 1] = alts;
+        else if (!(last && norm(last[0]).startsWith(norm(alts[0])))) pending.push(alts);
+      }
+      function commit() {
+        clearTimeout(commitT);
+        lastInterim = '';
+        if (!pending.length) return;
+        const alts = pending.length === 1 ? pending[0] : [pending.map(a => a[0]).join(' ')];
+        committed = (committed + ' ' + pending.map(a => a[0]).join(' ')).trim();
+        pending = [];
+        queue.push(alts);
+        pump();
+      }
       rec.onresult = e => {
         errStreak = 0;
         let interim = '';
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const res = e.results[i];
-          if (res.isFinal) queue.push([...res].map(a => a.transcript));
+          if (res.isFinal) { addFinal(Array.from({ length: res.length }, (_, k) => res[k].transcript)); lastInterim = ''; }
           else interim += res[0].transcript;
         }
-        if (interim) { $('.voice-heard').textContent = interim; ov.dataset.state = 'hear'; }
-        pump();
+        if (interim) lastInterim = interim.trim();
+        $('.voice-heard').textContent = heardNow();
+        ov.dataset.state = 'hear';
+        clearTimeout(commitT);
+        commitT = setTimeout(commit, opts.pauseMs || 1500);
       };
       rec.onerror = e => {
         if (e.error === 'no-speech' || e.error === 'aborted') return;
@@ -278,7 +337,7 @@
         else if (e.error === 'language-not-supported') { paused = true; showMic(); setState('err', 'אין זיהוי דיבור בעברית במכשיר הזה'); }
         else setState('err', 'תקלה בזיהוי דיבור (' + e.error + ')');
       };
-      rec.onend = () => { listening = false; if (active && !paused && !speaking) setTimeout(listen, Math.min(250 * 2 ** errStreak, 8000)); };
+      rec.onend = () => { listening = false; if (pending.length || lastInterim) { if (!pending.length) pending.push([lastInterim]); commit(); } if (active && !paused && !speaking) setTimeout(listen, Math.min(250 * 2 ** errStreak, 8000)); };
       function listen() {
         if (!active || paused || speaking || listening || document.visibilityState !== 'visible') return;
         try { rec.start(); } catch (_) { /* כבר פועל */ }
@@ -321,6 +380,18 @@
         return blob;
       }
 
+      // מה נשמע ומה נכנס, ארבעת האחרונים (כדי לראות מיד אם הזיהוי הבין)
+      function addLog(raw, res) {
+        const box = $('.voice-log');
+        const d = document.createElement('div');
+        const q = document.createElement('q'); q.textContent = raw;
+        const r = document.createElement('span'); r.textContent = ' ← ' + (res ? [].concat(res.card || res.say || []).slice(0, 2).join(' · ') : '');
+        if (res && res.warn) d.className = 'warn';
+        d.append(q, r);
+        box.prepend(d);
+        while (box.children.length > 4) box.lastChild.remove();
+      }
+
       function showResult(res) {
         const card = $('.voice-card');
         card.replaceChildren();
@@ -339,18 +410,24 @@
         try {
           while (queue.length && active) {
             const alts = queue.shift();
-            const p = parseBest(alts, opts.context());
-            $('.voice-heard').textContent = '«' + p.raw + '»';
-            if (p.cmd === 'close') { close(); return; }
-            if (p.cmd === 'pause') { paused = true; showMic(); stopListening(); setState('off', 'מושהה. לחץ ▶ להמשך'); continue; }
-            setState('work', 'שומר…');
-            let res;
-            try { res = await opts.handle(p, shoot); } catch (err) { console.error(err); res = { say: 'לא נשמר', card: ['לא נשמר: ' + err.message], warn: true }; }
-            if (!active) return;
-            title();
-            showResult(res);
-            if (res && res.close) { close(); return; }
-            await say(res && res.say);
+            const list = parseAll(alts, opts.context());
+            $('.voice-heard').textContent = '';
+            const says = [];
+            for (const p of list) {
+              if (p.cmd === 'close') { close(); return; }
+              if (p.cmd === 'pause') { paused = true; showMic(); stopListening(); setState('off', 'מושהה. לחץ ▶ להמשך'); continue; }
+              setState('work', 'שומר…');
+              let res;
+              try { res = await opts.handle(p); } catch (err) { console.error(err); res = { say: 'לא נשמר', card: ['לא נשמר: ' + err.message], warn: true }; }
+              if (!active) return;
+              title();
+              showResult(res);
+              addLog(p.raw, res);
+              if (opts.log) opts.log({ at: Date.now(), heard: alts, raw: p.raw, parsed: { num: p.num, newTree: p.newTree, species: p.species, notes: p.notes, urgency: p.urgency, pines: p.pines, cmd: p.cmd }, result: res ? [].concat(res.card || res.say || []).join(' | ') : '' });
+              if (res && res.close) { close(); return; }
+              if (res && res.say) says.push(res.say);
+            }
+            await say(says.join('. '));
             if (!speaking && !paused) setState(listening ? 'on' : 'off', listening ? 'מקשיב…' : '');
           }
         } finally { working = false; }
@@ -380,8 +457,15 @@
           paused = !paused; showMic();
           if (paused) { stopListening(); setState('off', 'מושהה. לחץ ▶ להמשך'); } else { errStreak = 0; listen(); }
         } else if (act === 'shot') {
+          // בזמן הצילום והסימון לא מקשיבים
           b.disabled = true;
-          try { showResult(await opts.manualShot(shoot)); title(); } finally { b.disabled = false; }
+          const wasPaused = paused;
+          paused = true; stopListening(); commit();
+          try {
+            const res = await opts.manualShot(shoot);
+            if (res === 'retake') return;
+            showResult(res); title();
+          } finally { b.disabled = false; paused = wasPaused; if (!paused) listen(); }
         }
       });
       setState('off', 'מתחיל…');
@@ -389,6 +473,6 @@
     });
   }
 
-  const api = { parse, parseBest, tokenize, norm, supported, open };
+  const api = { parse, parseBest, parseAll, segments, tokenize, norm, supported, open };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Voice = api;
 })(typeof self !== 'undefined' ? self : this);

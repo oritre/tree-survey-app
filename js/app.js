@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.25.1';
+  const APP_VERSION = '1.26.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1664,7 +1664,8 @@
   }
 
   // ---------- מצב דיבור (סקר בטיחות) ----------
-  // המצלמה פתוחה והאפליקציה מקשיבה: "עץ 1, אשל, הפחתת משקלים" יוצר/מעדכן את העץ, מצלם ולוקח נ"צ (js/voice.js).
+  // המצלמה פתוחה והאפליקציה מקשיבה: "עץ 1, אשל, הפחתת משקלים" יוצר/מעדכן את העץ ולוקח נ"צ (js/voice.js).
+  // הצילום רק בלחיצה (ori: צילום אוטומטי לא יצא טוב), ואחריו מסך הסימון כמו במצלמה הרגילה.
   // זו תוספת בלבד: כל מה שנשמר כאן הוא אותו עץ רגיל, ואפשר לתקן אותו אחר כך במסך העץ
   async function voiceMode() {
     if (!Voice.supported()) { toast('זיהוי דיבור לא נתמך בדפדפן הזה (צריך Chrome)', 3500); return; }
@@ -1683,14 +1684,6 @@
     };
     const findTree = num => cur.trees.find(x => String(x.num || '').replace(/\s/g, '') === num);
     const refresh = () => { renderTreeList(); renderEditor(); };
-    // מחזירה false אם התמונה לא יצאה (שחורה או לא נשמרה)
-    async function photo(t, shoot, u) {
-      const blob = await shoot();
-      if (!blob || !(await addPhoto(t, blob, false))) return false;
-      u.photos.push(t.photos[t.photos.length - 1].id);
-      return true;
-    }
-    const NO_SHOT = 'התמונה לא יצאה, תגיד צלם';
     const start = (t, created) => {
       const u = { t, created, before: { species: t.species, notes: t.notes, urgency: t.urgency, pines: t.pines, split: t.split }, photos: [] };
       undo.push(u);
@@ -1703,7 +1696,7 @@
       return askPinesFor ? ' כמה אורנים?' : '';
     };
 
-    async function handle(p, shoot) {
+    async function handle(p) {
       if (p.cmd === 'undo') {
         const u = undo.pop();
         if (!u) return { say: 'אין מה לבטל', warn: true };
@@ -1723,7 +1716,7 @@
         return { say: 'בוטל', card: ['בוטל: ' + label(u.t) + (u.photos.length ? ` (${u.photos.length} תמונות)` : '')] };
       }
       // תשובה ל"כמה אורנים?": מספר לבד
-      if (askPinesFor && askPinesFor.id === curTreeId && p.num != null && /^\d+$/.test(p.num) && !p.species && !p.notes.length && !p.urgency && !p.photo) {
+      if (askPinesFor && askPinesFor.id === curTreeId && p.num != null && /^\d+$/.test(p.num) && !p.species && !p.notes.length && !p.urgency) {
         p.pines = +p.num; p.num = null;
       }
       let t = treeById(curTreeId), created = false;
@@ -1732,11 +1725,12 @@
         t = (p.num != null && findTree(num)) || null;
         if (!t) { t = newTree(num); created = true; }
       }
-      // בלי מספר עץ, מקבלים רק מה שזוהה (מין, טיפול מהרשימה, דחיפות, אורנים, "צלם", "הערה ...").
+      // בלי מספר עץ, מקבלים רק מה שזוהה (מין, טיפול מהרשימה, דחיפות, אורנים, "הערה ...").
       // כך דיבור של אנשים מסביב לא נכנס להערות
-      const known = p.species || p.matched || p.urgency || p.pines != null || p.split || p.photo || p.free;
+      const known = p.species || p.matched || p.urgency || p.pines != null || p.split || p.free;
       if (!created && p.num == null && !known) return { card: ['לא הבנתי: «' + p.raw + '»', 'אפשר להתחיל ב"עץ" ומספר, או "הערה" ואז הטקסט'], warn: true };
-      if (!t) { t = newTree(Core.nextNum(cur.trees)); created = true; }
+      // מין אחר בלי מספר ("תאנה בחניה ..." אחרי "וושינגטוניה ...") = העץ הבא, כדי לא לדרוס את העץ הקודם
+      if (!t || (!created && p.num == null && p.species && (t.species || '').trim() && t.species.trim() !== p.species)) { t = newTree(Core.nextNum(cur.trees)); created = true; }
       // עץ שכבר רשום בסקר: אומרים מה היה בו, כדי שלא יתעדכן בטעות (אפשר "בטל")
       const existed = !created && p.num != null && Core.hasContent(t) && (t.species || t.notes || t.photos.length)
         ? [t.species, t.notes].filter(Boolean).join(', ') || `${t.photos.length} תמונות` : null;
@@ -1751,32 +1745,39 @@
         t.notes = parts.join(', ');
       }
       await saveNow();
-      // עץ חדש, מספר עץ שנאמר או "צלם": תמונה של מה שמול המצלמה
-      const shot = created || p.num != null || p.photo ? await photo(t, shoot, u) : null;
       afterNew(t, created);
       refresh();
       const what = [label(t), t.species].filter(Boolean).join(' ');
-      if (shot === false) return { say: what + ', ' + NO_SHOT, card: card(t).concat(NO_SHOT), warn: true };
       if (existed != null) return { say: `שים לב, ${label(t)} כבר רשום: ${existed}. עדכנתי אותו. לביטול תגיד בטל.` + ask(t),
         card: [`${label(t)} כבר היה רשום: ${existed}`, 'עודכן ל: ' + card(t)[0] + '. לביטול: "בטל"'].concat(card(t).slice(1)), warn: true };
-      return { say: (p.photo && !created && p.num == null ? 'צולם' : what + (created ? ', נשמר' : ', עודכן')) + ask(t), card: card(t) };
+      return { say: what + (created ? ', נשמר' : ', עודכן') + ask(t), card: card(t) };
     }
 
-    // הכפתור במסך: צילום לעץ הנוכחי (או לעץ חדש אם אין)
+    // הכפתור במסך: צילום לעץ הנוכחי (או לעץ חדש אם אין), ואחריו מסך הסימון
     async function manualShot(shoot) {
+      const blob = await shoot();
+      if (!blob) return { card: ['התמונה יצאה שחורה, צלם שוב'], warn: true };
       let t = treeById(curTreeId), created = false;
       if (!t) { t = newTree(Core.nextNum(cur.trees)); created = true; }
+      const annotate = await DB.getKV('annotateAfter', true);
+      const r = await addPhoto(t, blob, annotate, annotate);
+      if (r === 'retake' || r === 'cancel' || !r) {
+        if (created) { cur.trees = cur.trees.filter(x => x !== t); curTreeId = null; }
+        return r === 'retake' ? 'retake' : { card: [r === 'cancel' ? 'התמונה לא נשמרה' : 'לא הצלחתי לשמור את התמונה'], warn: !!r };
+      }
       const u = start(t, created);
-      const ok = await photo(t, shoot, u);
+      u.photos.push(t.photos[t.photos.length - 1].id);
       afterNew(t, created);
       await saveNow(); refresh();
-      return ok ? { card: card(t) } : { card: card(t).concat('התמונה לא יצאה, צלם שוב'), warn: true };
+      return { card: card(t) };
     }
+    // מה נשמע ומה נכנס, נשמר בסקר (ומגיע לגוגל דרייב) כדי לבדוק את הזיהוי
+    const log = e => { cur.voiceLog = (cur.voiceLog || []).concat(e).slice(-300); saveSoon(); };
 
     try {
       await Voice.open({
         context: () => ({ species: [...new Set([...sugCache.speciesAll, ...safetySpecies()])], phrases: sugCache.phrasesTop }),
-        handle, manualShot,
+        handle, manualShot, log,
         title: () => { const t = treeById(curTreeId); return t ? `מצב דיבור · ${label(t)} ${t.species || ''}`.trim() : 'מצב דיבור'; },
       });
     } catch (e) {

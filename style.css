@@ -407,4 +407,8 @@ textarea.doc-text.b { font-weight: 700; }
 .voice-card:empty { display: none; }
 .voice-card div:first-child { font-weight: 700; font-size: 24px; }
 .voice-card.warn { background: #7a1d1dd9; }
+.voice-log { display: flex; flex-direction: column; gap: 4px; font-size: 15px; }
+.voice-log div { background: #0008; border-radius: 8px; padding: 4px 10px; }
+.voice-log div.warn { background: #7a1d1dc0; }
+.voice-log q { opacity: .85; }
 .voice-help { font-size: 13px; opacity: .8; text-shadow: 0 1px 3px #000; }
