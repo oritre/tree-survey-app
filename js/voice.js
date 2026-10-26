@@ -266,7 +266,7 @@
       const showSpeak = () => { speakBtn.textContent = speakOn ? '🔊' : '🔇'; speakBtn.classList.toggle('on', speakOn); };
       showSpeak();
 
-      let active = true, paused = false, speaking = false, listening = false, shots = 0, errStreak = 0;
+      let active = true, paused = false, speaking = false, listening = false, shots = 0, errStreak = 0, shooting = false, closing = false;
       const queue = [];
       let working = false;
 
@@ -334,7 +334,7 @@
           if (!micStream) micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
           if (!active || vad) return;
           vad = root.Gemini.listen(micStream, {
-            isMuted: () => paused || speaking || !active,
+            isMuted: () => (paused && !shooting) || speaking || !active || closing,
             onLevel: on => { if (on) setState('hear', 'שומע…'); else if (!working) setState('on', 'מקשיב…'); },
             onSegment: blob => { queue.push({ audio: blob }); pump(); },
           });
@@ -475,7 +475,8 @@
         if (working) return;
         working = true;
         try {
-          while (queue.length && active) {
+          // בזמן צילום וסימון המשפטים מחכים, כדי שייכנסו לעץ שצולם ולא לעץ הקודם
+          while (queue.length && active && !shooting) {
             const item = queue.shift();
             let alts = item, list;
             if (item.audio) {
@@ -507,10 +508,22 @@
               if (res && res.close) { close(); return; }
               if (res && res.say) says.push(res.say);
             }
-            await say(says.join('. '));
+            if (!closing) await say(says.join('. '));
             if (!speaking && !paused) setState(listening || vad ? 'on' : 'off', listening || vad ? 'מקשיב…' : '');
           }
         } finally { working = false; }
+      }
+
+      // "סיום": קודם מסיימים לפענח ולשמור את מה שכבר נאמר (בבדיקה של ori המשפט האחרון אבד כי לחץ סיום מיד)
+      async function finish(b) {
+        if (closing) return;
+        closing = true; b.disabled = true;
+        stopListening();
+        const until = Date.now() + 20000;
+        if (queue.length || working) setState('work', 'שומר את מה שנאמר…');
+        pump();
+        while ((queue.length || working) && active && Date.now() < until) await new Promise(r => setTimeout(r, 150));
+        close();
       }
 
       function close() {
@@ -534,7 +547,7 @@
         const b = e.target.closest('[data-act]');
         if (!b) return;
         const act = b.dataset.act;
-        if (act === 'done') close();
+        if (act === 'done') finish(b);
         else if (act === 'rec') {
           recOn = !mr;
           try { localStorage.setItem(REC_KEY, recOn ? '1' : '0'); } catch (_) {}
@@ -547,14 +560,16 @@
           if (paused) { stopListening(); setState('off', 'מושהה. לחץ ▶ להמשך'); } else { errStreak = 0; listen(); }
         } else if (act === 'shot') {
           // בזמן הצילום והסימון לא מקשיבים
+          // עם Gemini ממשיכים להקליט גם בזמן הסימון (אפשר כבר לתאר את העץ), והמשפטים נשמרים אחרי שהתמונה נשמרה
           b.disabled = true;
           const wasPaused = paused;
-          paused = true; stopListening(); commit();
+          shooting = ai && !wasPaused;
+          paused = true; if (!ai) stopListening(); commit();
           try {
             const res = await opts.manualShot(shoot);
             if (res === 'retake') return;
             showResult(res); title();
-          } finally { b.disabled = false; paused = wasPaused; if (!paused) listen(); }
+          } finally { b.disabled = false; paused = wasPaused; shooting = false; if (!paused) listen(); pump(); }
         }
       });
       setState('off', 'מתחיל…');
