@@ -395,6 +395,17 @@
       if (!local.tgUpdated) { local.tgUpdated = Date.now(); await DB.setKV('tgUpdated', local.tgUpdated); }
       await OD.upload(r, SETTINGS, new Blob([JSON.stringify(Object.assign(cloud, local))], { type: 'application/json' }), true);
     }
+    // מפתח Gemini (מצב דיבור): אותו מפתח בכל המכשירים, האחרון שנשמר מנצח
+    const gk = await DB.getKV('geminiKey', ''), gu = await DB.getKV('geminiUpdated', 0);
+    if ((cloud.geminiUpdated || 0) > gu) {
+      await DB.setKV('geminiKey', cloud.geminiKey || ''); await DB.setKV('geminiUpdated', cloud.geminiUpdated);
+      log('info', cloud.geminiKey ? 'מפתח Gemini נטען מהענן' : 'מפתח Gemini נמחק במכשיר אחר');
+    } else if (gu > (cloud.geminiUpdated || 0) || (!cloud.geminiUpdated && gk)) {
+      // מפתח שהוכנס לפני שהיה סנכרון (בלי זמן עדכון): עולה לענן עכשיו
+      const at = gu || Date.now();
+      if (!gu) await DB.setKV('geminiUpdated', at);
+      await OD.upload(r, SETTINGS, new Blob([JSON.stringify(Object.assign(cloud, { geminiKey: gk, geminiUpdated: at }))], { type: 'application/json' }), true);
+    }
     await Sig.sync(r).catch(() => {}); // החתימה והחותמת, שלא נמצאות באתר הציבורי
     settingsSynced = true;
   }
@@ -533,6 +544,7 @@
     },
     cloudIndex, allInCloud, freeLocal, log, hashSurvey, loadSurvey,
     // הגדרות הטלגרם השתנו בטאבלט: יישמרו בענן בגיבוי הבא
+    geminiChanged() { settingsSynced = false; DB.setKV('geminiUpdated', Date.now()).then(() => schedule(0)); },
     settingsChanged() { settingsSynced = false; DB.setKV('tgUpdated', Date.now()).then(() => schedule(0)); },
     pendingOf(s, tgOn, odOn) {
       const ph = s.trees.flatMap(t => t.photos || []);

@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.28.0';
+  const APP_VERSION = '1.28.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -2511,13 +2511,14 @@
           sigInput),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'מצב דיבור (Gemini)'),
-          h('div', { class: 'muted small' }, 'עם מפתח, מצב הדיבור מקליט כל משפט ושולח אותו ל-Gemini של גוגל, שמבין עברית מדוברת וממלא מספר עץ, מין, מיקום, ממצאים וטיפול. בלי מפתח: זיהוי הדיבור של הדפדפן. מפתח חינמי: ',
+          h('div', { class: 'muted small' }, 'המפתח עובר לבד לשאר המכשירים דרך גוגל דרייב. עם מפתח, מצב הדיבור מקליט כל משפט ושולח אותו ל-Gemini של גוגל, שמבין עברית מדוברת וממלא מספר עץ, מין, מיקום, ממצאים וטיפול. בלי מפתח: זיהוי הדיבור של הדפדפן. מפתח חינמי: ',
             h('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener' }, 'aistudio.google.com/apikey')),
           field('מפתח Gemini API', geminiIn),
           h('div', { class: 'row' },
             h('button', { class: 'btn primary', onclick: async () => {
               const k = geminiIn.value.trim();
               await DB.setKV('geminiKey', k);
+              Sync.geminiChanged(); // אותו מפתח בכל המכשירים (דרך גוגל דרייב)
               if (!k) { geminiStatus.textContent = 'נמחק. מצב הדיבור ישתמש בזיהוי של הדפדפן.'; return; }
               geminiStatus.textContent = 'בודק…';
               try { geminiStatus.textContent = (await Gemini.test(k)) ? '✓ המפתח עובד' : 'המפתח נשמר, אבל לא התקבלה תשובה'; }
