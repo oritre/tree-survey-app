@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.28.1';
+  const APP_VERSION = '1.29.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -119,8 +119,9 @@
       if (!cur || cur.id !== m[1]) {
         await saveNow();
         // אם הגיבוי עובד עכשיו על הסקר הזה, עורכים את אותו עותק (אחרת השמירה שלו דורסת את העריכה)
-        cur = Sync.holding(m[1]) || await DB.getSurvey(m[1]);
-        if (!cur) { location.hash = '#/'; return; }
+        // וקודם מושכים מהענן את מה שנעשה בו במכשיר אחר
+        cur = Sync.holding(m[1]) || await Sync.refresh(m[1]) || await DB.getSurvey(m[1]);
+        if (!cur || cur.deleted) { cur = null; location.hash = '#/'; return; }
         const next = await onOpenSurvey(cur);
         if (next !== cur) { cur = null; go('#/s/' + next.id + '/details'); return; }
         migrateSite(cur);
@@ -194,6 +195,18 @@
   window.App = {
     live: id => (cur && cur.id === id ? cur : null),
     onSynced: () => { if (cur && tab === 'trees') renderPhotos(); },
+    // מכשיר אחר שינה סקר: לא ממזגים לתוך הסקר הפתוח בזמן הקלדה, צילום, דיבור או חלון פתוח (ננסה שוב בסבב הבא)
+    isEditing: id => !!(cur && cur.id === id && (document.querySelector('.cam, .annot, .modal')
+      || (document.activeElement && document.activeElement.matches('input, textarea, select, [contenteditable]')))),
+    remoteUpdated(id, deleted) {
+      if (cur && cur.id === id) {
+        if (deleted) { cur = null; toast('הסקר נמחק במכשיר אחר', 4000); go('#/'); return; }
+        thumbUrls.clear();
+        if (!cur.trees.find(t => t.id === curTreeId)) curTreeId = (Core.sortTrees(cur.trees)[0] || {}).id || null;
+        renderSurvey();
+        toast('הסקר עודכן ממכשיר אחר', 2500);
+      } else if (!cur && /^#\/?$/.test(location.hash || '#/')) renderHome();
+    },
     buildReport, buildPdf,
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
     ui: { h, icon, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, shareName, today, fmtDate },
@@ -616,7 +629,7 @@
     q.addEventListener('input', draw);
     draw();
     msg.textContent = 'טוען מהענן…';
-    try { cloudCache = await Sync.cloudIndex(); draw(); setTimeout(() => q.focus(), 50); }
+    try { cloudCache = (await Sync.cloudIndex()).filter(e => !e.deleted); draw(); setTimeout(() => q.focus(), 50); }
     catch (e) { msg.textContent = (e instanceof OD.AuthError ? 'צריך להתחבר מחדש לגוגל דרייב בהגדרות. ' : 'הטעינה נכשלה: ') + e.message; }
   }
 
@@ -1044,7 +1057,7 @@
     if (await OD.connected() && navigator.onLine) {
       try { cloud = await Sync.cloudIndex(); } catch (e) { msg.textContent = 'הטעינה מהענן נכשלה (' + e.message + '). מוצגים רק הסקרים שבטאבלט.'; }
     }
-    const byId = new Map(cloud.map(e => [e.id, e]));
+    const byId = new Map(cloud.filter(e => !e.deleted).map(e => [e.id, e]));
     for (const s of local) byId.set(s.id, Object.assign({}, byId.get(s.id) || {}, fromLocal(s)));
     entries = [...byId.values()];
     if (!entries.length) msg.textContent = 'אין סקרים.';
@@ -1210,9 +1223,16 @@
 
   async function deleteSurvey() {
     if (!confirm('למחוק את כל הסקר, כולל התמונות? אי אפשר לבטל.')) return;
-    for (const t of cur.trees) for (const p of t.photos || []) await DB.deletePhoto(p.id);
-    for (const r of cur.recordings || []) await DB.deletePhoto(r.id);
-    await DB.deleteSurvey(cur.id);
+    if (cur.odDataId) {
+      // הסקר כבר בענן: המחיקה עוברת לכל המכשירים בגיבוי הבא (הגיבוי עצמו נשאר בגוגל דרייב)
+      cur.deleted = Date.now();
+      await DB.putSurvey(cur);
+      Sync.now();
+    } else {
+      for (const t of cur.trees) for (const p of t.photos || []) await DB.deletePhoto(p.id);
+      for (const r of cur.recordings || []) await DB.deletePhoto(r.id);
+      await DB.deleteSurvey(cur.id);
+    }
     cur = null;
     go('#/');
   }
