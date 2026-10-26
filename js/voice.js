@@ -248,7 +248,7 @@
           <div class="voice-heard"></div>
           <div class="voice-card"></div>
           <div class="voice-log"></div>
-          <div class="voice-help">לדוגמה: "עץ 1, אשל, הפחתת משקלים, דחיפות 1" · "בטל" · "הערה …" · "סיום". צילום: בכפתור</div>
+          <div class="voice-help">קודם מצלמים בכפתור, ואז מתארים: "אשל ליד החניה, הפחתת משקלים" · "בטל" · "סיום"</div>
         </div>
         <div class="cam-bottom">
           <button class="cam-btn txt" data-act="done">סיום</button>
