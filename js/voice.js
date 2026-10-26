@@ -274,8 +274,9 @@
 
       // ---------- הקלטה: גיבוי של כל מה שנאמר, בקטעים של 3 דקות (כל קטע נשמר מיד, גם אם האפליקציה תיסגר) ----------
       const SEG_MS = 3 * 60 * 1000;
-      let recOn = !!opts.onRecording && !!root.MediaRecorder;
-      try { if (localStorage.getItem('voiceRecord') === '0') recOn = false; } catch (_) {}
+      // כבויה כברירת מחדל: בטאבלט של ori ההקלטה תפסה את המיקרופון וזיהוי הדיבור לא שמע כלום
+      let recOn = false;
+      try { recOn = !!opts.onRecording && !!root.MediaRecorder && localStorage.getItem('voiceRecord2') === '1'; } catch (_) {}
       let micStream = null, mr = null, segTimer = null, recNote = '';
       const recBtn = $('[data-act="rec"]');
       const showRec = () => {
@@ -373,6 +374,7 @@
         commitT = setTimeout(commit, opts.pauseMs || 1500);
       };
       rec.onerror = e => {
+        if (opts.log && e.error !== 'aborted') opts.log({ at: Date.now(), error: e.error, recording: !!mr });
         if (e.error === 'no-speech' || e.error === 'aborted') return;
         errStreak++;
         if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { paused = true; showMic(); setState('err', 'אין הרשאה למיקרופון. צריך לאשר בדפדפן.'); }
@@ -499,7 +501,7 @@
         if (act === 'done') close();
         else if (act === 'rec') {
           recOn = !mr;
-          try { localStorage.setItem('voiceRecord', recOn ? '1' : '0'); } catch (_) {}
+          try { localStorage.setItem('voiceRecord2', recOn ? '1' : '0'); } catch (_) {}
           recNote = recOn ? '' : 'ההקלטה כבויה';
           if (recOn) startRecording(); else stopRecording(false);
         }
@@ -520,6 +522,7 @@
         }
       });
       setState('off', 'מתחיל…');
+      if (opts.log) opts.log({ at: Date.now(), event: 'start', recording: recOn, ua: navigator.userAgent });
       listen();
     });
   }

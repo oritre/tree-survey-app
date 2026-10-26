@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.27.0';
+  const APP_VERSION = '1.27.1';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1691,7 +1691,8 @@
       curTreeId = t.id;
       return u;
     };
-    const afterNew = (t, created) => { if (created && t.lat == null) captureGps(t, true); };
+    // נ"צ לא נלקח אוטומטית במצב דיבור (ori), רק בכפתור במסך העץ
+    const afterNew = () => {};
     const ask = t => {
       askPinesFor = Core.isPine(t.species) && pinesOf(t) == null ? t : null;
       return askPinesFor ? ' כמה אורנים?' : '';
