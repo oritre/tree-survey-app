@@ -31,6 +31,31 @@
     }
   }
 
+  // כפתור החזרה של הטאבלט סוגר את המסך העליון (מצלמה / סימון) במקום לצאת למסך הראשי.
+  // push(fn) מוסיף רשומה בהיסטוריה; fn נקרא כשלוחצים חזרה. מחזיר release() לסגירה רגילה מהכפתורים
+  const BackGuard = (() => {
+    const stack = [];
+    let skip = 0;
+    window.addEventListener('popstate', () => {
+      if (skip) { skip--; return; }
+      const fn = stack.pop();
+      if (fn) fn();
+    });
+    return {
+      push(fn) {
+        history.pushState({ backGuard: stack.length + 1 }, '', location.href);
+        stack.push(fn);
+        return () => {
+          const i = stack.indexOf(fn);
+          if (i < 0) return; // כבר נסגר בכפתור החזרה
+          stack.splice(i, 1);
+          skip++;
+          history.back();
+        };
+      },
+    };
+  })();
+
   function render(ctx, img, strokes, W, H) {
     ctx.drawImage(img, 0, 0, W, H);
     for (const s of strokes) drawStroke(ctx, s, W, H);
@@ -45,7 +70,7 @@
     return new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
   }
 
-  // פותח עורך במסך מלא. מחזיר את רשימת הקווים החדשה, null אם בוטל, או 'retake' (עם opts.retakeLabel) לצילום מחדש
+  // פותח עורך במסך מלא. מחזיר את רשימת הקווים (ריקה אם לא סימנו), null אם בוטל (גם בכפתור החזרה), או 'retake' (עם opts.retakeLabel) לצילום מחדש
   function open(blob, strokes, opts) {
     opts = opts || {};
     return new Promise(async resolve => {
@@ -125,11 +150,14 @@
       cv.addEventListener('pointerup', end);
       cv.addEventListener('pointercancel', end);
 
+      let release = null;
       function close(result) {
         window.removeEventListener('resize', layout);
         ov.remove();
+        if (release) release();
         resolve(result);
       }
+      release = BackGuard.push(() => { release = null; close(null); });
       ov.querySelector('.annot-bar').addEventListener('click', e => {
         const b = e.target.closest('button');
         if (!b) return;
@@ -151,4 +179,5 @@
   }
 
   root.Annotate = { open, flatten };
+  root.BackGuard = BackGuard;
 })(self);

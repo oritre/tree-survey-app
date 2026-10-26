@@ -1,5 +1,5 @@
 // מצלמה בתוך האפליקציה: נפתחת מיד, צילום בלחיצה אחת.
-// onShot(blob) נקרא לכל תמונה. אם הוא מחזיר 'close' המצלמה נסגרת (עברנו לסימון ושמרנו),
+// onShot(blob) נקרא לכל תמונה. אם הוא מחזיר 'close' המצלמה נסגרת (עברנו לסימון ושמרנו), 'cancel' נסגרת בלי לשמור,
 // 'retake' חוזרים למצלמה לצילום חדש, false התמונה לא נשמרה, וכל דבר אחר: נשמרה והמצלמה ממשיכה (צילום ברצף).
 (function (root) {
   'use strict';
@@ -104,13 +104,18 @@
       const evLabel = ov.querySelector('.cam-ev');
       const showEv = () => { if (evLabel) evLabel.textContent = ev ? (ev > 0 ? '+' : '') + ev : '0'; };
       showEv();
-      let n = 0, busy = false;
+      let n = 0, busy = false, closed = false, release = null;
 
       function close() {
+        if (closed) return;
+        closed = true;
         stream.getTracks().forEach(t => t.stop());
         ov.remove();
+        if (release) release();
         resolve(n);
       }
+      // כפתור החזרה של הטאבלט סוגר את המצלמה וחוזר לאפליקציה
+      release = root.BackGuard ? root.BackGuard.push(() => { release = null; close(); }) : null;
 
       async function shot() {
         if (busy || !video.videoWidth) return;
@@ -121,10 +126,12 @@
         try {
           const blob = await grab(video, ic, torch);
           ov.classList.remove('busy');
+          if (closed) return;
           if (!blob) { opts.onError && opts.onError('התמונה יצאה שחורה, צלם שוב'); return; }
           ov.classList.add('hidden');
           const kept = await onShot(blob);
           if (kept === 'close') { n++; return close(); }
+          if (kept === 'cancel' || closed) return close();
           ov.classList.remove('hidden');
           if (video.paused) video.play().catch(() => {});
           ov.focus();
