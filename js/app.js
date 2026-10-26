@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.27.1';
+  const APP_VERSION = '1.28.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1669,7 +1669,8 @@
   // הצילום רק בלחיצה (ori: צילום אוטומטי לא יצא טוב), ואחריו מסך הסימון כמו במצלמה הרגילה.
   // זו תוספת בלבד: כל מה שנשמר כאן הוא אותו עץ רגיל, ואפשר לתקן אותו אחר כך במסך העץ
   async function voiceMode() {
-    if (!Voice.supported()) { toast('זיהוי דיבור לא נתמך בדפדפן הזה (צריך Chrome)', 3500); return; }
+    const geminiKey = (await DB.getKV('geminiKey', '')).trim();
+    if (!geminiKey && !Voice.supported()) { toast('זיהוי דיבור לא נתמך בדפדפן הזה (צריך Chrome, או מפתח Gemini בהגדרות)', 4000); return; }
     await saveNow();
     refreshSuggestions();
     const undo = []; // { t, created, before, photos }
@@ -1722,11 +1723,15 @@
         p.pines = +p.num; p.num = null;
       }
       let t = treeById(curTreeId), created = false;
+      // צילמו קודם ודיברו אחר כך: העץ הנוכחי נוצר מהצילום ועוד אין בו כלום, אז הדיבור ממלא אותו ולא פותח עץ נוסף
+      const photoOnly = t && !(t.species || '').trim() && !(t.notes || '').trim() && t.photos.length && t.byShot;
       if (p.num != null || p.newTree) {
         const num = p.num != null ? p.num : Core.nextNum(cur.trees);
         t = (p.num != null && findTree(num)) || null;
-        if (!t) { t = newTree(num); created = true; }
+        if (!t && photoOnly) { t = treeById(curTreeId); if (p.num != null) t.num = num; }
+        else if (!t) { t = newTree(num); created = true; }
       }
+      if (t) delete t.byShot;
       // בלי מספר עץ, מקבלים רק מה שזוהה (מין, טיפול מהרשימה, דחיפות, אורנים, "הערה ...").
       // כך דיבור של אנשים מסביב לא נכנס להערות
       const known = p.species || p.matched || p.urgency || p.pines != null || p.split || p.free;
@@ -1760,7 +1765,7 @@
       const blob = await shoot();
       if (!blob) return { card: ['התמונה יצאה שחורה, צלם שוב'], warn: true };
       let t = treeById(curTreeId), created = false;
-      if (!t) { t = newTree(Core.nextNum(cur.trees)); created = true; }
+      if (!t) { t = newTree(Core.nextNum(cur.trees)); created = true; t.byShot = true; }
       const annotate = await DB.getKV('annotateAfter', true);
       const r = await addPhoto(t, blob, annotate, annotate);
       if (r === 'retake' || r === 'cancel' || !r) {
@@ -1789,6 +1794,15 @@
       await Voice.open({
         context: () => ({ species: [...new Set([...sugCache.speciesAll, ...safetySpecies()])], phrases: sugCache.phrasesTop }),
         handle, manualShot, log, onRecording,
+        // עם מפתח Gemini: כל משפט מוקלט נשלח ל-Gemini, שמחזיר ישר את השדות
+        gemini: geminiKey ? async blob => {
+          const t = treeById(curTreeId);
+          const ctx = { current: t ? [label(t), t.species, t.notes].filter(Boolean).join(', ') : '', numbers: cur.trees.map(x => x.num).filter(Boolean),
+            species: [...new Set([...sugCache.speciesAll, ...safetySpecies()])], phrases: sugCache.phrasesTop };
+          const out = await Gemini.understand(geminiKey, blob, ctx);
+          log({ at: Date.now(), gemini: out });
+          return Gemini.toParsed(out);
+        } : null,
         title: () => { const t = treeById(curTreeId); return t ? `מצב דיבור · ${label(t)} ${t.species || ''}`.trim() : 'מצב דיבור'; },
       });
     } catch (e) {
@@ -2394,6 +2408,8 @@
     const orientSel = h('select', { class: 'in', onchange: async e => { await DB.setKV('orientLock', e.target.value); applyOrientation(); toast('נשמר'); } },
       [['start', 'נעול בכיוון שבו האפליקציה נפתחה'], ['portrait', 'תמיד לאורך'], ['landscape', 'תמיד לרוחב'], ['any', 'מסתובב עם הטאבלט']]
         .map(([v, l]) => h('option', { value: v, selected: v === curOrient ? '' : null }, l)));
+    const geminiIn = h('input', { class: 'in', value: await DB.getKV('geminiKey', ''), dir: 'ltr', placeholder: 'AIza…', autocomplete: 'off' });
+    const geminiStatus = h('div', { class: 'small', role: 'status' });
     const shareFiles = chk('shareFiles', false, 'במקום הורדה, לפתוח את תפריט השיתוף (לשליחה לדרייב, וואטסאפ וכו\')');
     shareFiles.firstChild.checked = await DB.getKV('shareFiles', false);
     const speciesTa = h('textarea', { class: 'in', style: 'min-height:140px' });
@@ -2493,6 +2509,21 @@
           h('div', { class: 'row' },
             h('button', { class: 'btn primary', onclick: () => { sigInput.value = ''; sigInput.click(); } }, hasSig ? 'החלף' : 'הוסף חתימה')),
           sigInput),
+        h('div', { class: 'card stack' },
+          h('h2', { style: 'margin:0;font-size:20px' }, 'מצב דיבור (Gemini)'),
+          h('div', { class: 'muted small' }, 'עם מפתח, מצב הדיבור מקליט כל משפט ושולח אותו ל-Gemini של גוגל, שמבין עברית מדוברת וממלא מספר עץ, מין, מיקום, ממצאים וטיפול. בלי מפתח: זיהוי הדיבור של הדפדפן. מפתח חינמי: ',
+            h('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener' }, 'aistudio.google.com/apikey')),
+          field('מפתח Gemini API', geminiIn),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary', onclick: async () => {
+              const k = geminiIn.value.trim();
+              await DB.setKV('geminiKey', k);
+              if (!k) { geminiStatus.textContent = 'נמחק. מצב הדיבור ישתמש בזיהוי של הדפדפן.'; return; }
+              geminiStatus.textContent = 'בודק…';
+              try { geminiStatus.textContent = (await Gemini.test(k)) ? '✓ המפתח עובד' : 'המפתח נשמר, אבל לא התקבלה תשובה'; }
+              catch (e) { geminiStatus.textContent = 'המפתח נשמר, אבל הבדיקה נכשלה: ' + e.message; }
+            } }, 'שמור ובדוק')),
+          geminiStatus),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'עבודה בשטח'),
           inAppCamera, annotateAfter, shareFiles, field('כיוון המסך באפליקציה', orientSel)),
