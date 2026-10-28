@@ -156,6 +156,7 @@
       } else if (URG1.has(t.n)) { r.urgency = '1'; use(t); }
       else if (t.n === 'חצי' && at(i + 1).n === 'שנה') { r.urgency = '2'; use(t, toks[i + 1]); }
       else if (t.n === norm('כריתה') && !r.urgency) r.urgency = 'כ';
+      else if (t.n === norm('תקין')) { r.urgency = 'תקין'; use(t); } // עץ תקין: בלי מספר עץ
       else if (SPLIT.has(t.n)) { r.split = true; use(t); }
     });
     // מין העץ: ההתאמה הטובה ביותר מהרשימה

@@ -271,8 +271,11 @@
         if (!num && (species.length > 40 || (!std && !at(cNotes) && !at(cUrg)))) continue;
         const jv = clean(at(cJ));
         const pm = /(\d+(?:\.\d+)?)/.exec(jv);
-        trees.push({ num, species, notes: clean(at(cNotes)), urgency: clean(at(cUrg)), pines: pm ? pm[1] : '', split: /פצל/.test(jv) });
-        if (!num) warnings.push(`עץ בלי מספר (${species})`);
+        const notes = clean(at(cNotes));
+        // עץ בלי מספר שההערה שלו "תקין" = דחיפות תקין, כמו באפליקציה
+        const urgency = clean(at(cUrg)) || (!num && /^תקין/.test(notes) ? Core.OK : '');
+        trees.push({ num, species, notes, urgency, pines: pm ? pm[1] : '', split: /פצל/.test(jv) });
+        if (!num && !urgency) warnings.push(`עץ בלי מספר (${species})`);
       }
     }
     // פרטי המוסד

@@ -68,14 +68,20 @@
     return !!(String(t.num || '').trim() || String(t.species || '').trim());
   }
 
-  // מיון לפי המספר הראשון, עצים בלי מספר בסוף
+  // מיון לפי המספר הראשון. עץ תקין (בלי מספר) נשאר במקום שלו: אחרי העץ הממוספר שנרשם לפניו.
+  // עצים אחרים בלי מספר בסוף
   function sortTrees(trees) {
+    const key = new Map();
+    let last = 0;
+    trees.forEach((t, i) => {
+      const f = firstNum(t.num);
+      if (f != null) { last = f; key.set(t, [f, 0, t.created || 0]); }
+      else if (isOk(t)) key.set(t, [last, 1, i]);
+      else key.set(t, [Infinity, 2, t.created || 0]);
+    });
     return trees.slice().sort((a, b) => {
-      const fa = firstNum(a.num), fb = firstNum(b.num);
-      if (fa == null && fb == null) return (a.created || 0) - (b.created || 0);
-      if (fa == null) return 1;
-      if (fb == null) return -1;
-      return fa - fb || (a.created || 0) - (b.created || 0);
+      const ka = key.get(a), kb = key.get(b);
+      return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
     });
   }
 
@@ -146,7 +152,7 @@
 
   // התווית של תמונה (מספר העץ, או תת-המספר בעץ מפוצל)
   function photoLabel(tree, p) {
-    return splitActive(tree) && p.sub != null ? String(p.sub) : String(tree.num || '');
+    return splitActive(tree) && p.sub != null ? String(p.sub) : String(tree.num || tree.species || '').trim();
   }
 
   // המספר הבא לעץ חדש
@@ -157,6 +163,58 @@
       for (const n of e) if (n > max) max = n;
     }
     return String(max + 1);
+  }
+
+  // דחיפות "תקין": העץ בלי מספר (בדוח, בתמונות ובנספח מופיע מין העץ), והספירה של העצים האחרים ממשיכה בלעדיו
+  const OK = 'תקין';
+  const DEFAULT_URGENCY = '2';
+  const isOk = t => (t.urgency || '').trim() === OK;
+  // דחיפות בעמודה I בדוח: עץ תקין נשאר ריק, כמו בדוחות במחשב (ההערה "תקין")
+  const urgencyCell = t => isOk(t) ? '' : (t.urgency || '').trim();
+  const notesCell = t => (t.notes || '').trim() || (isOk(t) ? OK : '');
+
+  // מספרים שמשתנים: כל מספר בשדה (גם בטווח "7-9") ובתמונות של עץ מפוצל
+  function renumber(trees, skip, fn) {
+    const changed = [];
+    for (const u of trees) {
+      if (u === skip || !String(u.num || '').trim() || !expandNum(u.num)) continue;
+      const num = String(u.num).replace(/\d+/g, d => String(fn(+d)));
+      if (num === u.num) continue;
+      u.num = num;
+      for (const p of u.photos || []) if (p.sub != null) p.sub = fn(+p.sub);
+      changed.push(u);
+    }
+    return changed;
+  }
+  const otherNums = (trees, t) => new Set(trees.filter(u => u !== t).flatMap(u => expandNum(u.num) || []));
+
+  // משנה דחיפות. מעבר ל"תקין" מוריד את מספר העץ ומקדם את העצים שאחריו, ויציאה מ"תקין" מחזירה את המספר למקומו.
+  // מחזיר את העצים האחרים שהמספר שלהם השתנה
+  function setUrgency(trees, t, v) {
+    const was = isOk(t);
+    t.urgency = v;
+    delete t.urgencyAuto;
+    if (isOk(t) && !was) {
+      const num = String(t.num || '').trim();
+      if (!num) return [];
+      t.okNum = num; t.num = '';
+      if (t.split) t.split = false;
+      for (const p of t.photos || []) p.sub = null;
+      const used = otherNums(trees, t);
+      const drop = (expandNum(num) || []).filter(n => !used.has(n));
+      return drop.length ? renumber(trees, t, n => n - drop.filter(r => r < n).length) : [];
+    }
+    if (!isOk(t) && was && !String(t.num || '').trim()) {
+      const ins = expandNum(t.okNum || '');
+      delete t.okNum;
+      if (!ins || !ins.length) { t.num = nextNum(trees); return []; }
+      const used = otherNums(trees, t);
+      const num = ins.length === 1 ? String(ins[0]) : ins[0] + '-' + ins[ins.length - 1];
+      const changed = ins.some(n => used.has(n)) ? renumber(trees, t, n => n >= ins[0] ? n + ins.length : n) : [];
+      t.num = num;
+      return changed;
+    }
+    return [];
   }
 
   function warnings(survey) {
@@ -188,6 +246,6 @@
 
   const api = { placeOf, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, normNum, expandNum, firstNum, isPine, jValue, hasContent,
     sortTrees, splitActive, slotsOf, photoForSlot, groupKey, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
-    nextNum, warnings };
+    nextNum, warnings, OK, DEFAULT_URGENCY, isOk, urgencyCell, notesCell, setUrgency };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
 })(typeof self !== 'undefined' ? self : this);

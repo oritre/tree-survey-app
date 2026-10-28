@@ -321,8 +321,8 @@
       const r = Core.TREE_ROWS[i];
       sheet.setCell('A' + r, valueCell(strings, String(t.num || '').trim()));
       sheet.setCell('B' + r, valueCell(strings, (t.species || '').trim()));
-      sheet.setCell('D' + r, valueCell(strings, (t.notes || '').trim()));
-      sheet.setCell('I' + r, valueCell(strings, (t.urgency || '').trim()));
+      sheet.setCell('D' + r, valueCell(strings, Core.notesCell(t)));
+      sheet.setCell('I' + r, valueCell(strings, Core.urgencyCell(t)));
       sheet.setCell('J' + r, valueCell(strings, Core.jValue(t)));
     });
 

@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.30.3';
+  const APP_VERSION = '1.31.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -327,7 +327,7 @@
 
   // סקר חדש להיום על בסיס סקר קיים. withPhotos: התמונות מועתקות (בטאבלט, או קישור לקובץ שכבר בגוגל דרייב)
   async function copySurvey(old, withPhotos) {
-    const keep = ['num', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS];
+    const keep = ['num', 'okNum', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS];
     const s = { id: uid(), type: Construction.typeOf(old), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
       code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', cset: old.cset ? Object.assign({}, old.cset) : undefined, warnGps: !!old.warnGps, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
     for (const t of old.trees || []) {
@@ -1255,7 +1255,8 @@
 
   function treeRow(t) {
     const pineMissing = !Construction.isConstruction(cur) && Core.isPine(t.species) && (t.pines == null || t.pines === '');
-    const urg = !Construction.isConstruction(cur) && t.urgency ? ' u-' + t.urgency : '';
+    const urgCls = v => v === Core.OK ? 'ok' : v;
+    const urg = !Construction.isConstruction(cur) && t.urgency ? ' u-' + urgCls(t.urgency) : '';
     return h('button', { class: 'tree-row' + (t.id === curTreeId ? ' on' : '') + urg, 'data-id': t.id, 'data-search': `${t.num || ''} ${t.species || ''} ${t.notes || ''}`.toLowerCase(), onclick: () => selectTree(t.id) },
       h('span', { class: 'n' }, t.num || '—'),
       h('span', { style: 'min-width:0' },
@@ -1263,7 +1264,7 @@
         h('div', { class: 'meta' }, t.notes || '')),
       h('span', { class: 'badges' },
         Construction.isConstruction(cur) ? constructionBadge(t)
-          : t.urgency ? h('span', { class: 'badge u-' + t.urgency }, t.urgency) : null,
+          : t.urgency ? h('span', { class: 'badge u-' + urgCls(t.urgency) }, t.urgency) : null,
         pineMissing ? h('span', { class: 'badge alert', title: 'חסרה כמות אורנים' }, 'אורנים?') : null,
         (t.photos || []).length ? h('span', { class: 'badge soft', title: 'תמונות' }, icon('camera'), (t.photos || []).length) : null,
         t.lat != null ? h('span', { class: 'badge soft', title: 'יש נ"צ' }, icon('pin')) : null));
@@ -1313,9 +1314,23 @@
     if (window.innerWidth < 900) $('.editor').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  // סקר בטיחות: עץ חדש מתחיל בדחיפות 2 (ori). urgencyAuto = עוד לא נבחרה דחיפות בפועל
+  function defaultUrgency(t) {
+    if (Construction.isConstruction(cur)) return;
+    t.urgency = Core.DEFAULT_URGENCY; t.urgencyAuto = true;
+  }
+
+  // שינוי דחיפות. "תקין" מוריד את מספר העץ, ומספרי העצים שאחריו מתעדכנים
+  function applyUrgency(t, v) {
+    const others = Core.setUrgency(cur.trees, t, v);
+    for (const u of others) refreshRow(u);
+    return others;
+  }
+
   async function addTree() {
     refreshSuggestions();
     const t = { id: uid(), num: Core.nextNum(cur.trees), species: '', notes: '', urgency: '', pines: null, split: false, photos: [], created: Date.now() };
+    defaultUrgency(t);
     // סקר לבנייה: מין העץ של העץ הקודם עובר לעץ החדש (מוצג באפור). בלי לגעת הוא נשאר; בלחיצה בוחרים מין אחר בלי למחוק
     const prev = cur.trees[cur.trees.length - 1];
     if (Construction.isConstruction(cur) && prev && (prev.species || '').trim()) { t.species = prev.species; t.speciesAuto = true; }
@@ -1378,7 +1393,7 @@
       splitWrap.classList.toggle('dim', !multi && !t.split);
       splitWrap.title = multi ? '' : 'פעיל כשמספר העץ הוא טווח, למשל 2-5';
     };
-    const numIn = h('input', { class: 'in', value: t.num || '', inputmode: 'text', 'aria-label': 'מספר העץ',
+    const numIn = h('input', { class: 'in', value: t.num || '', inputmode: 'text', 'aria-label': 'מספר העץ', placeholder: Core.isOk(t) ? 'תקין, בלי מספר' : '',
       oninput: e => { t.num = e.target.value; showSplit(); changed(); }, onchange: () => { renderTreeList(); renderPhotos(); } });
     showSplit();
 
@@ -1429,10 +1444,14 @@
     markNoteChips();
 
     // דחיפות
-    const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'דחיפות' }, [['', 'ללא'], ['כ', 'כ - כריתה'], ['1', '1 - מיידי'], ['2', '2 - חצי שנה']].map(([v, label]) =>
-      h('button', { type: 'button', class: (v ? 'v-' + v : '') + ((t.urgency || '') === v ? ' on' : ''), onclick: e => {
-        t.urgency = v; changed();
+    // תקין = בלי מספר עץ, והספירה של העצים הבאים ממשיכה בלעדיו
+    const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'דחיפות' }, [[Core.OK, 'תקין'], ['כ', 'כ - כריתה'], ['1', '1 - מיידי'], ['2', '2 - חצי שנה'], ['', 'ללא']].map(([v, label]) =>
+      h('button', { type: 'button', class: (v ? 'v-' + (v === Core.OK ? 'ok' : v) : '') + ((t.urgency || '') === v ? ' on' : ''), onclick: e => {
+        const num0 = t.num;
+        const others = applyUrgency(t, v); changed();
         [...seg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget));
+        if (t.num !== num0) { renderTreeList(); renderEditor(); }
+        if (others.length) toast(`מספרי העצים עודכנו (${others.length} עצים)`);
       } }, label)));
 
     // נ"צ
@@ -1706,19 +1725,21 @@
     refreshSuggestions();
     const undo = []; // { t, created, before, photos }
     let askPinesFor = null;
-    const label = t => ('עץ ' + (t.num || '')).trim();
+    const label = t => t.num ? 'עץ ' + t.num : Core.isOk(t) ? 'עץ תקין' : 'עץ';
     const pinesOf = t => t.pines == null || t.pines === '' ? null : t.pines;
     const card = t => [label(t) + (t.species ? ' · ' + t.species : ''), t.notes || '',
       [t.urgency ? 'דחיפות ' + t.urgency : '', pinesOf(t) != null ? t.pines + ' אורנים' : '', t.lat != null ? 'נ"צ ✓' : '', t.photos.length ? '📷 ' + t.photos.length : ''].filter(Boolean).join(' · ')].filter(Boolean);
     const newTree = num => {
       const t = { id: uid(), num, species: '', notes: '', urgency: '', pines: null, split: false, photos: [], created: Date.now() };
+      defaultUrgency(t);
       cur.trees.push(t);
       return t;
     };
     const findTree = num => cur.trees.find(x => String(x.num || '').replace(/\s/g, '') === num);
     const refresh = () => { renderTreeList(); renderEditor(); };
+    const before = t => ({ species: t.species, notes: t.notes, urgency: t.urgency, urgencyAuto: t.urgencyAuto, pines: t.pines, split: t.split });
     const start = (t, created) => {
-      const u = { t, created, before: { species: t.species, notes: t.notes, urgency: t.urgency, pines: t.pines, split: t.split }, photos: [] };
+      const u = { t, created, before: before(t), photos: [] };
       undo.push(u);
       curTreeId = t.id;
       return u;
@@ -1744,7 +1765,11 @@
         if (u.created) {
           cur.trees = cur.trees.filter(x => x !== u.t);
           curTreeId = (undo[undo.length - 1] || {}).t ? undo[undo.length - 1].t.id : null;
-        } else Object.assign(u.t, u.before);
+        } else {
+          // ביטול של "תקין" מחזיר גם את מספר העץ ואת המספרים של העצים שאחריו
+          if (Core.isOk(u.t) !== Core.isOk(u.before)) applyUrgency(u.t, u.before.urgency);
+          Object.assign(u.t, u.before);
+        }
         askPinesFor = null;
         await saveNow(); refresh();
         return { say: 'בוטל', card: ['בוטל: ' + label(u.t) + (u.photos.length ? ` (${u.photos.length} תמונות)` : '')] };
@@ -1777,8 +1802,8 @@
       const u = start(t, created);
       if (p.species) { t.species = p.species; delete t.speciesAuto; }
       if (p.pines != null) t.pines = p.pines;
-      if (p.urgency) t.urgency = p.urgency;
-      if (p.split) t.split = true;
+      if (p.urgency) applyUrgency(t, p.urgency);
+      if (p.split && !Core.isOk(t)) t.split = true;
       if (p.notes.length) {
         const parts = (t.notes || '').split(/\s*[,.]\s*/).map(x => x.trim()).filter(Boolean);
         for (const n of p.notes) if (!parts.includes(n)) parts.push(n);
@@ -1798,12 +1823,12 @@
       for (const ph of from.photos) { ph.sub = null; ph.inReport = false; to.photos.push(ph); }
       Core.ensureReportPhoto(to, Core.groupKey(to, to.photos[to.photos.length - 1]));
       cur.trees = cur.trees.filter(x => x !== from);
-      for (const u of undo) if (u.t === from) { u.t = to; u.created = false; u.before = { species: to.species, notes: to.notes, urgency: to.urgency, pines: to.pines, split: to.split }; }
+      for (const u of undo) if (u.t === from) { u.t = to; u.created = false; u.before = before(to); }
     }
 
     // הכפתור במסך: קודם מצלמים ואז מתארים (ori). צילום אחרי שהעץ הנוכחי כבר תואר פותח עץ חדש,
     // וכמה צילומים לפני הדיבור נכנסים לאותו עץ. אחרי הצילום מסך הסימון
-    const described = t => !!((t.species || '').trim() || (t.notes || '').trim() || t.urgency);
+    const described = t => !!((t.species || '').trim() || (t.notes || '').trim() || (t.urgency && !t.urgencyAuto));
     async function manualShot(shoot) {
       const blob = await shoot();
       if (!blob) return { card: ['התמונה יצאה שחורה, צלם שוב'], warn: true };
