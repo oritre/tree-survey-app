@@ -1,7 +1,8 @@
 // מצלמה בתוך האפליקציה: נפתחת מיד, צילום בלחיצה אחת.
 // onShot(blob) נקרא לכל תמונה. אם הוא מחזיר 'close' המצלמה נסגרת (עברנו לסימון ושמרנו), 'cancel' נסגרת בלי לשמור,
 // 'retake' חוזרים למצלמה לצילום חדש, false התמונה לא נשמרה, וכל דבר אחר: נשמרה והמצלמה ממשיכה (צילום ברצף).
-// opts.review: אחרי כל צילום התמונה מוצגת במסך מלא עם "החלף תמונה" / "סיום", ו-onShot נקרא רק אחרי "סיום".
+// opts.review: אחרי כל צילום התמונה מוצגת במסך מלא עם "החלף תמונה" / "צלם עוד" / "סיום", ו-onShot נקרא רק אחרי
+// "סיום" (נשמרת והמצלמה נסגרת) או "צלם עוד" (נשמרת והמצלמה נשארת פתוחה לתמונה הבאה).
 (function (root) {
   'use strict';
 
@@ -116,6 +117,7 @@
           <img alt="">
           <div class="cam-review-bar">
             <button class="cam-btn txt" data-act="replace">החלף תמונה</button>
+            <button class="cam-btn txt" data-act="more">צלם עוד</button>
             <button class="cam-btn txt ok" data-act="accept">סיום</button>
           </div>
         </div>
@@ -174,14 +176,17 @@
           ov.classList.remove('busy');
           if (closed) return;
           if (!blob) { opts.onError && opts.onError('התמונה יצאה שחורה, צלם שוב'); return; }
+          let more = false;
           if (opts.review) {
             const ok = await askReview(blob);
             endReview();
             if (closed) return;
             if (!ok) return; // החלף תמונה: חוזרים למצלמה
+            more = ok === 'more';
           }
           ov.classList.add('hidden');
-          const kept = await onShot(blob);
+          let kept = await onShot(blob);
+          if (more && kept === 'close') kept = true; // צלם עוד: נשמרה, והמצלמה נשארת פתוחה
           if (kept === 'close') { n++; return close(); }
           if (kept === 'cancel' || closed) return close();
           ov.classList.remove('hidden');
@@ -201,7 +206,9 @@
         const b = e.target.closest('[data-act]');
         if (!b) return;
         if (b.dataset.act === 'shot') shot();
-        else if (b.dataset.act === 'accept' || b.dataset.act === 'replace') { if (decide) { const d = decide; decide = null; d(b.dataset.act === 'accept'); } }
+        else if (['accept', 'more', 'replace'].includes(b.dataset.act)) {
+          if (decide) { const d = decide; decide = null; d(b.dataset.act === 'accept' ? true : b.dataset.act === 'more' ? 'more' : false); }
+        }
         else if (b.dataset.act === 'done') close();
         else if (b.dataset.act === 'ev+' || b.dataset.act === 'ev-') { setEv(ev + (b.dataset.act === 'ev+' ? 1 : -1) * Math.max(ec.step || 0.5, 0.5)); showEv(); }
         else if (b.dataset.act === 'torch') {
