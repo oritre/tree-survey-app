@@ -1626,17 +1626,27 @@
   }
   // שומרת תמונה אחת לעץ: (סימון אם ביקשו) -> טאבלט -> רישום בסקר. מחזירה false אם לא נשמרה,
   // 'cancel' אם במסך הסימון לחצו ביטול, ו-'retake' אם בחרו לצלם שוב (רק כשמגיעים מהמצלמה של האפליקציה)
-  async function addPhoto(t, file, annotate, canRetake) {
+  // background: מחזירה מיד אחרי ההחלטה במסך הסימון, והשמירה ממשיכה ברקע (המצלמה נסגרת בלי לחכות)
+  async function addPhoto(t, file, annotate, canRetake, background) {
+    // ההקטנה רצה במקביל למסך הסימון, שנפתח מיד על התמונה המקורית
+    const processing = processImage(file);
+    processing.catch(() => {});
+    let strokes = [];
+    if (annotate) {
+      // שמור: עם הסימונים אם ציירו, בלי אם לא. ביטול: התמונה לא נשמרת
+      try { strokes = await Annotate.open(file, [], { saveLabel: 'שמור', cancelLabel: 'ביטול', retakeLabel: canRetake ? 'צלם שוב' : '' }); }
+      catch (err) { console.error(err); strokes = []; }
+      if (strokes === 'retake') return 'retake';
+      if (!strokes) return 'cancel';
+    }
+    const saving = savePhoto(t, processing, strokes);
+    return background ? true : saving;
+  }
+  async function savePhoto(t, processing, strokes) {
     try {
-      const p = await processImage(file);
+      const p = await processing;
       let rec = { id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h };
-      if (annotate) {
-        // שמור: עם הסימונים אם ציירו, בלי אם לא. ביטול: התמונה לא נשמרת
-        const strokes = await Annotate.open(p.blob, [], { saveLabel: 'שמור', cancelLabel: 'ביטול', retakeLabel: canRetake ? 'צלם שוב' : '' });
-        if (strokes === 'retake') return 'retake';
-        if (!strokes) return 'cancel';
-        if (strokes.length) rec = await applyStrokes(rec, p.blob, strokes);
-      }
+      if (strokes.length) rec = await applyStrokes(rec, p.blob, strokes);
       await DB.putPhoto(rec);
       // בעץ מפוצל: התמונה עוברת למספר הראשון שעוד אין לו תמונה
       let sub = null;
@@ -1664,7 +1674,8 @@
   }
 
   // "צלם": המצלמה של האפליקציה (מהירה). עם סימון: לחיצה מצלמת ועוברת ישר לסימון, ומשם שומרים או מצלמים שוב.
-  // בלי סימון (סקר לבנייה) המצלמה נשארת פתוחה לצילום ברצף. אם אין גישה — אפליקציית המצלמה של המכשיר
+  // בלי סימון (סקר לבנייה): התמונה במסך מלא עם "החלף תמונה" / "סיום". בשני המקרים השמירה ממשיכה ברקע אחרי שהמצלמה נסגרת.
+  // אם אין גישה — אפליקציית המצלמה של המכשיר
   async function takePhotos() {
     const t = treeById(curTreeId);
     if (!t) return;
@@ -1673,9 +1684,9 @@
       const annotate = !Construction.isConstruction(cur) && await DB.getKV('annotateAfter', true);
       try {
         await Camera.open(async blob => {
-          const r = await addPhoto(t, blob, annotate, annotate);
-          return annotate && r === true ? 'close' : r;
-        }, { title: `עץ ${t.num || ''} ${t.species || ''}`.trim(), doneLabel: annotate ? 'סגור' : 'סיום', onError: m => toast(m, 2500) });
+          const r = await addPhoto(t, blob, annotate, annotate, true);
+          return r === true ? 'close' : r;
+        }, { title: `עץ ${t.num || ''} ${t.species || ''}`.trim(), doneLabel: 'סגור', review: !annotate, maxSide: await DB.getKV('photoMax', 2000), onError: m => toast(m, 2500) });
         return;
       } catch (e) {
         toast('המצלמה של האפליקציה לא זמינה (' + e.message + '), פותח את מצלמת המכשיר', 3000);
