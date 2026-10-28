@@ -11,6 +11,18 @@
   const FOLDER = 'application/vnd.google-apps.folder';
   const FIELDS = 'id,name,mimeType,size,modifiedTime,parents';
 
+  // בקשה עם הגבלת זמן: בקליטה חלשה בקשה יכולה להיתקע דקות, והגיבוי כולו מחכה לה.
+  // 30 שניות, ועוד שנייה לכל 25KB שעולים (כך שגם קובץ גדול בקליטה איטית מספיק לעלות)
+  function timedFetch(url, opts) {
+    const b = opts && opts.body, size = b && b.size || 0;
+    const ms = 30000 + size / 25;
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), ms);
+    return fetch(url, Object.assign({}, opts, { signal: ac.signal }))
+      .catch(e => { throw ac.signal.aborted ? new Error('אין תשובה מהשרת (קליטה חלשה), ננסה שוב') : e; })
+      .finally(() => clearTimeout(t));
+  }
+
   const redirectUri = () => location.origin + location.pathname;
   const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const rand = n => b64url(crypto.getRandomValues(new Uint8Array(n)));
@@ -104,7 +116,7 @@
         const h = Object.assign({ Authorization: 'Bearer ' + tok }, headers || {});
         let payload = body;
         if (body && !(body instanceof Blob) && typeof body === 'object') { payload = JSON.stringify(body); h['Content-Type'] = 'application/json'; }
-        const res = await fetch(path.startsWith('http') ? path : API + path, { method, headers: h, body: payload });
+        const res = await timedFetch(path.startsWith('http') ? path : API + path, { method, headers: h, body: payload });
         if (res.status === 401 && attempt === 0) { const a = await DB.getKV('odAuth', {}); await DB.setKV('odAuth', Object.assign(a, { exp: 0 })); continue; }
         if (res.status === 401) throw new AuthError('צריך להתחבר מחדש לגוגל דרייב');
         if (res.status === 404) return null;
@@ -225,12 +237,12 @@
       } else {
         // קובץ גדול: העלאה בהמשכים
         const tok = await OD.accessToken();
-        const init = await fetch(`${UPLOAD}/files?uploadType=resumable&fields=id,name,version&supportsAllDrives=true`, {
+        const init = await timedFetch(`${UPLOAD}/files?uploadType=resumable&fields=id,name,version&supportsAllDrives=true`, {
           method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': type },
           body: JSON.stringify({ name, parents: [parentId || 'root'] }) });
         if (init.status === 404) { await OD._forgetParent(parentId); return null; }
         if (!init.ok) throw new Error('העלאה לגוגל דרייב נכשלה (' + init.status + ')');
-        const res = await fetch(init.headers.get('Location'), { method: 'PUT', headers: { 'Content-Type': type }, body: blob });
+        const res = await timedFetch(init.headers.get('Location'), { method: 'PUT', headers: { 'Content-Type': type }, body: blob });
         if (!res.ok) throw new Error('העלאה לגוגל דרייב נכשלה (' + res.status + ')');
         out = await res.json();
       }

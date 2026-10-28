@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.30.2';
+  const APP_VERSION = '1.30.3';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -2061,7 +2061,7 @@
               status.textContent = Sync.state.offline ? '✓ האקסל וה-PDF מוכנים. יעלו לגוגל דרייב כשהקליטה תחזור.' : '✓ האקסל וה-PDF מוכנים, ועולים עכשיו לגוגל דרייב יחד עם התמונות.';
               if (pdf) viewPdf(s, pdf);
             } catch (err) { console.error(err); status.textContent = 'הכנת הקבצים נכשלה, הם יוכנו בזמן ההעלאה: ' + err.message; }
-            finally { Sync.preparing.delete(sid); Sync.now(); btn.disabled = false; drawSync(); }
+            finally { Sync.preparing.delete(sid); Sync.finishNow(sid); btn.disabled = false; drawSync(); }
           } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'),
           h('button', { class: 'btn big', onclick: e => busy(e.currentTarget, async () => {
             if (!odOn) throw new Error('גוגל דרייב לא מחובר');
@@ -2161,7 +2161,7 @@
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
             if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
             cur.finishPending = true; cur.finished = false;
-            await saveNow(); Sync.now(); go(`#/s/${cur.id}/export`);
+            await saveNow(); Sync.finishNow(cur.id); go(`#/s/${cur.id}/export`);
             toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה לגוגל דרייב…', 3000);
           } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'))),
       h('div', { class: 'card stack' },
