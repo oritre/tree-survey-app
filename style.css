@@ -156,6 +156,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .seg button.on { background: var(--accent); color: var(--accent-ink); }
 .seg button.on.v-כ, .seg button.on.v-1 { background: var(--danger); color: #fff; }
 .seg button.on.v-2 { background: #c98a00; color: #fff; }
+.seg button.on.v-ok { background: var(--accent); color: var(--accent-ink); }
 
 /* מסך הבית: פעולות ראשיות כאריחים עם אייקון, וכרטיס לכל סקר */
 .home-actions { display: grid; gap: 10px; grid-template-columns: repeat(4, 1fr); }
@@ -200,6 +201,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tree-row::before { content: ''; position: absolute; inset-block: 8px; inset-inline-start: 0; width: 4px; border-radius: 0 4px 4px 0; background: transparent; }
 .tree-row.u-כ::before, .tree-row.u-1::before { background: var(--danger); }
 .tree-row.u-2::before { background: #e0a100; }
+.tree-row.u-ok::before { background: var(--ok); }
 @media (hover: hover) { .tree-row:hover { background: var(--surface-2); border-color: var(--border-strong); } }
 .tree-row.on { border-color: var(--accent); background: var(--accent-soft-2); box-shadow: 0 0 0 1px var(--accent) inset; }
 .tree-row .n { font-weight: 800; font-size: 17px; text-align: center; min-height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--surface-2); color: var(--text); padding: 0 4px; font-variant-numeric: tabular-nums; }
@@ -210,6 +212,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .badge { font-size: 13px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap; line-height: 1.5; }
 .badge.u-כ, .badge.u-1 { background: var(--danger-soft); color: var(--danger); border-color: transparent; font-weight: 700; }
 .badge.u-2 { background: var(--warn-soft); color: var(--warn); border-color: transparent; font-weight: 700; }
+.badge.u-ok { background: var(--accent-soft); color: var(--ok); border-color: transparent; font-weight: 700; }
 .badge.alert { background: var(--danger); color: #fff; border-color: transparent; font-weight: 700; }
 .badge.soft { background: transparent; border-color: transparent; color: var(--muted); padding-inline: 4px; }
 

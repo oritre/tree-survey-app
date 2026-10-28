@@ -69,6 +69,7 @@
   // ---------- מפה לשיתוף ----------
   // עץ "דורש טיפול" (אדום): יש דחיפות, או הערה שאינה "תקין"
   function needsCare(t) {
+    if (Core.isOk(t)) return false;
     if ((t.urgency || '').trim()) return true;
     const n = (t.notes || '').trim();
     return !!n && !/^תקין/.test(n);
@@ -138,7 +139,7 @@ const gG=L.layerGroup().addTo(map),gR=L.layerGroup().addTo(map);let ng=0,nr=0;
 for(const p of D.points){
  const m=L.circleMarker([p.la,p.lo],{radius:8,color:'#fff',weight:2,fillColor:p.bad?'#d32f2f':'#2e7d32',fillOpacity:1});
  m.bindTooltip(esc(p.n),{direction:'top',offset:[0,-6]});
- m.bindPopup('<div class="pp"><b>עץ '+esc(p.n)+'</b> · '+esc(p.sp)+'<br>'+(p.bad?'<span class="r">דורש טיפול</span>':'<span class="g">תקין</span>')+
+ m.bindPopup('<div class="pp"><b>'+(p.n?'עץ '+esc(p.n):'עץ ללא מספר')+'</b> · '+esc(p.sp)+'<br>'+(p.bad?'<span class="r">דורש טיפול</span>':'<span class="g">תקין</span>')+
   (p.no&&!/^תקין\.?$/.test(p.no.trim())?'<br>'+esc(p.no):'')+(p.u?'<br>דחיפות: '+esc(p.u):'')+(p.pi?'<br>אורנים: '+esc(p.pi):'')+
   (p.img?'<img src="'+p.img+'" alt="">':'')+'<div class="m">'+esc(p.si)+(p.ad?', '+esc(p.ad):'')+(p.co?' · סמל '+esc(p.co):'')+' · '+esc(p.d)+'</div></div>',{maxWidth:280});
  (p.bad?gR:gG).addLayer(m);p.bad?nr++:ng++;

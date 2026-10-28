@@ -36,8 +36,8 @@
       const r = Core.TREE_ROWS[i];
       v['A' + r] = String(t.num || '').trim();
       v['B' + r] = (t.species || '').trim();
-      v['D' + r] = (t.notes || '').trim();
-      v['I' + r] = (t.urgency || '').trim();
+      v['D' + r] = Core.notesCell(t);
+      v['I' + r] = Core.urgencyCell(t);
     });
     const SR = SurveyExcel.SLOT_ROWS;
     slots.forEach((slot, i) => {
