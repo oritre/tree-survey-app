@@ -285,14 +285,37 @@
       const i = this.idx.get(r);
       if (i != null && !/^<row [^>]*? hidden="1"/.test(this.rows[i])) this.rows[i] = this.rows[i].replace(/^<row r="\d+"/, '$& hidden="1"');
     }
-    // מרוקנת את התאים בעמודות c1..c2 בשורה r (העיצוב נשאר)
-    clear(r, c1, c2) {
-      const i = this.idx.get(r);
-      if (i == null) return;
-      this.rows[i] = this.rows[i].replace(/<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g, (m, c, a) => {
-        const n = colNum(c), st = /\ss="\d+"/.exec(a);
-        return n < c1 || n > c2 ? m : `<c r="${c}${r}"${st ? st[0] : ''}/>`;
-      });
+    // "נקה הכל" על העמודות c1..c2 בשורות rows: בלי ערכים, בלי נוסחאות ובלי עיצוב (גם העיצוב המותנה יוצא משם)
+    clearAll(rows, c1, c2) {
+      for (const r of rows) {
+        const i = this.idx.get(r);
+        if (i == null) continue;
+        this.rows[i] = this.rows[i].replace(/<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g, (m, c) => {
+          const n = colNum(c);
+          return n < c1 || n > c2 ? m : `<c r="${c}${r}"/>`;
+        });
+      }
+      // טווח עיצוב מותנה שכולו בתוך c1..c2 מתפצל סביב השורות שנוקו; טווח שנשאר ריק נמחק
+      const cut = ref => ref.split(/\s+/).flatMap(p => {
+        const { c1: a, r1, c2: b, r2 } = rangeRows(p);
+        if (colNum(a) < c1 || colNum(b) > c2) return [p];
+        const out = [];
+        for (let r = r1, s = null; r <= r2 + 1; r++) {
+          const keep = r <= r2 && !rows.has(r);
+          if (keep && s == null) s = r;
+          if (!keep && s != null) { out.push(a === b && s === r - 1 ? a + s : `${a}${s}:${b}${r - 1}`); s = null; }
+        }
+        return out;
+      }).join(' ');
+      this.tail = this.tail
+        .replace(/<conditionalFormatting sqref="([^"]+)"[\s\S]*?<\/conditionalFormatting>/g, (m, v) => {
+          const n = cut(v);
+          return n ? m.replace(v, n) : '';
+        })
+        .replace(/<x14:conditionalFormatting\b[\s\S]*?<xm:sqref>([^<]+)<\/xm:sqref><\/x14:conditionalFormatting>/g, (m, v) => {
+          const n = cut(v);
+          return n ? m.replace('<xm:sqref>' + v, '<xm:sqref>' + n) : '';
+        });
     }
     // נוסחאות משותפות שמגיעות לשורה from ומטה הופכות לנוסחאות רגילות, כדי שאפשר להזיז ולהעתיק את השורות
     unshare(from) {
@@ -441,11 +464,11 @@
     // מה מוצג: העמודים שצריך, בלי השורות הצהובות ובלי שורות מינים ריקות
     for (let k = 0; k < pages; k++) for (let r = 45 + 46 * k; r <= 90 + 46 * k; r++) sheet.unhide(r);
     for (const r of yellowRows(avail)) sheet.hide(r);
-    // שורות עצים ריקות בעמודים המוצגים לא מוסתרות (הסתרה מקטינה את התמונות שלידן), אלא מתרוקנות: B:BC בלי נוסחאות.
+    // שורות עצים ריקות בעמודים המוצגים לא מוסתרות (הסתרה מקטינה את התמונות שלידן), אלא עוברות "נקה הכל" ב-B:BC.
     // קודם מפרקים נוסחאות משותפות שמגיעות לשורות האלה, כדי שלא יימחק תא אב של קבוצה
     if (trees.length < PAGE1 + 32 * pages) {
       sheet.unshare(TREE_ROWS[trees.length]);
-      for (let i = trees.length; i < PAGE1 + 32 * pages; i++) sheet.clear(TREE_ROWS[i], 2, 55);
+      sheet.clearAll(new Set(TREE_ROWS.slice(trees.length, PAGE1 + 32 * pages)), 2, 55);
     }
     if (!embed) sheet.hide(4);   // שורת התוויות של התמונות, ריקה באקסל בלי תמונות: עוד מקום בעמוד 1
     // בעמודים הנוספים: שורות ריקות בראש העמוד ובסופו (45, 89, 90) מוסתרות, כדי שהעמוד ייכנס לדף אחד
