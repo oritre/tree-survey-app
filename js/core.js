@@ -68,14 +68,20 @@
     return !!(String(t.num || '').trim() || String(t.species || '').trim());
   }
 
-  // מיון לפי המספר הראשון, עצים בלי מספר בסוף
+  // מיון לפי המספר הראשון. עץ תקין (בלי מספר) נשאר במקום שלו: אחרי העץ הממוספר שנרשם לפניו.
+  // עצים אחרים בלי מספר בסוף
   function sortTrees(trees) {
+    const key = new Map();
+    let last = 0;
+    trees.forEach((t, i) => {
+      const f = firstNum(t.num);
+      if (f != null) { last = f; key.set(t, [f, 0, t.created || 0]); }
+      else if (isOk(t)) key.set(t, [last, 1, i]);
+      else key.set(t, [Infinity, 2, t.created || 0]);
+    });
     return trees.slice().sort((a, b) => {
-      const fa = firstNum(a.num), fb = firstNum(b.num);
-      if (fa == null && fb == null) return (a.created || 0) - (b.created || 0);
-      if (fa == null) return 1;
-      if (fb == null) return -1;
-      return fa - fb || (a.created || 0) - (b.created || 0);
+      const ka = key.get(a), kb = key.get(b);
+      return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
     });
   }
 
