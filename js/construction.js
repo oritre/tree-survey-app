@@ -129,13 +129,12 @@
   // ---------- נספח תמונות (עמודות BF:BK) ----------
   // בכל עמוד 2 שורות של 6 משבצות. לכל משבצת: תווית (מספר העץ), תא תמונה ממוזג (img עד end), ושרשרת נוסחאות
   // (מספר -> נתיב Pictures -> העתק) שהמאקרו ReplacePathWithImage הופך לתמונה במחשב.
-  // comp: שורה ריקה בתוך התא הממוזג התחתון, שמקבלת את הגובה של שורות עצים ריקות שהוסתרו, כדי שהתמונה לא תקטן
   const PHOTO_COLS = ['BF', 'BG', 'BH', 'BI', 'BJ', 'BK'];
-  const PHOTO_ROWS = [{ page: 0, label: 4, img: 8, end: 22, chain: [5, 6, 7] }, { page: 0, label: 23, img: 24, end: 40, comp: 36, chain: [41, 42, 43] }];
+  const PHOTO_ROWS = [{ page: 0, label: 4, img: 8, end: 22, chain: [5, 6, 7] }, { page: 0, label: 23, img: 24, end: 40, chain: [41, 42, 43] }];
   for (let k = 0; k < MAX_PAGES; k++) {
     const b = 46 * k;
     PHOTO_ROWS.push({ page: k + 1, label: 50 + b, img: 51 + b, end: 67 + b, chain: [46 + b, 47 + b, 48 + b] },
-      { page: k + 1, label: 68 + b, img: 69 + b, end: 85 + b, comp: 85 + b, chain: [86 + b, 87 + b, 88 + b] });
+      { page: k + 1, label: 68 + b, img: 69 + b, end: 85 + b, chain: [86 + b, 87 + b, 88 + b] });
   }
   const SLOT_CELLS = PHOTO_ROWS.flatMap((r, ri) => PHOTO_COLS.map(c => ({ row: ri, page: r.page, label: c + r.label, img: c + r.img, chain: r.chain.map(x => c + x) })));
   // שורות צהובות (שרשרת הנוסחאות של התמונות): תמיד מוסתרות
@@ -286,16 +285,14 @@
       const i = this.idx.get(r);
       if (i != null && !/^<row [^>]*? hidden="1"/.test(this.rows[i])) this.rows[i] = this.rows[i].replace(/^<row r="\d+"/, '$& hidden="1"');
     }
-    height(r) {
-      const i = this.idx.get(r), m = i == null ? null : /^<row [^>]*? ht="([\d.]+)"/.exec(this.rows[i]);
-      return m ? +m[1] : +((/defaultRowHeight="([\d.]+)"/.exec(this.head) || [0, 15])[1]);
-    }
-    setHeight(r, h) {
+    // מרוקנת את התאים בעמודות c1..c2 בשורה r (העיצוב נשאר)
+    clear(r, c1, c2) {
       const i = this.idx.get(r);
       if (i == null) return;
-      const tag = /^<row [^>]*?>/.exec(this.rows[i])[0];
-      const t = tag.replace(/ ht="[\d.]+"/, '').replace(/ customHeight="1"/, '').replace(/^<row r="\d+"/, `$& ht="${Math.round(h * 100) / 100}" customHeight="1"`);
-      this.rows[i] = t + this.rows[i].slice(tag.length);
+      this.rows[i] = this.rows[i].replace(/<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g, (m, c, a) => {
+        const n = colNum(c), st = /\ss="\d+"/.exec(a);
+        return n < c1 || n > c2 ? m : `<c r="${c}${r}"${st ? st[0] : ''}/>`;
+      });
     }
     // נוסחאות משותפות שמגיעות לשורה from ומטה הופכות לנוסחאות רגילות, כדי שאפשר להזיז ולהעתיק את השורות
     unshare(from) {
@@ -425,14 +422,13 @@
     }
     // נספח תמונות: תוויות לפי מספר העץ. עם "צרף תמונות" התמונות עצמן נכנסות לתאים,
     // ובלי — נשארות נוסחאות הנתיב של התבנית (C:\\Users\\origr\\Pictures\\<מספר>.jpg) למאקרו במחשב
-    const images = [], usedRows = new Set();
+    const images = [];
     const avail = TPL_PAGES + extra;   // עמודים שקיימים בקובץ
     if (embed) for (const c of SLOT_CELLS) if (c.page <= avail) { for (const x of c.chain) sheet.set(x, null); sheet.set(c.img, null); }
     for (const slot of slots) {
       const c = SLOT_CELLS[slot.index - 1];
       if (c.page > avail) break;
       sheet.set(c.label, numOrText(slot.label));
-      if (embed) usedRows.add(c.row);
       if (!embed || !getPhoto) continue;
       const blob = await getPhoto(slot.photo.id);
       if (!blob) continue;
@@ -442,23 +438,15 @@
     }
     await addCellImages(zip, images);
 
-    // מה מוצג: העמודים שצריך, בלי השורות הצהובות, בלי שורות עצים ריקות ובלי שורות מינים ריקות
+    // מה מוצג: העמודים שצריך, בלי השורות הצהובות ובלי שורות מינים ריקות
     for (let k = 0; k < pages; k++) for (let r = 45 + 46 * k; r <= 90 + 46 * k; r++) sheet.unhide(r);
     for (const r of yellowRows(avail)) sheet.hide(r);
-    // שורת עץ ריקה בתוך תא תמונה ממוזג: הסתרה מקטינה את התמונה. בשורת התמונות העליונה של עמוד משאירים אותה,
-    // ובתחתונה מסתירים ומעבירים את הגובה לשורה ריקה מתחת לטבלה (comp), כך שהתמונה נשארת באותו גודל
-    const comp = new Map();
-    for (let i = trees.length; i < PAGE1 + 32 * pages; i++) {
-      const r = TREE_ROWS[i];
-      const pr = PHOTO_ROWS.findIndex((x, ri) => usedRows.has(ri) && r >= x.label && r <= x.end);
-      if (pr >= 0) {
-        const x = PHOTO_ROWS[pr];
-        if (!x.comp || r === x.label) continue;
-        comp.set(x.comp, (comp.get(x.comp) || 0) + sheet.height(r));
-      }
-      sheet.hide(r);
+    // שורות עצים ריקות בעמודים המוצגים לא מוסתרות (הסתרה מקטינה את התמונות שלידן), אלא מתרוקנות: B:BC בלי נוסחאות.
+    // קודם מפרקים נוסחאות משותפות שמגיעות לשורות האלה, כדי שלא יימחק תא אב של קבוצה
+    if (trees.length < PAGE1 + 32 * pages) {
+      sheet.unshare(TREE_ROWS[trees.length]);
+      for (let i = trees.length; i < PAGE1 + 32 * pages; i++) sheet.clear(TREE_ROWS[i], 2, 55);
     }
-    for (const [r, h] of comp) sheet.setHeight(r, sheet.height(r) + h);
     if (!embed) sheet.hide(4);   // שורת התוויות של התמונות, ריקה באקסל בלי תמונות: עוד מקום בעמוד 1
     // בעמודים הנוספים: שורות ריקות בראש העמוד ובסופו (45, 89, 90) מוסתרות, כדי שהעמוד ייכנס לדף אחד
     for (let k = 0; k < avail; k++) for (const r of [45, 89, 90]) sheet.hide(r + 46 * k);
