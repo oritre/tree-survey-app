@@ -166,6 +166,29 @@
 
   // תמונות בתוך התא: בתבנית כבר יש 2 ערכי rich (שגיאות של FILTER), מוסיפים אחריהם
   const RD = 'http://schemas.microsoft.com/office/spreadsheetml/2017/richdata';
+  // התאים refs מקבלים עותק של הסגנון שלהם עם יישור אופקי לימין (סגנון חדש בסוף cellXfs)
+  async function alignRight(zip, sheet, refs) {
+    let st = await zip.file('xl/styles.xml').async('string');
+    const m = /<cellXfs count="(\d+)">([\s\S]*?)<\/cellXfs>/.exec(st);
+    const xfs = m[2].match(/<xf\b[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g);
+    const made = new Map(), add = [];
+    const right = s => {
+      if (!made.has(s)) {
+        const x = xfs[+s].replace(/\/>$|>[\s\S]*<\/xf>$/, '').replace(/ applyAlignment="\d"/, '');
+        made.set(s, String(xfs.length + add.length));
+        add.push(`${x} applyAlignment="1"><alignment horizontal="right"/></xf>`);
+      }
+      return made.get(s);
+    };
+    for (const ref of refs) sheet.edit(ref, (s, inner, whole) => {
+      const ns = ` s="${right(s || '0')}"`;
+      return whole ? whole.replace(/ s="\d+"/, '').replace(/^<c r="[A-Z]+\d+"/, '$&' + ns) : `<c r="${ref}"${ns}/>`;
+    });
+    if (!add.length) return;
+    st = st.replace(m[0], `<cellXfs count="${xfs.length + add.length}">${m[2]}${add.join('')}</cellXfs>`);
+    zip.file('xl/styles.xml', st);
+  }
+
   async function addCellImages(zip, images) {
     if (!images.length) return;
     const base = 2, n = images.length;
@@ -460,6 +483,8 @@
       sheet.edit(c.img, s => `<c r="${c.img}"${s ? ` s="${s}"` : ''} t="e" vm="${vm}"><v>#VALUE!</v></c>`);
     }
     await addCellImages(zip, images);
+    // תוויות התמונות מיושרות תמיד לימין (בלי זה מספר נצמד לימין וטקסט כמו 2-5 לשמאל)
+    await alignRight(zip, sheet, SLOT_CELLS.filter(c => c.page <= avail).map(c => c.label));
 
     // מה מוצג: העמודים שצריך, בלי השורות הצהובות ובלי שורות מינים ריקות
     for (let k = 0; k < pages; k++) for (let r = 45 + 46 * k; r <= 90 + 46 * k; r++) sheet.unhide(r);
