@@ -634,6 +634,36 @@
   let stopped = false; // אחרי כיבוי: לא מגבים יותר עד שהאפליקציה נפתחת מחדש
   function stop() { stopped = true; clearTimeout(timer); }
   const holding = new Map();
+  // גוגל דרייב של סקר אחד לא רץ פעמיים במקביל (סבב הגיבוי ו"סיום סקר" שרץ מיד, בלי לחכות לסבב)
+  const odLocks = new Map(); let current = null;
+  function locked(id, fn) {
+    const p = (odLocks.get(id) || Promise.resolve()).catch(() => {}).then(fn);
+    odLocks.set(id, p);
+    p.catch(() => {}).finally(() => { if (odLocks.get(id) === p) odLocks.delete(id); });
+    return p;
+  }
+  // "סיום סקר": מעלים את הסקר הזה מיד, בלי לחכות שסבב הגיבוי יסיים סקרים אחרים ותמונות לטלגרם
+  async function finishNow(id) {
+    if (stopped || !navigator.onLine || state.odNeedsLogin || !(await OD.connected())) return;
+    const s = (root.App && root.App.live(id)) || holding.get(id) || await DB.getSurvey(id);
+    if (!s || !s.finishPending) return;
+    holding.set(id, s);
+    try {
+      // כשהסבב עובד עכשיו על הסקר הזה, הוא כבר משך ממכשירים אחרים (ושולח לטלגרם על אותו עותק): לא מושכים שוב
+      if (!(running && current === id)) {
+        const r = await locked(id, () => pull(s));
+        if (r === 'busy' || r === 'deleted') return; // שינוי ממכשיר אחר שעוד לא נכנס: הסבב הרגיל ימשיך
+      }
+      await locked(id, () => syncOneDrive(s));
+    } catch (e) {
+      if (e instanceof OD.AuthError) state.odNeedsLogin = true;
+      else { state.error = 'גוגל דרייב: ' + e.message; log('error', state.error, s); }
+    } finally {
+      if (!(running && current === id)) holding.delete(id);
+      emit();
+      if (root.App && root.App.onSynced) root.App.onSynced();
+    }
+  }
   const pulledAt = new Map(); let discoveredAt = 0; // בדיקת שינויים ממכשירים אחרים: לא יותר מפעם בדקה
   async function run() {
     if (stopped) return;
@@ -663,7 +693,7 @@
         // העותק העדכני: הסקר הפתוח, ואם הוא לא פתוח — מה שבטאבלט עכשיו (ייתכן שנערך אחרי תחילת הסבב)
         const s = live(s0) !== s0 ? live(s0) : holding.get(s0.id) || (await DB.getSurvey(s0.id)) || s0;
         // סקר שנפתח בזמן שהוא עולה: האפליקציה עובדת על אותו עותק, כדי שהשמירות של הגיבוי לא ידרסו עריכות
-        holding.set(s.id, s);
+        holding.set(s.id, s); current = s.id;
         if (s.deleted) {
           if (odOn && !state.odNeedsLogin) {
             try { await pushDeleted(s); }
@@ -678,7 +708,7 @@
         if (odOn && !state.odNeedsLogin && (live(s) === s || (recent && Date.now() - (pulledAt.get(s.id) || 0) > 60000))) {
           pulledAt.set(s.id, Date.now());
           let r = false;
-          try { r = await pull(s); }
+          try { r = await locked(s.id, () => pull(s)); }
           catch (e) {
             if (e instanceof OD.AuthError) state.odNeedsLogin = true;
             else { log('error', 'משיכת עדכונים ממכשיר אחר נכשלה: ' + e.message, s); r = 'busy'; }
@@ -692,7 +722,7 @@
             catch (e) { state.error = 'טלגרם: ' + e.message; log('error', state.error, s); }
           })(),
           odOn && !state.odNeedsLogin && (async () => {
-            try { await syncOneDrive(s); }
+            try { await locked(s.id, () => syncOneDrive(s)); }
             catch (e) {
               if (e instanceof OD.AuthError) { state.odNeedsLogin = true; log('error', 'גוגל דרייב: צריך להתחבר מחדש', s); }
               else { state.error = 'גוגל דרייב: ' + e.message; log('error', state.error, s); }
@@ -708,7 +738,7 @@
       state.error = e.message;
       log('error', 'שגיאה כללית בגיבוי: ' + e.message);
     } finally {
-      holding.clear();
+      holding.clear(); current = null;
       running = false; state.busy = false; emit();
       if (root.App && root.App.onSynced) root.App.onSynced();
       if (again) kick(true);
@@ -729,6 +759,7 @@
     holding: id => holding.get(id) || null,
     kick, state,
     now() { state.odNeedsLogin = false; schedule(0); },
+    finishNow(id) { state.odNeedsLogin = false; finishNow(id); schedule(0); },
     // פעולות ידניות: עובדות על הסקר הפתוח ומחכות לסיום
     async uploadReport(s) { await syncFolders(s); await uploadReport(s, { pdf: false }); },
     async uploadPdf(s, pdf) { await syncFolders(s); await uploadPdf(s, pdf); },

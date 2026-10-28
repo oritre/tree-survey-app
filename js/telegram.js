@@ -3,6 +3,18 @@
   'use strict';
   const API = 'https://api.telegram.org/bot';
 
+  // בקשה עם הגבלת זמן: בקליטה חלשה בקשה יכולה להיתקע דקות, והגיבוי כולו מחכה לה.
+  // 30 שניות, ועוד שנייה לכל 25KB שעולים (כך שגם קובץ גדול בקליטה איטית מספיק לעלות)
+  function timedFetch(url, opts) {
+    const b = opts && opts.body, size = b instanceof FormData ? [...b.values()].reduce((a, v) => a + (v.size || 0), 0) : (b && b.size) || 0;
+    const ms = 30000 + size / 25;
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), ms);
+    return fetch(url, Object.assign({}, opts, { signal: ac.signal }))
+      .catch(e => { throw ac.signal.aborted ? new Error('אין תשובה מהשרת (קליטה חלשה), ננסה שוב') : e; })
+      .finally(() => clearTimeout(t));
+  }
+
   async function call(token, method, body) {
     for (let attempt = 0; attempt < 5; attempt++) {
       // בלי פרמטרים: GET. בלי קבצים: טופס רגיל (urlencoded). multipart רק כשיש תמונה
@@ -12,7 +24,7 @@
         if (!entries.length) opts = { method: 'GET' };
         else if (!entries.some(([, v]) => v instanceof Blob)) opts = { method: 'POST', body: new URLSearchParams(entries) };
       }
-      const res = await fetch(API + token + '/' + method, opts);
+      const res = await timedFetch(API + token + '/' + method, opts);
       const text = await res.text();
       let j;
       try { j = JSON.parse(text); } catch (_) { j = { ok: false, description: `HTTP ${res.status} (${method}) ${text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)}` }; }
