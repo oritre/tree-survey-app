@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.31.4';
+  const APP_VERSION = '1.32.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -261,10 +261,20 @@
           h('button', { class: 'tile', onclick: () => go('#/cloud') }, icon('search'), 'חיפוש סקרים בענן'),
           h('button', { class: 'tile', onclick: () => go('#/summary') }, icon('tree'), 'אורנים ומפות'),
           h('button', { class: 'tile', onclick: () => go('#/quotes') }, icon('money'), 'הצעות מחיר')),
+        h('div', { id: 'plannedBox' }),
         chips, list,
         hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} סקרים מימים קודמים שמורים בענן. `,
           h('a', { href: '#/cloud' }, 'לחיפוש סקרים בענן')) : null,
         h('p', { class: 'muted small', style: 'text-align:center', id: 'homeFoot' }, 'סקר פתוח נשמר בטאבלט (כדי לעבוד גם בלי קליטה) ומגובה לטלגרם ולגוגל דרייב. אחרי "סיום סקר" התמונות מפונות מהטאבלט ונשארות בענן. גרסה ' + APP_VERSION)));
+    plannedList(odOn).then(pl => {
+      const box = $('#plannedBox');
+      if (!box || !pl.length) return;
+      box.replaceChildren(h('section', {},
+        h('h2', { class: 'proj-head' }, `מתוכננים (${pl.length})`),
+        h('div', { class: 'grid-list' }, pl.map(p => h('button', { class: 'card survey-card', style: 'text-align:right', onclick: () => newSurvey(p) },
+          h('div', { style: 'font-weight:600' }, [p.siteName, p.street, p.city].filter(Boolean).join(', ') || 'סקר מתוכנן'),
+          h('div', { class: 'muted small' }, [p.date ? fmtDate(p.date) : null, p.contact, p.phone, p.note].filter(Boolean).join(' · ')))))));
+    }).catch(() => {});
     if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => {
       const el = $('#homeFoot'); if (el && e.usage != null) el.append(` · בשימוש בטאבלט: ${(e.usage / 1048576).toFixed(0)} MB`);
     }).catch(() => {});
@@ -1117,14 +1127,39 @@
     });
   }
 
-  async function newSurvey() {
+  async function newSurvey(preset) {
+    preset = preset && preset.siteName != null ? preset : null; // לחיצה רגילה מעבירה אירוע, לא סקר מתוכנן
     const type = await chooseType();
     if (!type) return;
-    const project = projectFilter != null ? projectFilter : await DB.getKV('lastProject', '');
+    const project = preset && preset.project ? preset.project : (projectFilter != null ? projectFilter : await DB.getKV('lastProject', ''));
     const s = { id: uid(), type, project, site: '', siteName: '', street: '', city: await DB.getKV('lastCity', ''), code: '', manager: '', date: today(), trees: [], created: Date.now() };
+    if (preset) {
+      for (const k of ['siteName', 'street', 'city', 'manager']) if (preset[k]) s[k] = preset[k];
+      if (preset.date) s.date = preset.date;
+      s.plannedId = preset.id;
+      const used = await DB.getKV('plannedUsed', []);
+      if (!used.includes(preset.id)) await DB.setKV('plannedUsed', [...used, preset.id].slice(-200));
+    }
     s.site = composeSite(s);
     await DB.putSurvey(s);
     go('#/s/' + s.id + '/details');
+  }
+
+  // ---------- סקרים מתוכננים (מהמזכירה) ----------
+  // המזכירה כותבת ל-OneDrive קובץ "סקרים מתוכננים.json" בתיקיית הגיבוי. כאן מציגים את מה שעוד לא נפתח,
+  // ולחיצה פותחת סקר חדש עם הפרטים. בלי קליטה מוצגת הרשימה האחרונה שנטענה.
+  const PLANNED_FILE = 'סקרים מתוכננים.json';
+  async function plannedList(odOn) {
+    let list = await DB.getKV('plannedCache', []);
+    if (odOn && navigator.onLine !== false) {
+      try {
+        const root = await OD.folder(null, (await DB.getKV('odBackupRoot', 'גיבוי אפליקציית סקרי עצים')) || 'גיבוי אפליקציית סקרי עצים');
+        const j = await OD.readJson(root, PLANNED_FILE);
+        if (j && Array.isArray(j.planned)) { list = j.planned; await DB.setKV('plannedCache', list); }
+      } catch (_) {}
+    }
+    const used = await DB.getKV('plannedUsed', []);
+    return (list || []).filter(p => p && p.id && !used.includes(p.id) && !p.done);
   }
 
   // ---------- מסך הסקר ----------
