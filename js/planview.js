@@ -48,10 +48,12 @@
     const btn = (label, title, on, cls) => h('button', { class: 'txt ' + (cls || ''), title: title || null, 'aria-label': title || null, onclick: on }, label);
     const markBtn = btn('סימון עצים', 'נגיעה בעץ של המודד או במקום ריק', () => setMode('mark'));
     const areaBtn = btn('תחימה', 'תחימת קטע בפוליגון', () => setMode('area'));
+    const xyBtn = btn('נ.צ', 'נגיעה בנקודה מראה את הקואורדינטות שלה ברשת ישראל החדשה', () => setMode(mode === 'xy' ? 'mark' : 'xy'));
+    let xyPt = null; // הנקודה האחרונה במצב נ.צ
     const undoBtn = btn('↶', 'בטל פעולה אחרונה', doUndo);
     // GPS: במדידה ברשת ישראל, או בשרטוט על דף אחרי כיול
     const canGps = () => itm || !!(root.proj4 && root.Plan.isPaper(s.plan) && s.plan.cal);
-    const gpsBtn = btn('📍', 'המיקום שלי', toggleGps);
+    const gpsBtn = btn('📍', 'המיקום שלי על השרטוט (GPS)', toggleGps);
     gpsBtn.hidden = !canGps();
     const layersBtn = btn('⋯', 'תצוגה', showLayers);
     const monoBtn = btn('צבע אחד', 'שרטוט בצבעים המקוריים / בצבע אחד', () => setMono(!mono));
@@ -61,7 +63,7 @@
     const ov = h('div', { class: 'annot map-ov plan-ov' },
       h('div', { class: 'annot-bar' },
         h('span', { class: 'sp', style: 'font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, s.plan.name || 'מדידה'),
-        h('div', { class: 'grp' }, markBtn, areaBtn),
+        h('div', { class: 'grp' }, markBtn, areaBtn, xyBtn),
         undoBtn, gpsBtn, monoBtn, layersBtn,
         btn('סגור', null, () => close(), 'save')),
       h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, hint, legend, sheet));
@@ -335,6 +337,15 @@
           cx.fillText(t.name, spot.b.x + w / 2, spot.b.y + hh / 2 + 1);
         }
       }
+      // נקודה במצב נ.צ
+      if (xyPt) {
+        const p = P(toMap(xyPt[0], xyPt[1]));
+        cx.lineWidth = 4; cx.strokeStyle = '#fff';
+        cx.beginPath(); cx.moveTo(p.x - 14, p.y); cx.lineTo(p.x + 14, p.y); cx.moveTo(p.x, p.y - 14); cx.lineTo(p.x, p.y + 14); cx.stroke();
+        cx.lineWidth = 2; cx.strokeStyle = '#e91e63';
+        cx.beginPath(); cx.moveTo(p.x - 14, p.y); cx.lineTo(p.x + 14, p.y); cx.moveTo(p.x, p.y - 14); cx.lineTo(p.x, p.y + 14); cx.stroke();
+        cx.beginPath(); cx.arc(p.x, p.y, 6, 0, 7); cx.stroke();
+      }
       // מיקום GPS
       if (gpsPos) {
         const p = P(gpsLL()), r = Math.max(8, gpsPos.acc * k);
@@ -434,6 +445,7 @@
       const pt = e.containerPoint, xy = fromMap(e.latlng);
       if (calStep) return calTap(xy);
       if (mode === 'area') return areaTap(pt, xy);
+      if (mode === 'xy') { xyPt = xy; renderSheet(); redraw(); return; }
       if (moving) return moveTo(xy);
       const hit = hitAt(pt);
       if (hit && hit.kind === 'my') return select(hit.id);
@@ -513,6 +525,7 @@
     function renderSheet() {
       updateBar();
       if (mode === 'area') return renderAreaSheet();
+      if (mode === 'xy') return renderXySheet();
       const t = selId && s.trees.find(x => x.id === selId);
       if (!t) { sheet.classList.add('hidden'); hint.textContent = moving ? '' : 'נגיעה בעץ של המודד מסמנת אותו. נגיעה במקום ריק מוסיפה עץ. עץ שהוספת אפשר לגרור.'; hint.classList.toggle('hidden', false); return; }
       hint.textContent = moving ? 'גע במיקום החדש של העץ' : '';
@@ -525,6 +538,7 @@
           t.pref ? h('span', { class: 'muted small' }, 'עץ של המודד' + (t.pname ? ' ' + t.pname : '') + ' · נעול במקום') : h('span', { class: 'muted small' }, 'עץ שהוספתי'),
           st ? h('span', { class: 'plan-chip', style: `--c:${st.color}` }, t.status) : null,
           (t.species || '').trim() && !t.speciesAuto ? h('span', { class: 'muted small' }, t.species) : null,
+          (w => w ? h('span', { class: 'muted small', style: 'direction:ltr;unicode-bidi:isolate' }, `X ${fmt(w[0])}  Y ${fmt(w[1])}`) : null)(itmXY(t.px, t.py)),
           h('button', { class: 'icon-btn plan-x', 'aria-label': 'סגור', onclick: () => { selId = null; moving = false; renderSheet(); redraw(); } }, '✕')),
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
           h('button', { class: 'btn', onclick: () => renumber(t) }, 'מספר'),
@@ -545,8 +559,8 @@
 
     // ---------- תחומים ----------
     function setMode(m) {
-      mode = m; moving = false; drawing = null; selPoly = null;
-      if (m === 'area') selId = null;
+      mode = m; moving = false; drawing = null; selPoly = null; xyPt = null;
+      if (m === 'area' || m === 'xy') selId = null;
       renderSheet(); redraw();
     }
     function areaTap(pt, xy) {
@@ -555,6 +569,39 @@
       selPoly = hit ? hit.id : null;
       renderSheet(); redraw();
     }
+    // ---------- נ.צ ברשת ישראל החדשה ----------
+    // מחזיר [X, Y] ברשת ישראל, או null בשרטוט על דף שלא כויל
+    function itmXY(x, y) {
+      const w = root.Plan.itmOf(s.plan, x, y);
+      return w ? [w[0], w[1]] : null;
+    }
+    const fmt = v => v.toFixed(2);
+    function xyRow(title, X, Y) {
+      const txt = `${fmt(X)}, ${fmt(Y)}`;
+      return h('div', { class: 'stack', style: 'gap:4px' },
+        h('div', { class: 'muted small' }, title),
+        h('div', { class: 'row', style: 'gap:10px;align-items:center;flex-wrap:wrap' },
+          h('b', { style: 'font-size:19px;direction:ltr;unicode-bidi:isolate' }, `X ${fmt(X)}   Y ${fmt(Y)}`),
+          h('button', { class: 'btn', onclick: async () => {
+            try { await navigator.clipboard.writeText(txt); flash('הועתק: ' + txt); } catch (_) { prompt('להעתקה:', txt); }
+          } }, 'העתק')));
+    }
+    function renderXySheet() {
+      const rows = [];
+      if (xyPt) {
+        const w = itmXY(xyPt[0], xyPt[1]);
+        if (w) rows.push(xyRow('הנקודה (רשת ישראל החדשה)', w[0], w[1]));
+        else rows.push(h('div', { class: 'muted' }, root.Plan.isPaper(s.plan)
+          ? 'השרטוט על דף ועוד לא כויל, אז אין לו קואורדינטות. כיול בשתי נקודות: בכפתור ⋯'
+          : 'המדידה לא ברשת ישראל, אז אין לנקודה נ.צ'));
+      }
+      if (gpsPos && root.proj4) { const g2 = root.Plan.fromLL(gpsPos.lat, gpsPos.lon); rows.push(xyRow(`המיקום שלי (GPS, דיוק ${Math.round(gpsPos.acc)} מ')`, g2[0], g2[1])); }
+      if (!rows.length) { sheet.classList.add('hidden'); hint.textContent = 'נגיעה בנקודה מראה את הנ.צ שלה ברשת ישראל החדשה'; hint.classList.remove('hidden'); return; }
+      hint.classList.add('hidden');
+      sheet.classList.remove('hidden');
+      sheet.replaceChildren(h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' }, h('b', {}, 'נ.צ'), h('button', { class: 'icon-btn plan-x', 'aria-label': 'סגור', onclick: () => setMode('mark') }, '✕')), ...rows);
+    }
+
     function renderAreaSheet() {
       sheet.classList.remove('hidden'); hint.classList.add('hidden');
       if (drawing) {
@@ -671,7 +718,14 @@
       let first = true;
       gpsWatch = navigator.geolocation.watchPosition(p => {
         gpsPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy };
-        if (first) { first = false; map.panTo(gpsLL()); }
+        if (first) {
+          first = false;
+          // מחוץ לשטח המדידה: לא קופצים לשם, רק אומרים כמה רחוק
+          const ll = gpsLL();
+          if (fit.pad(0.5).contains(ll)) map.panTo(ll);
+          else toast(itm ? `המיקום שלך מחוץ למדידה, כ-${Math.round(map.distance(ll, fit.getCenter()))} מ' ממנה` : 'המיקום שלך מחוץ לשרטוט', 4000);
+        }
+        if (mode === 'xy') renderXySheet();
         redraw();
       }, err => { toast(err.code === 1 ? 'צריך לאשר גישה למיקום בדפדפן' : 'אין מיקום כרגע', 3000); }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
     }
@@ -685,7 +739,7 @@
       legend.replaceChildren(...items.map(([c, t]) => h('span', {}, c === 'sq' ? h('i', { class: 'sq' }) : h('i', { style: `background:${c}` }), t)));
     }
     function updateBar() {
-      markBtn.classList.toggle('on', mode === 'mark'); areaBtn.classList.toggle('on', mode === 'area');
+      markBtn.classList.toggle('on', mode === 'mark'); areaBtn.classList.toggle('on', mode === 'area'); xyBtn.classList.toggle('on', mode === 'xy');
       undoBtn.disabled = !undo.length;
       legendHtml();
     }
