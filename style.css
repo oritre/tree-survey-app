@@ -448,3 +448,4 @@ textarea.doc-text.b { font-weight: 700; }
 .plan-tag { align-items: center; justify-content: space-between; gap: 8px; background: var(--surface-2); border-radius: 10px; padding: 6px 10px; }
 .plan-ov .leaflet-control-zoom { margin-top: 64px; }
 @media (max-width: 600px) { .plan-flash { top: 128px; } .plan-ov .leaflet-control-zoom { margin-top: 8px; } }
+.plan-ov ~ .modal { z-index: 95; } /* חלונות (מספר, תצוגה) מעל מסך המדידה */

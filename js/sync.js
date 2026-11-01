@@ -272,7 +272,7 @@
     }
 
     // מדידה של המודד (סקר לבנייה): הגאומטריה שנקראה מה-DWG, כדי שתיפתח גם במכשיר אחר, וגם קובץ ה-DWG המקורי
-    if (s.plan && (!s.plan.odGeoId || !s.plan.odDwgId)) {
+    if (s.plan && (!s.plan.odGeoId || !s.plan.odDwgId || !s.plan.odImgId)) {
       const p = s.plan, base = String(p.name || 'מדידה').replace(/[\\/:*?<>|"]+/g, ' ').trim();
       if (!p.odGeoId) {
         const d = await DB.getPhoto('plan:' + p.id);
@@ -287,6 +287,14 @@
           const item = await OD.upload(s.odFolderId, p.file || base + '.dwg', d.blob, true);
           if (item && item.id && s.plan === p) { p.odDwgId = item.id; await DB.putSurvey(s, false); }
         } else p.odDwgId = 'none'; // נטענה במכשיר אחר: הקובץ המקורי כבר שם
+      }
+      // שרטוט שהוא תמונה (סריקה / צילום)
+      if (!p.odImgId) {
+        const d = await DB.getPhoto('planimg:' + p.id);
+        if (d && d.blob) {
+          const item = await OD.upload(s.odFolderId, `מדידה - ${base}.jpg`, d.blob, true);
+          if (item && item.id && s.plan === p) { p.odImgId = item.id; await DB.putSurvey(s, false); }
+        } else p.odImgId = 'none';
       }
     }
 

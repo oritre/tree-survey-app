@@ -34,16 +34,68 @@
     return libP;
   }
 
-  async function parseFile(bytes, fileName) {
-    const lib = await loadLib();
-    const dxf = /\.dxf$/i.test(fileName || '');
-    const data = lib.dwg_read_data(new Uint8Array(bytes), dxf ? 1 : 0);
-    if (!data) throw new Error('הקובץ לא נקרא. אולי הוא לא DWG תקין');
-    let db;
-    try { db = lib.convert(data); } finally { try { lib.dwg_free(data); } catch (_) {} }
-    const g = extract(db);
-    g.name = String(fileName || 'מדידה').replace(/\.(dwg|dxf)$/i, '');
-    return g;
+  // קובץ מדידה -> { geom, image? }. DWG דרך libredwg, ושאר הפורמטים ב-js/planformats.js
+  const FORMATS = /\.(dwg|dxf|pdf|dwfx|jpe?g|png|webp)$/i;
+  async function parseFile(file) {
+    const name = file.name || 'מדידה', ext = (/\.([a-z0-9]+)$/i.exec(name) || [])[1] || '';
+    const F = root.PlanFormats;
+    let out;
+    if (/^dwf$/i.test(ext)) throw new Error('קובץ DWF (הישן) לא נקרא בדפדפן. ב-BricsCAD אפשר לשמור אותו כ-DWG, DXF או PDF');
+    if (/^dwg$/i.test(ext)) {
+      const lib = await loadLib();
+      const data = lib.dwg_read_data(new Uint8Array(await file.arrayBuffer()), 0);
+      if (!data) throw new Error('הקובץ לא נקרא. אולי הוא לא DWG תקין');
+      let db;
+      try { db = lib.convert(data); } finally { try { lib.dwg_free(data); } catch (_) {} }
+      out = { geom: extract(db) };
+    } else if (/^dxf$/i.test(ext)) out = { geom: extract(F.parseDxf(await file.arrayBuffer())) };
+    else if (/^pdf$/i.test(ext)) out = await F.parsePdf(await file.arrayBuffer());
+    else if (/^dwfx$/i.test(ext)) out = await F.parseDwfx(await file.arrayBuffer());
+    else if (/^(jpe?g|png|webp)$/i.test(ext) || /^image\//.test(file.type)) out = await F.parseImage(file);
+    else throw new Error('סוג קובץ לא נתמך: ' + (ext || file.type));
+    out.geom.name = name.replace(/\.[a-z0-9]+$/i, '');
+    return out;
+  }
+
+  // ---------- קואורדינטות ----------
+  // שרטוט על דף (PDF, DWFx, תמונה) נמדד במ"מ. בלי כיול: לפי קנה המידה (1:250 -> 1 מ"מ = 0.25 מ'), כך שב-BricsCAD
+  // רק מזיזים לפי נקודת בסיס. עם כיול בשתי נקודות (plan.cal): ישר לקואורדינטות של המדידה
+  const isPaper = p => !!p && p.crs === 'paper';
+  function world(p, x, y) {
+    if (!isPaper(p)) return [x, y];
+    const c = p.cal;
+    if (c) return [c[0] * x + c[2] * y + c[4], c[1] * x + c[3] * y + c[5]];
+    const k = (p.scale || 250) / 1000;
+    return [x * k, y * k];
+  }
+  function fromWorld(p, X, Y) {
+    if (!isPaper(p)) return [X, Y];
+    const c = p.cal;
+    if (c) { const det = c[0] * c[3] - c[1] * c[2], dx = X - c[4], dy = Y - c[5]; return [(c[3] * dx - c[2] * dy) / det, (-c[1] * dx + c[0] * dy) / det]; }
+    const k = (p.scale || 250) / 1000;
+    return [X / k, Y / k];
+  }
+  // יחידות שרטוט במטר (לגודל הנקודות והמספרים במסך)
+  function upm(p) {
+    if (!isPaper(p)) return 1;
+    const c = p.cal;
+    if (c) return 1 / Math.hypot(c[0], c[1]);
+    return 1000 / (p.scale || 250);
+  }
+  // כיול משתי נקודות: [x,y] בשרטוט -> [X,Y] במדידה (הזזה, סיבוב וקנה מידה)
+  function calibrate(a, A, b, B) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], DX = B[0] - A[0], DY = B[1] - A[1];
+    const d2 = dx * dx + dy * dy;
+    if (!d2 || !(DX || DY)) return null;
+    const ca = (dx * DX + dy * DY) / d2, sa = (dx * DY - dy * DX) / d2;
+    return [ca, sa, -sa, ca, A[0] - (ca * a[0] - sa * a[1]), A[1] - (sa * a[0] + ca * a[1])];
+  }
+  // מיקום עץ ברשת ישראל (ל-GPS ולמפות), אם יש
+  function itmOf(p, x, y) {
+    if (!p) return null;
+    if (p.crs === 'itm') return [x, y];
+    if (isPaper(p) && p.cal) { const w = world(p, x, y); return w[0] > 100000 && w[0] < 300000 && w[1] > 350000 && w[1] < 820000 ? w : null; }
+    return null;
   }
 
   // ---------- מהקובץ לגאומטריה ----------
@@ -227,8 +279,11 @@
   }
   // הגיליון עצמו (XML). עמודה G = הייעוד מעמודה BC בגיליון "סקר" לפי מספר העץ, כך שהפקודה ב-BricsCAD קוראת גיליון אחד
   async function sheetXml(survey) {
-    const trees = root.Core.sortTrees(survey.trees.filter(t => t.px != null && String(t.num || '').trim()));
-    const polys = (survey.planPolys || []).filter(p => p.pts && p.pts.length >= 3);
+    const W = (x, y) => world(survey.plan, x, y);
+    // עצים ותחומים בקואורדינטות של המדידה (שרטוט על דף: לפי קנה המידה או הכיול)
+    const trees = root.Core.sortTrees(survey.trees.filter(t => t.px != null && String(t.num || '').trim()))
+      .map(t => { const w = W(t.px, t.py); return Object.assign({}, t, { px: w[0], py: w[1] }); });
+    const polys = (survey.planPolys || []).filter(p => p.pts && p.pts.length >= 3).map(p => Object.assign({}, p, { pts: p.pts.map(q => W(q[0], q[1])) }));
     if (!trees.length && !polys.length) return null;
     const lab = layoutLabels(trees, await othersFor(survey));
     const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -297,5 +352,5 @@
     return c;
   }
 
-  root.Plan = { ITM, STATUSES, NO_STATUS, statusOf, parseFile, extract, surveyorTrees, toLL, fromLL, layoutLabels, sheetXml, addSheet, centroid, inside, loadLib };
+  root.Plan = { ITM, STATUSES, NO_STATUS, statusOf, parseFile, extract, FORMATS, world, fromWorld, upm, calibrate, itmOf, isPaper, surveyorTrees, toLL, fromLL, layoutLabels, sheetXml, addSheet, centroid, inside, loadLib };
 })(typeof self !== 'undefined' ? self : globalThis);

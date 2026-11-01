@@ -613,47 +613,61 @@
     });
   }
   async function loadPlanFile() {
-    const f = await pickFile('.dwg,.dxf');
+    const f = await pickFile('.dwg,.dxf,.pdf,.dwfx,.dwf,.jpg,.jpeg,.png,.webp,image/*,application/pdf');
     if (!f) return false;
     toast('קורא את המדידה…', 2500);
-    let g;
-    try { g = await Plan.parseFile(await f.arrayBuffer(), f.name); }
+    let r;
+    try { r = await Plan.parseFile(f); }
     catch (e) { console.error(e); alert('לא הצלחתי לקרוא את הקובץ: ' + e.message); return false; }
-    if (!g.paths.length) { alert('לא נמצאו קווים בקובץ'); return false; }
+    const g = r.geom;
+    if (!g.paths.length && !g.image) { alert('לא נמצאו קווים בקובץ'); return false; }
     const old = cur.plan;
     const id = uid();
     await DB.putPhoto({ id: planKey({ id }), geom: g });
-    await DB.putPhoto({ id: 'plandwg:' + id, blob: new Blob([f], { type: 'application/octet-stream' }), name: f.name });
+    await DB.putPhoto({ id: 'plandwg:' + id, blob: new Blob([f], { type: f.type || 'application/octet-stream' }), name: f.name });
+    if (r.image) await DB.putPhoto({ id: 'planimg:' + id, blob: r.image });
     cur.plan = { id, name: g.name, file: f.name, crs: g.crs, treeBlock: g.treeBlock, added: Date.now() };
-    if (old) { DB.deletePhoto(planKey(old)).catch(() => {}); DB.deletePhoto('plandwg:' + old.id).catch(() => {}); }
+    if (g.crs === 'paper') cur.plan.scale = old && old.scale || 250;
+    if (old) for (const k of [planKey(old), 'plandwg:' + old.id, 'planimg:' + old.id]) DB.deletePhoto(k).catch(() => {});
     await saveNow(); Sync.kick(true);
     const nsv = Plan.surveyorTrees(g).length;
-    toast(`המדידה נטענה${nsv ? `: ${nsv} עצים של המודד` : ''}${g.crs === 'itm' ? '' : ' (לא ברשת ישראל, בלי תצלום אוויר ו-GPS)'}`, 4000);
+    toast(g.crs === 'paper' ? 'השרטוט נטען. קנה מידה וכיול: בכפתור ⋯ במסך המדידה' : `המדידה נטענה${nsv ? `: ${nsv} עצים של המודד` : ''}${g.crs === 'itm' ? '' : ' (לא ברשת ישראל, בלי תצלום אוויר ו-GPS)'}`, 4500);
     return true;
   }
   async function planGeom(p) {
-    const d = await DB.getPhoto(planKey(p));
-    if (d && d.geom) return d.geom;
+    let d = await DB.getPhoto(planKey(p)), g = d && d.geom;
     // נטענה במכשיר אחר: מגוגל דרייב
-    if (!p.odGeoId) return null;
-    const blob = await OD.download(p.odGeoId);
-    if (!blob) return null;
-    const g = JSON.parse(await blob.text());
-    await DB.putPhoto({ id: planKey(p), geom: g });
-    return g;
+    if (!g) {
+      if (!p.odGeoId) return null;
+      const blob = await OD.download(p.odGeoId);
+      if (!blob) return null;
+      g = JSON.parse(await blob.text());
+      await DB.putPhoto({ id: planKey(p), geom: g });
+    }
+    // שרטוט שהוא תמונה: התמונה נשמרת לחוד
+    let img = null;
+    if (g.image) {
+      const di = await DB.getPhoto('planimg:' + p.id);
+      img = di && di.blob;
+      if (!img && p.odImgId) { img = await OD.download(p.odImgId); if (img) await DB.putPhoto({ id: 'planimg:' + p.id, blob: img }); }
+    }
+    return { g, img };
   }
   async function openPlan(focusId) {
     if (!cur.plan && !(await loadPlanFile())) return;
-    let g;
-    try { g = await planGeom(cur.plan); } catch (e) { console.error(e); }
+    let pg;
+    try { pg = await planGeom(cur.plan); } catch (e) { console.error(e); }
+    const g = pg && pg.g;
     if (!g) { toast(cur.plan.odGeoId ? 'לא הצלחתי להוריד את המדידה מגוגל דרייב. צריך קליטה' : 'המדידה עוד לא עלתה מהמכשיר שבו נטענה', 4000); return; }
     try { await loadLeaflet(); } catch (e) { toast(e.message, 3000); return; }
     const before = cur.trees.length;
+    const imageUrl = pg.img ? URL.createObjectURL(pg.img) : null;
     const openId = await PlanView.open({
-      survey: cur, geom: g, h, toast, uid, makeTree, focusId,
+      survey: cur, geom: g, imageUrl, h, toast, uid, makeTree, focusId,
       askNumber, save: saveSoon,
       tileLayer: name => tileLayer(...(LAYERS[name] || LAYERS['גוגל – לוויין'])),
     });
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
     await saveNow();
     if (openId && treeById(openId)) { curTreeId = openId; go(`#/s/${cur.id}/trees/t/${encodeURIComponent(openId)}`); return; }
     if (!treeById(curTreeId)) curTreeId = (Core.sortTrees(cur.trees)[0] || {}).id || null;
@@ -1322,17 +1336,17 @@
     const marked = cur.trees.filter(t => t.px != null).length;
     return h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
       h('h3', { style: 'margin:0;font-size:18px' }, 'מדידה (DWG)'),
-      p ? h('div', {}, h('b', {}, p.file || p.name), h('div', { class: 'muted small' }, `${marked} עצים מסומנים במדידה` + (p.crs === 'itm' ? '' : ' · לא ברשת ישראל')))
-        : h('div', { class: 'muted small' }, 'קובץ המדידה של המודד. בטאבלט מסמנים עליו את העצים, והמיקומים יוצאים באקסל לגיליון "מדידה".'),
+      p ? h('div', {}, h('b', {}, p.file || p.name), h('div', { class: 'muted small' }, `${marked} עצים מסומנים במדידה` + (p.crs === 'itm' ? '' : p.crs === 'paper' ? ` · שרטוט על דף, ${p.cal ? 'מכויל' : '1:' + (p.scale || 250)}` : ' · לא ברשת ישראל')))
+        : h('div', { class: 'muted small' }, 'קובץ המדידה של המודד: DWG או DXF (עם קואורדינטות), או PDF, DWFx ותמונה (שרטוט על דף). בטאבלט מסמנים עליו את העצים, והמיקומים יוצאים באקסל לגיליון "מדידה".'),
       h('div', { class: 'row' },
         p ? h('button', { class: 'btn primary', onclick: () => openPlan() }, 'פתח מדידה') : null,
         h('button', { class: 'btn', onclick: async () => {
           if (p && !confirm('להחליף את קובץ המדידה? העצים שסימנת נשארים באותן קואורדינטות.')) return;
           if (await loadPlanFile()) renderSurvey();
-        } }, p ? 'החלף קובץ' : 'טען מדידה (DWG)'),
+        } }, p ? 'החלף קובץ' : 'טען מדידה (DWG / PDF)'),
         p ? h('button', { class: 'btn danger', onclick: async () => {
           if (!confirm('להסיר את המדידה מהסקר? העצים והמיקומים שלהם נשארים.')) return;
-          DB.deletePhoto(planKey(p)).catch(() => {}); DB.deletePhoto('plandwg:' + p.id).catch(() => {});
+          for (const k of [planKey(p), 'plandwg:' + p.id, 'planimg:' + p.id]) DB.deletePhoto(k).catch(() => {});
           cur.plan = null; await saveNow(); Sync.kick(); renderSurvey();
         } }, 'הסר') : null));
   }
@@ -1406,7 +1420,7 @@
     if (!search) treeFilter = '';
     pane.replaceChildren(...[
       h('button', { class: 'btn primary big block', onclick: addTree }, icon('plus'), 'עץ חדש'),
-      Construction.isConstruction(cur) ? h('button', { class: 'btn big block', onclick: () => openPlan() }, icon('pin'), cur.plan ? 'מדידה' : 'טען מדידה (DWG)') : null,
+      Construction.isConstruction(cur) ? h('button', { class: 'btn big block', onclick: () => openPlan() }, icon('pin'), cur.plan ? 'מדידה' : 'טען מדידה (DWG / PDF)') : null,
       Construction.isConstruction(cur) ? null : h('button', { class: 'btn big block', onclick: voiceMode }, icon('mic'), 'מצב דיבור'),
       h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > Core.MAX_TREES ? ` (בתבנית יש מקום ל-${Core.MAX_TREES})` : ''))),
       search,

@@ -43,7 +43,10 @@
     const markBtn = btn('סימון עצים', 'נגיעה בעץ של המודד או במקום ריק', () => setMode('mark'));
     const areaBtn = btn('תחימה', 'תחימת קטע בפוליגון', () => setMode('area'));
     const undoBtn = btn('↶', 'בטל פעולה אחרונה', doUndo);
-    const gpsBtn = itm ? btn('📍', 'המיקום שלי', toggleGps) : null;
+    // GPS: במדידה ברשת ישראל, או בשרטוט על דף אחרי כיול
+    const canGps = () => itm || !!(root.proj4 && root.Plan.isPaper(s.plan) && s.plan.cal);
+    const gpsBtn = btn('📍', 'המיקום שלי', toggleGps);
+    gpsBtn.hidden = !canGps();
     const layersBtn = btn('⋯', 'תצוגה', showLayers);
     const ov = h('div', { class: 'annot map-ov plan-ov' },
       h('div', { class: 'annot-bar' },
@@ -71,7 +74,10 @@
     }
     const renderer = L.canvas({ padding: 0.5 });
     const lines = g.paths.map(p => { const out = []; for (let i = 0; i < p.length; i += 2) out.push(toMap(p[i] + g.ox, p[i + 1] + g.oy)); return out; });
-    const planLayer = L.polyline(lines, { renderer, color: '#333', weight: 1, opacity: 0.9, interactive: false }).addTo(map);
+    // מעל תמונה (PDF): קווים שקופים למחצה, כדי שהצבעים והטקסט של השרטוט ייראו
+    const planLayer = L.polyline(lines, { renderer, color: g.image ? '#000' : '#333', weight: 1, opacity: g.image ? 0.45 : 0.9, interactive: false }).addTo(map);
+    // שרטוט שהוא תמונה (סריקה, צילום)
+    if (g.image && ctx.imageUrl) L.imageOverlay(ctx.imageUrl, [toMap(0, 0), toMap(g.image.w, g.image.h)], { interactive: false }).addTo(map).bringToBack();
     const v = g.view;
     const fit = L.latLngBounds([toMap(v[0] + g.ox, v[1] + g.oy), toMap(v[2] + g.ox, v[3] + g.oy)]);
     // חוזרים למקום האחרון שבו עבדו על הסקר הזה
@@ -81,6 +87,8 @@
     else if (last) map.setView(last.c, last.z); else map.fitBounds(fit, { padding: [20, 20] });
     await setBase();
     map.setMinZoom(Math.floor(map.getBoundsZoom(fit) - 3));
+    // בשרטוט על דף: עד פי 64 מהדף כולו (מעבר לזה רואים רק פיקסלים)
+    if (!itm) map.setMaxZoom(Math.ceil(map.getBoundsZoom(fit) + 6));
 
     // ---------- שכבת עצים, מספרים ותחומים (קנבס אחד שמצויר מחדש בכל תזוזה) ----------
     const llCache = new Map();
@@ -122,7 +130,8 @@
     function ppm() {
       const c = map.getCenter(), p = map.latLngToContainerPoint(c);
       const m = fromMap(c), q = map.latLngToContainerPoint(toMap(m[0] + 1, m[1]));
-      return Math.max(0.01, Math.hypot(q.x - p.x, q.y - p.y));
+      // פיקסלים ליחידת שרטוט, כפול יחידות למטר (בשרטוט על דף: לפי קנה המידה)
+      return Math.max(0.01, Math.hypot(q.x - p.x, q.y - p.y) * root.Plan.upm(s.plan));
     }
 
     function draw(cx, size, pad) {
@@ -226,7 +235,7 @@
       }
       // מיקום GPS
       if (gpsPos) {
-        const p = P(L.latLng(gpsPos.lat, gpsPos.lon)), r = Math.max(8, gpsPos.acc * k);
+        const p = P(gpsLL()), r = Math.max(8, gpsPos.acc * k);
         cx.beginPath(); cx.arc(p.x, p.y, r, 0, 7); cx.fillStyle = 'rgba(33,150,243,.15)'; cx.fill();
         cx.beginPath(); cx.arc(p.x, p.y, 7, 0, 7); cx.fillStyle = '#2196f3'; cx.fill(); cx.lineWidth = 3; cx.strokeStyle = '#fff'; cx.stroke();
       }
@@ -278,6 +287,7 @@
     }
     map.on('click', e => {
       const pt = e.containerPoint, xy = fromMap(e.latlng);
+      if (calStep) return calTap(xy);
       if (mode === 'area') return areaTap(pt, xy);
       if (moving) return moveTo(xy);
       const hit = hitAt(pt);
@@ -289,7 +299,8 @@
     function nearestNum() { return root.Core.nextNum(s.trees); }
     function setXY(t, x, y) {
       t.px = Math.round(x * 100) / 100; t.py = Math.round(y * 100) / 100;
-      if (itm) { const ll = root.Plan.toLL(t.px, t.py); t.lat = ll[0]; t.lon = ll[1]; t.acc = null; t.gpsSrc = 'plan'; t.gpsTime = Date.now(); }
+      const w = root.proj4 && root.Plan.itmOf(s.plan, t.px, t.py);
+      if (w) { const ll = root.Plan.toLL(w[0], w[1]); t.lat = ll[0]; t.lon = ll[1]; t.acc = null; t.gpsSrc = 'plan'; t.gpsTime = Date.now(); }
     }
     function markSurveyor(sv) {
       const t = ctx.makeTree();
@@ -450,12 +461,62 @@
         h('div', { class: 'card stack', style: 'max-width:380px;width:92%' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'תצוגה'),
           itm ? row('תצלום אוויר מתחת למדידה (צריך קליטה)', aerial, v => { aerial = v; DB.setKV('planAerial', v); setBase(); }) : null,
-          row('מספרי המודד (בזום קרוב)', showSurv, v => { showSurv = v; DB.setKV('planShowSurv', v); redraw(); }),
+          surveyor.length ? row('מספרי המודד (בזום קרוב)', showSurv, v => { showSurv = v; DB.setKV('planShowSurv', v); redraw(); }) : null,
+          root.Plan.isPaper(s.plan) ? paperBox(() => box) : null,
           h('button', { class: 'btn', onclick: () => { map.fitBounds(fit, { padding: [20, 20] }); box.remove(); } }, 'כל המדידה'),
           h('div', { class: 'muted small' }, `${surveyor.length} עצים של המודד, ${myTrees().length} מסומנים`),
           h('button', { class: 'btn primary', onclick: () => box.remove() }, 'סגור')));
       document.body.append(box);
     }
+    // ---------- שרטוט על דף: קנה מידה וכיול ----------
+    // מיקום GPS במפה: רשת ישראל, ובשרטוט מכויל דרך הכיול ההפוך
+    function gpsLL() {
+      if (itm) return L.latLng(gpsPos.lat, gpsPos.lon);
+      const w = root.Plan.fromLL(gpsPos.lat, gpsPos.lon), q = root.Plan.fromWorld(s.plan, w[0], w[1]);
+      return toMap(q[0], q[1]);
+    }
+    function paperBox(getBox) {
+      const close = () => getBox().remove();
+      const p = s.plan;
+      const sc = h('input', { class: 'in', inputmode: 'numeric', value: p.scale || 250, style: 'max-width:110px;text-align:center',
+        onchange: e => { const v = parseFloat(String(e.target.value).replace(/^1\s*:\s*/, '')); if (v > 0) { p.scale = v; refreshLL(); changed(); } } });
+      return h('div', { class: 'stack', style: 'border-top:1px solid var(--line, #ddd);padding-top:10px' },
+        h('b', {}, 'שרטוט בלי קואורדינטות'),
+        h('label', { class: 'row', style: 'gap:8px;align-items:center' }, 'קנה מידה 1:', sc),
+        h('div', { class: 'muted small' }, p.cal ? '✓ מכויל: העצים יוצאים באקסל בקואורדינטות של המדידה.' : 'בלי כיול העצים יוצאים באקסל במטרים לפי קנה המידה, וב-BricsCAD מזיזים אותם לפי נקודת בסיס.'),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn', onclick: () => { close(); startCal(); } }, p.cal ? 'כיול מחדש' : 'כיול בשתי נקודות'),
+          p.cal ? h('button', { class: 'btn', onclick: () => { p.cal = null; refreshLL(); changed(); gpsBtn.hidden = !canGps(); close(); flash('הכיול בוטל'); } }, 'בטל כיול') : null));
+    }
+    let calStep = 0, calA = null;
+    function startCal() {
+      calStep = 1; calA = null; selId = null; moving = false; drawing = null;
+      sheet.classList.add('hidden');
+      hint.classList.remove('hidden'); hint.textContent = 'כיול: גע בנקודה ראשונה שהקואורדינטות שלה ידועות (צלב רשת, נקודת מדידה)';
+    }
+    function askXY(n) {
+      const v = prompt(`הקואורדינטות של נקודה ${n} (X,Y)`, '');
+      if (v == null) return null;
+      const m = String(v).match(/-?\d+(?:\.\d+)?/g);
+      if (!m || m.length < 2) { alert('צריך שני מספרים: X ואז Y, למשל 220150.5, 632900.2'); return askXY(n); }
+      return [+m[0], +m[1]];
+    }
+    function calTap(xy) {
+      const W = askXY(calStep);
+      if (!W) { calStep = 0; renderSheet(); return; }
+      if (calStep === 1) { calA = [xy, W]; calStep = 2; hint.textContent = 'כיול: עכשיו גע בנקודה שנייה, רחוקה מהראשונה'; return; }
+      const c = root.Plan.calibrate(calA[0], calA[1], xy, W);
+      calStep = 0;
+      if (!c) { alert('הנקודות זהות. נסה שוב עם שתי נקודות רחוקות זו מזו'); renderSheet(); return; }
+      const old = s.plan.cal;
+      s.plan.cal = c;
+      undo.push({ what: 'כיול', run: () => { s.plan.cal = old; refreshLL(); gpsBtn.hidden = !canGps(); } });
+      refreshLL(); gpsBtn.hidden = !canGps(); changed(); renderSheet();
+      flash(`מכויל · קנה מידה 1:${Math.round(1000 / root.Plan.upm(s.plan))}`);
+    }
+    // אחרי שינוי קנה מידה או כיול: נ"צ של העצים שמיקומם מהשרטוט
+    function refreshLL() { for (const t of myTrees()) if (t.lat == null || t.gpsSrc === 'plan') { delete t.lat; delete t.lon; setXY(t, t.px, t.py); } }
+
     function toggleGps() {
       if (gpsWatch != null) { navigator.geolocation.clearWatch(gpsWatch); gpsWatch = null; gpsPos = null; gpsBtn.classList.remove('on'); redraw(); return; }
       if (!navigator.geolocation) { toast('אין GPS בדפדפן הזה'); return; }
@@ -463,7 +524,7 @@
       let first = true;
       gpsWatch = navigator.geolocation.watchPosition(p => {
         gpsPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy };
-        if (first) { first = false; map.panTo([gpsPos.lat, gpsPos.lon]); }
+        if (first) { first = false; map.panTo(gpsLL()); }
         redraw();
       }, err => { toast(err.code === 1 ? 'צריך לאשר גישה למיקום בדפדפן' : 'אין מיקום כרגע', 3000); }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
     }
