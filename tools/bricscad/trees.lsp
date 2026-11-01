@@ -109,6 +109,16 @@
           (list 10 (+ (car c) *ts-r*) (cadr c)) '(42 . 1.0))
     (ts:xd num "ring"))))
 
+; square frame around a tree that is not the surveyor's (added in the field)
+(defun ts:box (c lay num / q)
+  (setq q (+ *ts-r* 0.25))
+  (entmake (append
+    (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 lay) '(100 . "AcDbPolyline") '(90 . 4) '(70 . 1)
+          (cons 43 (* 0.6 *ts-w*))
+          (list 10 (- (car c) q) (- (cadr c) q)) (list 10 (+ (car c) q) (- (cadr c) q))
+          (list 10 (+ (car c) q) (+ (cadr c) q)) (list 10 (- (car c) q) (+ (cadr c) q)))
+    (ts:xd num "box"))))
+
 (defun ts:text (p s num)
   (entmake (append
     (list '(0 . "TEXT") '(100 . "AcDbEntity") (cons 8 (ts:layer *ts-num-layer*)) '(100 . "AcDbText")
@@ -189,6 +199,9 @@
         ;; ring: always at the tree, color by designation
         (if (setq e (ts:find old num "ring")) (entdel e))
         (ts:ring c lay num)
+        ;; square frame: a tree added in the field (no surveyor tree, column H empty)
+        (if (setq e (ts:find old num "box")) (entdel e))
+        (if (= (ts:str (nth 7 r)) "") (ts:box c lay num))
         ;; number: keep it where it is (it may have been moved by hand), else at the place from the app
         (if (setq e (ts:find old num "num"))
           (progn (setq tp (ts:text-pt e)) (entmod (subst (cons 1 num) (assoc 1 (entget e)) (entget e))))
@@ -198,7 +211,7 @@
         (ts:lead c tp num))))
   ;; trees that are no longer in the Excel
   (foreach o old
-    (if (and (member (cadr o) '("ring" "num" "lead")) (not (member (car o) seen)) (entget (caddr o)))
+    (if (and (member (cadr o) '("ring" "box" "num" "lead")) (not (member (car o) seen)) (entget (caddr o)))
       (entdel (caddr o))))
   ;; areas: drawn again every time
   (foreach o old (if (and (member (cadr o) '("area" "areaname")) (entget (caddr o))) (entdel (caddr o))))

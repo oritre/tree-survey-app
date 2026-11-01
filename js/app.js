@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.33.0';
+  const APP_VERSION = '1.34.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -112,6 +112,7 @@
 
   // ---------- ניווט ----------
   window.addEventListener('hashchange', route);
+  initPlanDrop();
   async function route() {
     const hash = location.hash || '#/';
     const m = /^#\/s\/([^/]+)(?:\/(\w+))?(?:\/t\/(.+))?/.exec(hash);
@@ -612,8 +613,10 @@
       document.body.append(inp); inp.click();
     });
   }
-  async function loadPlanFile() {
-    const f = await pickFile('.dwg,.dxf,.pdf,.dwfx,.dwf,.jpg,.jpeg,.png,.webp,image/*,application/pdf');
+  const PLAN_ACCEPT = '.dwg,.dxf,.pdf,.dwfx,.dwf,.jpg,.jpeg,.png,.webp,image/*,application/pdf';
+  const PLAN_EXT = /\.(dwg|dxf|pdf|dwfx|dwf|jpe?g|png|webp)$/i;
+  async function loadPlanFile(file) {
+    const f = file || await pickFile(PLAN_ACCEPT);
     if (!f) return false;
     toast('קורא את המדידה…', 2500);
     let r;
@@ -626,7 +629,7 @@
     await DB.putPhoto({ id: planKey({ id }), geom: g });
     await DB.putPhoto({ id: 'plandwg:' + id, blob: new Blob([f], { type: f.type || 'application/octet-stream' }), name: f.name });
     if (r.image) await DB.putPhoto({ id: 'planimg:' + id, blob: r.image });
-    cur.plan = { id, name: g.name, file: f.name, crs: g.crs, treeBlock: g.treeBlock, added: Date.now() };
+    cur.plan = { id, name: g.name, file: f.name, crs: g.crs, treeBlock: g.treeBlock, added: Date.now(), gv: g.v || 1 };
     if (g.crs === 'paper') cur.plan.scale = old && old.scale || 250;
     if (old) for (const k of [planKey(old), 'plandwg:' + old.id, 'planimg:' + old.id]) DB.deletePhoto(k).catch(() => {});
     await saveNow(); Sync.kick(true);
@@ -634,8 +637,49 @@
     toast(g.crs === 'paper' ? 'השרטוט נטען. קנה מידה וכיול: בכפתור ⋯ במסך המדידה' : `המדידה נטענה${nsv ? `: ${nsv} עצים של המודד` : ''}${g.crs === 'itm' ? '' : ' (לא ברשת ישראל, בלי תצלום אוויר ו-GPS)'}`, 4500);
     return true;
   }
+  // גרירת קובץ מדידה מהמחשב אל מסך הסקר לבנייה
+  function planDropOk() {
+    return cur && Construction.isConstruction(cur) && location.hash.startsWith('#/s/') && !document.querySelector('.plan-ov, .modal');
+  }
+  function initPlanDrop() {
+    let depth = 0, mark = null;
+    const hasFiles = e => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+    const hide = () => { depth = 0; if (mark) { mark.remove(); mark = null; } };
+    window.addEventListener('dragenter', e => {
+      if (!hasFiles(e) || !planDropOk()) return;
+      e.preventDefault(); depth++;
+      if (!mark) { mark = h('div', { class: 'drop-plan' }, h('div', {}, icon('pin'), cur.plan ? 'שחרר כדי להחליף את קובץ המדידה' : 'שחרר כדי לטעון את המדידה')); document.body.append(mark); }
+    });
+    window.addEventListener('dragover', e => { if (hasFiles(e) && planDropOk()) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+    window.addEventListener('dragleave', e => { if (mark && --depth <= 0) hide(); });
+    window.addEventListener('drop', async e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); hide();
+      if (!planDropOk()) return;
+      const f = [...e.dataTransfer.files].find(x => PLAN_EXT.test(x.name)) || null;
+      if (!f) { toast('הקובץ הזה לא נתמך. אפשר DWG, DXF, PDF, DWFx או תמונה', 3500); return; }
+      if (cur.plan && !confirm(`להחליף את קובץ המדידה ב-${f.name}? העצים שסימנת נשארים באותן קואורדינטות.`)) return;
+      if (await loadPlanFile(f)) renderSurvey();
+    });
+  }
+  const GEOM_V = 2; // 2: צבעים, סוגי קו, טקסטים ומילויים מהקובץ
   async function planGeom(p) {
     let d = await DB.getPhoto(planKey(p)), g = d && d.geom;
+    // מדידה שנקראה בגרסה קודמת: קוראים שוב מהקובץ המקורי ששמור במכשיר, כדי שתיראה כמו ב-BricsCAD
+    if (g && (g.v || 1) < GEOM_V && !Plan.isPaper(p)) {
+      const o = await DB.getPhoto('plandwg:' + p.id);
+      if (o && o.blob) {
+        try {
+          const r = await Plan.parseFile(new File([o.blob], p.file || o.name || 'plan.dwg'));
+          if (r.geom.paths.length) {
+            g = r.geom;
+            await DB.putPhoto({ id: planKey(p), geom: g });
+            p.gv = GEOM_V; p.odGeoId = null; // עולה שוב לגוגל דרייב, כדי שגם המכשיר השני יקבל
+            await saveNow(); Sync.kick();
+          }
+        } catch (e) { console.warn('plan re-read', e); }
+      } else if (p.gv >= GEOM_V && p.odGeoId) g = null; // במכשיר אחר כבר נקראה מחדש: מורידים
+    }
     // נטענה במכשיר אחר: מגוגל דרייב
     if (!g) {
       if (!p.odGeoId) return null;
@@ -1337,7 +1381,7 @@
     return h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
       h('h3', { style: 'margin:0;font-size:18px' }, 'מדידה (DWG)'),
       p ? h('div', {}, h('b', {}, p.file || p.name), h('div', { class: 'muted small' }, `${marked} עצים מסומנים במדידה` + (p.crs === 'itm' ? '' : p.crs === 'paper' ? ` · שרטוט על דף, ${p.cal ? 'מכויל' : '1:' + (p.scale || 250)}` : ' · לא ברשת ישראל')))
-        : h('div', { class: 'muted small' }, 'קובץ המדידה של המודד: DWG או DXF (עם קואורדינטות), או PDF, DWFx ותמונה (שרטוט על דף). בטאבלט מסמנים עליו את העצים, והמיקומים יוצאים באקסל לגיליון "מדידה".'),
+        : h('div', { class: 'muted small' }, 'קובץ המדידה של המודד: DWG או DXF (עם קואורדינטות), או PDF, DWFx ותמונה (שרטוט על דף). בטאבלט מסמנים עליו את העצים, והמיקומים יוצאים באקסל לגיליון "מדידה". במחשב אפשר גם לגרור את הקובץ לכאן.'),
       h('div', { class: 'row' },
         p ? h('button', { class: 'btn primary', onclick: () => openPlan() }, 'פתח מדידה') : null,
         h('button', { class: 'btn', onclick: async () => {

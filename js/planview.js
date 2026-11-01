@@ -29,8 +29,14 @@
     let selPoly = null;         // תחום נבחר
     let moving = false;         // ממתין לנגיעה במיקום החדש
     let drawing = null;         // נקודות של תחום בציור
-    let showSurv = await DB.getKV('planShowSurv', true);
     let aerial = await DB.getKV('planAerial', false);
+    // רקע שחור כמו ב-BricsCAD, כשיש בקובץ צבעים (DWG, DXF)
+    const hasStyle = !!(g.st && g.st.length);
+    let dark = hasStyle && await DB.getKV('planDark', true);
+    // ברירת מחדל: הצבעים המקוריים. בלחיצה: כל השרטוט בצבע אחד (לבן על שחור, שחור על לבן), כדי שהעצים יבלטו
+    let mono = hasStyle && await DB.getKV('planMono', false);
+    // מספרי המודד: בקובץ עם תכונות גלויות הם כבר בשרטוט עצמו
+    let showSurv = await DB.getKV('planShowSurv', !hasStyle);
     const undo = [];
     let gpsWatch = null, gpsPos = null;
 
@@ -48,11 +54,15 @@
     const gpsBtn = btn('📍', 'המיקום שלי', toggleGps);
     gpsBtn.hidden = !canGps();
     const layersBtn = btn('⋯', 'תצוגה', showLayers);
+    const monoBtn = btn('צבע אחד', 'שרטוט בצבעים המקוריים / בצבע אחד', () => setMono(!mono));
+    monoBtn.hidden = !hasStyle;
+    function setMono(v) { mono = v; DB.setKV('planMono', v); monoBtn.textContent = mono ? 'צבעים' : 'צבע אחד'; monoBtn.classList.toggle('on', mono); redraw(); }
+    if (mono) { monoBtn.textContent = 'צבעים'; monoBtn.classList.add('on'); }
     const ov = h('div', { class: 'annot map-ov plan-ov' },
       h('div', { class: 'annot-bar' },
         h('span', { class: 'sp', style: 'font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, s.plan.name || 'מדידה'),
         h('div', { class: 'grp' }, markBtn, areaBtn),
-        undoBtn, gpsBtn, layersBtn,
+        undoBtn, gpsBtn, monoBtn, layersBtn,
         btn('סגור', null, () => close(), 'save')),
       h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, hint, legend, sheet));
     document.body.append(ov);
@@ -66,16 +76,15 @@
     let base = null;
     async function setBase() {
       if (base) { map.removeLayer(base); base = null; }
-      mapEl.classList.toggle('plan-white', !(aerial && itm));
+      mapEl.classList.toggle('plan-white', !(aerial && itm) && !dark);
+      mapEl.classList.toggle('plan-dark', !(aerial && itm) && dark);
       if (!(aerial && itm)) return;
       const pref = await DB.getKV('mapLayer', 'גוגל – לוויין');
       base = ctx.tileLayer(pref).addTo(map);
       base.bringToBack && base.bringToBack();
     }
-    const renderer = L.canvas({ padding: 0.5 });
-    const lines = g.paths.map(p => { const out = []; for (let i = 0; i < p.length; i += 2) out.push(toMap(p[i] + g.ox, p[i + 1] + g.oy)); return out; });
-    // מעל תמונה (PDF): קווים שקופים למחצה, כדי שהצבעים והטקסט של השרטוט ייראו
-    const planLayer = L.polyline(lines, { renderer, color: g.image ? '#000' : '#333', weight: 1, opacity: g.image ? 0.45 : 0.9, interactive: false }).addTo(map);
+    // השרטוט עצמו מצויר בקנבס של העצים (drawCad), עם הצבעים, סוגי הקו, המילויים והטקסטים מהקובץ
+    const cad = prepCad(g);
     // שרטוט שהוא תמונה (סריקה, צילום)
     if (g.image && ctx.imageUrl) L.imageOverlay(ctx.imageUrl, [toMap(0, 0), toMap(g.image.w, g.image.h)], { interactive: false }).addTo(map).bringToBack();
     const v = g.view;
@@ -119,7 +128,8 @@
         c.width = W * dpr; c.height = H * dpr; c.style.width = W + 'px'; c.style.height = H + 'px';
         L.DomUtil.setPosition(c, map.containerPointToLayerPoint([0, 0]).subtract(pad));
         const cx = c.getContext('2d');
-        cx.setTransform(dpr, 0, 0, dpr, pad.x, pad.y);
+        cx.setTransform(dpr, 0, 0, dpr, pad.x * dpr, pad.y * dpr);
+        drawCad(cx, size, pad, dpr);
         draw(cx, size, pad);
       },
     });
@@ -132,6 +142,90 @@
       const m = fromMap(c), q = map.latLngToContainerPoint(toMap(m[0] + 1, m[1]));
       // פיקסלים ליחידת שרטוט, כפול יחידות למטר (בשרטוט על דף: לפי קנה המידה)
       return Math.max(0.01, Math.hypot(q.x - p.x, q.y - p.y) * root.Plan.upm(s.plan));
+    }
+
+    // ---------- ציור השרטוט ----------
+    function onDark() { return dark && !(aerial && itm); }
+    function drawCad(cx, size, pad, dpr) {
+      if (!cad.n) return;
+      // מטריצה מקואורדינטות השרטוט (יחסית ל-ox,oy) לפיקסלים במסך. האזור קטן, אז ההיטל כמעט ליניארי
+      const c = fromMap(map.getCenter()), P = ll => map.latLngToContainerPoint(ll), d0 = 10 / root.Plan.upm(s.plan);
+      const p0 = P(toMap(c[0], c[1])), p1 = P(toMap(c[0] + d0, c[1])), p2 = P(toMap(c[0], c[1] + d0));
+      const a = (p1.x - p0.x) / d0, b = (p1.y - p0.y) / d0, cc = (p2.x - p0.x) / d0, dd = (p2.y - p0.y) / d0;
+      const wx = c[0] - g.ox, wy = c[1] - g.oy, e = p0.x - a * wx - cc * wy, f = p0.y - b * wx - dd * wy;
+      const sc = Math.hypot(a, b);   // פיקסלים ליחידת שרטוט
+      // האזור שבמסך, ביחידות השרטוט
+      const det = a * dd - b * cc;
+      const inv = (X, Y) => [(dd * (X - e) - cc * (Y - f)) / det, (-b * (X - e) + a * (Y - f)) / det];
+      const cs = [inv(-pad.x, -pad.y), inv(size.x + pad.x, -pad.y), inv(-pad.x, size.y + pad.y), inv(size.x + pad.x, size.y + pad.y)];
+      const vx0 = Math.min(...cs.map(q => q[0])), vx1 = Math.max(...cs.map(q => q[0])), vy0 = Math.min(...cs.map(q => q[1])), vy1 = Math.max(...cs.map(q => q[1]));
+      const fg = onDark() ? '#fff' : '#000';
+      const css = col => col < 0 || mono ? fg : '#' + col.toString(16).padStart(6, '0');
+      const W = () => cx.setTransform(dpr * a, dpr * b, dpr * cc, dpr * dd, dpr * (e + pad.x), dpr * (f + pad.y));
+      const S = () => cx.setTransform(dpr, 0, 0, dpr, pad.x * dpr, pad.y * dpr);
+      const vis = i => !(cad.bb[i * 4 + 2] < vx0 || cad.bb[i * 4] > vx1 || cad.bb[i * 4 + 3] < vy0 || cad.bb[i * 4 + 1] > vy1);
+      cx.save();
+      // מילויים
+      for (const fl of g.fills || []) {
+        cx.beginPath(); W();
+        for (let k = 1; k < fl.length; k++) { const L2 = fl[k]; for (let i = 0; i < L2.length; i += 2) i ? cx.lineTo(L2[i], L2[i + 1]) : cx.moveTo(L2[i], L2[i + 1]); cx.closePath(); }
+        S(); cx.fillStyle = css(g.st[fl[0]][0]); cx.fill('evenodd');
+      }
+      // קווים, לפי סגנון (צבע וקווקוו)
+      cx.lineWidth = 1; cx.lineCap = 'round'; cx.lineJoin = 'round';
+      if (!hasStyle) { cx.globalAlpha = g.image ? 0.45 : 0.9; }
+      for (const [si, list] of cad.groups) {
+        const st = hasStyle ? g.st[si] : [0x333333, -1];
+        cx.beginPath(); W();
+        let any = false;
+        for (const i of list) {
+          if (!vis(i)) continue;
+          const p = g.paths[i];
+          cx.moveTo(p[0], p[1]);
+          if (p.length === 4 && p[0] === p[2] && p[1] === p[3]) { cx.lineTo(p[0] + 0.5 / sc, p[1]); any = true; continue; }
+          for (let k = 2; k < p.length; k += 2) cx.lineTo(p[k], p[k + 1]);
+          any = true;
+        }
+        S();
+        if (!any) continue;
+        const dash = st[1] >= 0 && g.dash && g.dash[st[1]];
+        if (dash) {
+          let px = dash.map(v => Math.max(v === 0 ? 1 : 0.5, Math.abs(v) * sc));
+          if (dash[0] < 0) px = px.slice(1).concat(px[0]);
+          if (px.length % 2) px = px.concat(px);
+          cx.setLineDash(px.reduce((x, y) => x + y, 0) < 4 ? [] : px);
+        } else cx.setLineDash([]);
+        cx.strokeStyle = g.image ? '#000' : css(st[0]); cx.stroke();
+      }
+      cx.setLineDash([]); cx.globalAlpha = 1;
+      // טקסטים: גובה הטקסט בקובץ הוא גובה האותיות, ובקנבס גודל הגופן גדול בערך פי 1.4
+      cx.textAlign = 'left'; cx.textBaseline = 'alphabetic';
+      for (const t of g.texts || []) {
+        const [x, y, hh, r, str, si, ha, va, wf, lg] = t;
+        const hp = hh * sc;
+        if (hp < 2.2) continue;
+        if (x + hh * str.length < vx0 - hh * 2 || x - hh * str.length > vx1 + hh * 2 || y + hh * 4 < vy0 || y - hh * 4 > vy1) continue;
+        const X = a * x + cc * y + e, Y = b * x + dd * y + f;
+        const ang = Math.atan2(b * Math.cos(r) + dd * Math.sin(r), a * Math.cos(r) + cc * Math.sin(r));
+        const lines = str.split('\n');
+        const fsz = hp * 1.38;
+        cx.setTransform(dpr, 0, 0, dpr, pad.x * dpr, pad.y * dpr);
+        cx.translate(X, Y); cx.rotate(ang); if (wf !== 1) cx.scale(wf, 1);
+        cx.font = `${fsz.toFixed(1)}px Arimo, Arial, sans-serif`;
+        cx.fillStyle = css(g.st[si][0]);
+        const lh = hp * 1.667, tot = hp + (lines.length - 1) * lh;
+        let y0 = va === 3 ? hp : va === 2 ? hp - tot / 2 : va === 1 ? -(lines.length - 1) * lh : -(lines.length - 1) * lh;
+        if (lines.length === 1 && va === 2) y0 = hp / 2;
+        for (const ln of lines) {
+          // גופן SHX: הטקסט שמור בסדר חזותי ומצויר כמו שהוא, משמאל לימין. גופן TrueType: עברית רגילה מימין לשמאל
+          const txt = /[\u0590-\u05FF]/.test(ln) ? (lg ? '\u202B' : '\u202D') + ln + '\u202C' : ln;
+          const w = ha ? cx.measureText(txt).width : 0;
+          cx.fillText(txt, ha === 1 ? -w / 2 : ha === 2 ? -w : 0, y0);
+          y0 += lh;
+        }
+      }
+      cx.restore();
+      S();
     }
 
     function draw(cx, size, pad) {
@@ -171,7 +265,8 @@
         const p = P(llOf('s', t.x, t.y));
         if (!inView(p)) continue;
         cx.beginPath(); cx.arc(p.x, p.y, rS, 0, 7);
-        cx.fillStyle = 'rgba(255,255,255,.85)'; cx.fill(); cx.lineWidth = 1.5; cx.strokeStyle = SURV; cx.stroke();
+        if (hasStyle) { cx.lineWidth = 1.2; cx.strokeStyle = onDark() ? 'rgba(0,229,255,.7)' : 'rgba(0,120,160,.75)'; cx.stroke(); }
+        else { cx.fillStyle = 'rgba(255,255,255,.85)'; cx.fill(); cx.lineWidth = 1.5; cx.strokeStyle = SURV; cx.stroke(); }
         hits.push({ kind: 'sv', id: t.h, x: p.x, y: p.y, r: rS });
         occ.push(box(p.x - rS, p.y - rS, rS * 2, rS * 2));
         svPts.push({ t, p });
@@ -188,9 +283,16 @@
         cx.beginPath(); cx.arc(p.x, p.y, rM, 0, 7); cx.fillStyle = col; cx.fill();
         cx.lineWidth = 2; cx.strokeStyle = t.pref ? '#111' : '#fff'; cx.stroke();
         if (t.pref) { cx.beginPath(); cx.arc(p.x, p.y, Math.max(1.5, rM * 0.3), 0, 7); cx.fillStyle = '#111'; cx.fill(); }
+        // עץ חדש (לא של המודד): מסגרת מרובעת סביבו, כמו בפקודה ב-BricsCAD
+        else {
+          const q = rM + 8;
+          cx.lineWidth = 5; cx.strokeStyle = onDark() ? '#fff' : '#111'; cx.strokeRect(p.x - q, p.y - q, q * 2, q * 2);
+          cx.lineWidth = 2.5; cx.strokeStyle = col; cx.strokeRect(p.x - q, p.y - q, q * 2, q * 2);
+        }
         if (t.id === selId) { cx.beginPath(); cx.arc(p.x, p.y, rM + 6, 0, 7); cx.lineWidth = 3; cx.strokeStyle = '#ff1744'; cx.stroke(); }
+        const rr = t.pref ? rM : rM + 9;
         hits.push({ kind: 'my', id: t.id, x: p.x, y: p.y, r: rM });
-        occ.push(box(p.x - rM, p.y - rM, rM * 2, rM * 2));
+        occ.push(box(p.x - rr, p.y - rr, rr * 2, rr * 2));
       }
       // מספרים שלי: במקום פנוי ליד הנקודה, ואם צפוף אז רחוק יותר עם קו מוביל.
       // בזום רחוק (פחות מ-4 פיקסלים למטר) רק מספרים שיש להם מקום ליד הנקודה, כדי שלא ייווצר כוכב של קווים
@@ -202,7 +304,7 @@
         if (!inView(p)) continue;
         const txt = String(t.num || '?');
         const w = cx.measureText(txt).width + 10, hh = fs + 6;
-        const spot = place(p, w, hh, rM, occ.concat(placed), k < 4);
+        const spot = place(p, w, hh, t.pref ? rM : rM + 9, occ.concat(placed), k < 4);
         if (!spot) { hidden++; continue; }
         placed.push(spot.b);
         const st = root.Plan.statusOf(t.status);
@@ -277,15 +379,58 @@
     function hitAt(pt) {
       for (const b of boxes) if (pt.x >= b.b.x - 4 && pt.x <= b.b.x + b.b.w + 4 && pt.y >= b.b.y - 4 && pt.y <= b.b.y + b.b.h + 4) return { kind: 'my', id: b.id };
       let best = null, bd = Infinity;
+      // עץ של המודד נתפס גם בנגיעה לא מדויקת: עד כ-26 פיקסלים, ובזום קרוב עד 70 ס"מ ממנו
+      const svTol = Math.max(26, Math.min(60, 0.7 * ppm()));
       for (const t of hits) {
         const d = Math.hypot(t.x - pt.x, t.y - pt.y) - t.r;
         // העצים שלי קודמים לעצי המודד כשהם באותו מקום
         const dd = d - (t.kind === 'my' ? 4 : 0);
-        if (d < 16 && dd < bd) { bd = dd; best = t; }
+        if (d < (t.kind === 'sv' ? svTol : 16) && dd < bd) { bd = dd; best = t; }
       }
       return best;
     }
+    // גרירה של עץ שסימנתי (לא של המודד): לוחצים על העץ ומושכים. נגיעה בלי תזוזה בוחרת אותו כרגיל
+    let drag = null, skipClick = false;
+    const cPt = e => { const r = mapEl.getBoundingClientRect(); return L.point(e.clientX - r.left, e.clientY - r.top); };
+    mapEl.addEventListener('pointerdown', e => {
+      if (mode !== 'mark' || calStep || drawing || moving || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      const pt = cPt(e), hit = hitAt(pt);
+      const t = hit && hit.kind === 'my' && s.trees.find(x => x.id === hit.id && x.px != null);
+      if (!t || t.pref) return;
+      // נקודת הגרירה צריכה להיות על העץ עצמו, לא על המספר שלו
+      const p = map.latLngToContainerPoint(toMap(t.px, t.py));
+      if (Math.hypot(p.x - pt.x, p.y - pt.y) > 30) return;
+      e.stopPropagation();
+      drag = { t, id: e.pointerId, start: pt, off: L.point(p.x - pt.x, p.y - pt.y), old: [t.px, t.py, t.lat, t.lon, t.gpsSrc], moved: false };
+      map.dragging.disable();
+      try { mapEl.setPointerCapture(e.pointerId); } catch (_) {}
+    }, true);
+    mapEl.addEventListener('pointermove', e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const pt = cPt(e);
+      if (!drag.moved && Math.hypot(pt.x - drag.start.x, pt.y - drag.start.y) < 6) return;
+      drag.moved = true;
+      e.stopPropagation(); e.preventDefault();
+      const xy = fromMap(map.containerPointToLatLng(pt.add(drag.off)));
+      setXY(drag.t, xy[0], xy[1]);
+      selId = drag.t.id;
+      redraw();
+    }, true);
+    const endDrag = e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const d = drag; drag = null;
+      map.dragging.enable();
+      if (!d.moved) return;
+      e.stopPropagation();
+      skipClick = true; setTimeout(() => { skipClick = false; }, 400);
+      undo.push({ what: `הזזת עץ ${d.t.num}`, run: () => { [d.t.px, d.t.py, d.t.lat, d.t.lon, d.t.gpsSrc] = d.old; } });
+      changed(); renderSheet(); flash(`עץ ${d.t.num || ''} הוזז`);
+    };
+    mapEl.addEventListener('pointerup', endDrag, true);
+    mapEl.addEventListener('pointercancel', endDrag, true);
+
     map.on('click', e => {
+      if (skipClick) { skipClick = false; return; }
       const pt = e.containerPoint, xy = fromMap(e.latlng);
       if (calStep) return calTap(xy);
       if (mode === 'area') return areaTap(pt, xy);
@@ -369,7 +514,7 @@
       updateBar();
       if (mode === 'area') return renderAreaSheet();
       const t = selId && s.trees.find(x => x.id === selId);
-      if (!t) { sheet.classList.add('hidden'); hint.textContent = moving ? '' : 'נגיעה בעץ של המודד מסמנת אותו. נגיעה במקום ריק מוסיפה עץ.'; hint.classList.toggle('hidden', false); return; }
+      if (!t) { sheet.classList.add('hidden'); hint.textContent = moving ? '' : 'נגיעה בעץ של המודד מסמנת אותו. נגיעה במקום ריק מוסיפה עץ. עץ שהוספת אפשר לגרור.'; hint.classList.toggle('hidden', false); return; }
       hint.textContent = moving ? 'גע במיקום החדש של העץ' : '';
       hint.classList.toggle('hidden', !moving);
       const st = t.status ? root.Plan.statusOf(t.status) : null;
@@ -456,11 +601,13 @@
     // ---------- תצוגה ומיקום ----------
     function showLayers() {
       const row = (label, val, set) => h('label', { class: 'row', style: 'gap:10px;align-items:center;font-size:17px;padding:6px 0' },
-        h('input', { type: 'checkbox', checked: val ? '' : null, style: 'width:22px;height:22px', onchange: e => set(e.target.checked) }), label);
+        h('input', { type: 'checkbox', checked: !!val, style: 'width:22px;height:22px', onchange: e => set(e.target.checked) }), label);
       const box = h('div', { class: 'modal', onclick: e => { if (e.target === box) box.remove(); } },
         h('div', { class: 'card stack', style: 'max-width:380px;width:92%' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'תצוגה'),
-          itm ? row('תצלום אוויר מתחת למדידה (צריך קליטה)', aerial, v => { aerial = v; DB.setKV('planAerial', v); setBase(); }) : null,
+          itm ? row('תצלום אוויר מתחת למדידה (צריך קליטה)', aerial, v => { aerial = v; DB.setKV('planAerial', v); setBase(); redraw(); }) : null,
+          hasStyle ? row('רקע שחור (כמו ב-BricsCAD)', dark, v => { dark = v; DB.setKV('planDark', v); setBase(); redraw(); }) : null,
+          hasStyle ? row('שרטוט בצבע אחד (שחור או לבן לפי הרקע)', mono, v => setMono(v)) : null,
           surveyor.length ? row('מספרי המודד (בזום קרוב)', showSurv, v => { showSurv = v; DB.setKV('planShowSurv', v); redraw(); }) : null,
           root.Plan.isPaper(s.plan) ? paperBox(() => box) : null,
           h('button', { class: 'btn', onclick: () => { map.fitBounds(fit, { padding: [20, 20] }); box.remove(); } }, 'כל המדידה'),
@@ -534,7 +681,8 @@
       const items = root.Plan.STATUSES.filter(x => used.has(x.key)).map(x => [x.color, x.key]);
       if (used.has('')) items.push([MY, 'עץ מסומן']);
       items.push(['#fff', 'עץ של המודד']);
-      legend.replaceChildren(...items.map(([c, t]) => h('span', {}, h('i', { style: `background:${c}` }), t)));
+      if (myTrees().some(t => !t.pref)) items.push(['sq', 'עץ שהוספתי (בריבוע)']);
+      legend.replaceChildren(...items.map(([c, t]) => h('span', {}, c === 'sq' ? h('i', { class: 'sq' }) : h('i', { style: `background:${c}` }), t)));
     }
     function updateBar() {
       markBtn.classList.toggle('on', mode === 'mark'); areaBtn.classList.toggle('on', mode === 'area');
@@ -560,8 +708,22 @@
       $$('.plan-flash').forEach(x => x.remove());
       done(openId || null);
     }
-    void planLayer;
     return new Promise(r => { done = r; });
+  }
+
+  // הכנה לציור: קבוצות קווים לפי סגנון, ומלבן חוסם לכל קו
+  function prepCad(g) {
+    const n = (g.paths || []).length, bb = new Float32Array(n * 4), groups = new Map();
+    for (let i = 0; i < n; i++) {
+      const p = g.paths[i];
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let k = 0; k < p.length; k += 2) { const x = p[k], y = p[k + 1]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      bb[i * 4] = x0; bb[i * 4 + 1] = y0; bb[i * 4 + 2] = x1; bb[i * 4 + 3] = y1;
+      const si = g.ps ? g.ps[i] : 0;
+      let L = groups.get(si); if (!L) groups.set(si, L = []);
+      L.push(i);
+    }
+    return { n: n + ((g.texts || []).length) + ((g.fills || []).length), bb, groups };
   }
 
   root.PlanView = { open };
