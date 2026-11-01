@@ -453,3 +453,4 @@ textarea.doc-text.b { font-weight: 700; }
 /* גרירת קובץ מדידה */
 .drop-plan { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; background: rgba(10, 18, 9, .45); pointer-events: none; animation: fade-in .12s ease-out; }
 .drop-plan > div { display: flex; align-items: center; gap: 10px; padding: 28px 36px; border: 3px dashed var(--accent, #2e7d32); border-radius: 18px; background: var(--surface, #fff); font-size: 20px; font-weight: 600; }
+.plan-map.plan-dark, .plan-map.plan-dark .leaflet-container { background: #212830; }

@@ -9,7 +9,16 @@
     const u8 = new Uint8Array(bytes);
     let s = new TextDecoder('utf-8').decode(u8);
     // קבצים ישנים (לפני 2007) בקידוד של חלונות
-    if (s.includes('�')) { try { s = new TextDecoder('windows-1255').decode(u8); } catch (_) {} }
+    // הבתים 0x80-0x9F נשמרים כמו שהם: בשרטוטים ישנים אלה אותיות עבריות בקידוד DOS (Plan.decodeHeb)
+    if (s.includes('\uFFFD')) {
+      try {
+        const td = new TextDecoder('windows-1255'), map = [];
+        for (let b = 0; b < 256; b++) map[b] = b < 0x80 ? String.fromCharCode(b) : b < 0xA0 ? String.fromCharCode(b) : td.decode(new Uint8Array([b]));
+        let o = '';
+        for (let k = 0; k < u8.length; k += 8192) o += Array.from(u8.subarray(k, k + 8192), b => map[b]).join('');
+        s = o;
+      } catch (_) {}
+    }
     return s;
   }
   function pairs(text) {
@@ -21,7 +30,7 @@
   function parseDxf(bytes) {
     if (/^AutoCAD Binary DXF/.test(new TextDecoder('latin1').decode(new Uint8Array(bytes).subarray(0, 22)))) throw new Error('DXF בינארי לא נתמך. שמור אותו כ-DXF רגיל (ASCII) או כ-DWG');
     const P = pairs(decodeText(bytes));
-    const layers = [], blocks = [], entities = [];
+    const layers = [], blocks = [], entities = [], ltypes = [], styles = [], header = {};
     let i = 0;
     const num = v => parseFloat(v);
     // ישות אחת: אוסף הקודים עד הקוד 0 הבא
@@ -33,8 +42,76 @@
     }
     const get = (g, c, d) => { const x = g.find(p => p[0] === c); return x ? x[1] : d; };
     const getN = (g, c, d) => { const x = g.find(p => p[0] === c); return x ? num(x[1]) : d; };
+    // שדות משותפים: שכבה, צבע, סוג קו
+    function common(e) {
+      const g = e.g, tc = get(g, 420, null);
+      return { type: e.type, layer: get(g, 8, '0'), isVisible: getN(g, 60, 0) !== 1, handle: get(g, 5, ''),
+        colorIndex: getN(g, 62, 256), color: tc != null ? (parseInt(tc, 10) & 0xFFFFFF) : undefined, lineType: get(g, 6, ''), lineTypeScale: getN(g, 48, 1) };
+    }
+    // טקסט / תכונה: [קוד יישור אנכי] שונה בין TEXT (73) ל-ATTRIB (74)
+    const textOf = (g, vaCode) => ({ text: get(g, 1, ''), styleName: get(g, 7, ''), startPoint: { x: getN(g, 10, 0), y: getN(g, 20, 0) }, endPoint: { x: getN(g, 11, 0), y: getN(g, 21, 0) },
+      textHeight: getN(g, 40, 0), rotation: getN(g, 50, 0) * D2R, xScale: getN(g, 41, 1), halign: getN(g, 72, 0), valign: getN(g, vaCode, 0) });
+    // מילוי: הקודים באים ברצף, ולכן קוראים אותם לפי הסדר
+    function hatch(g, base) {
+      let k = 0;
+      const n = () => num(g[k++][1]);
+      const out = Object.assign(base, { patternName: get(g, 2, ''), solidFill: getN(g, 70, 0), boundaryPaths: [], definitionLines: [] });
+      while (k < g.length && g[k][0] !== 91) k++;
+      if (k >= g.length) return out;
+      const np = n();
+      for (let pI = 0; pI < np && k < g.length; pI++) {
+        while (k < g.length && g[k][0] !== 92) k++;
+        if (k >= g.length) break;
+        const flag = n(), bp = { boundaryPathTypeFlag: flag };
+        if (flag & 2) {
+          let hasB = 0, nv = 0; bp.vertices = []; bp.isClosed = true;
+          while (k < g.length && g[k][0] !== 93) { if (g[k][0] === 72) hasB = num(g[k][1]); if (g[k][0] === 73) bp.isClosed = num(g[k][1]) !== 0; k++; }
+          nv = n();
+          for (let v = 0; v < nv && k < g.length; v++) {
+            const vx = { x: 0, y: 0, bulge: 0 };
+            if (g[k][0] === 10) vx.x = n(); if (k < g.length && g[k][0] === 20) vx.y = n(); if (hasB && k < g.length && g[k][0] === 42) vx.bulge = n();
+            bp.vertices.push(vx);
+          }
+        } else {
+          while (k < g.length && g[k][0] !== 93) k++;
+          const ne = n(); bp.edges = [];
+          for (let q = 0; q < ne && k < g.length; q++) {
+            while (k < g.length && g[k][0] !== 72) k++;
+            const t = n(), ed = { type: t };
+            const rd = c => { while (k < g.length && g[k][0] !== c) k++; return n(); };
+            if (t === 1) { ed.start = { x: rd(10), y: rd(20) }; ed.end = { x: rd(11), y: rd(21) }; }
+            else if (t === 2) { ed.center = { x: rd(10), y: rd(20) }; ed.radius = rd(40); ed.startAngle = rd(50) * D2R; ed.endAngle = rd(51) * D2R; ed.isCCW = rd(73) !== 0; }
+            else if (t === 3) { ed.center = { x: rd(10), y: rd(20) }; ed.end = { x: rd(11), y: rd(21) }; ed.lengthOfMinorAxis = rd(40); ed.startAngle = rd(50) * D2R; ed.endAngle = rd(51) * D2R; ed.isCCW = rd(73) !== 0; }
+            else if (t === 4) {
+              ed.controlPoints = [];
+              while (k < g.length && g[k][0] !== 72 && g[k][0] !== 97 && g[k][0] !== 92 && g[k][0] !== 75) {
+                if (g[k][0] === 10) { const x = n(); const y = k < g.length && g[k][0] === 20 ? n() : 0; ed.controlPoints.push({ x, y }); } else k++;
+              }
+            }
+            bp.edges.push(ed);
+          }
+        }
+        out.boundaryPaths.push(bp);
+      }
+      // קווי הדוגמה
+      while (k < g.length && g[k][0] !== 78) k++;
+      if (k < g.length) {
+        const nl = n();
+        for (let q = 0; q < nl && k < g.length; q++) {
+          while (k < g.length && g[k][0] !== 53) k++;
+          if (k >= g.length) break;
+          const dl = { angle: n() * D2R, base: { x: 0, y: 0 }, offset: { x: 0, y: 0 }, dashLengths: [] };
+          if (g[k] && g[k][0] === 43) dl.base.x = n(); if (g[k] && g[k][0] === 44) dl.base.y = n();
+          if (g[k] && g[k][0] === 45) dl.offset.x = n(); if (g[k] && g[k][0] === 46) dl.offset.y = n();
+          const nd = g[k] && g[k][0] === 79 ? n() : 0;
+          for (let d = 0; d < nd && k < g.length && g[k][0] === 49; d++) dl.dashLengths.push(n());
+          out.definitionLines.push(dl);
+        }
+      }
+      return out;
+    }
     function toEnt(e, more) {
-      const g = e.g, base = { type: e.type, layer: get(g, 8, '0'), isVisible: getN(g, 60, 0) !== 1, handle: get(g, 5, '') };
+      const g = e.g, base = common(e);
       switch (e.type) {
         case 'LINE': return Object.assign(base, { startPoint: { x: getN(g, 10, 0), y: getN(g, 20, 0) }, endPoint: { x: getN(g, 11, 0), y: getN(g, 21, 0) } });
         case 'LWPOLYLINE': {
@@ -53,8 +130,20 @@
         case 'CIRCLE': return Object.assign(base, { center: { x: getN(g, 10, 0), y: getN(g, 20, 0) }, radius: getN(g, 40, 0) });
         case 'ARC': return Object.assign(base, { center: { x: getN(g, 10, 0), y: getN(g, 20, 0) }, radius: getN(g, 40, 0), startAngle: getN(g, 50, 0) * D2R, endAngle: getN(g, 51, 0) * D2R });
         case 'ELLIPSE': return Object.assign(base, { center: { x: getN(g, 10, 0), y: getN(g, 20, 0) }, majorAxisEndPoint: { x: getN(g, 11, 0), y: getN(g, 21, 0) }, axisRatio: getN(g, 40, 1), startAngle: getN(g, 41, 0), endAngle: getN(g, 42, Math.PI * 2) });
+        case 'POINT': return Object.assign(base, { position: { x: getN(g, 10, 0), y: getN(g, 20, 0) } });
+        case 'SOLID': case 'TRACE': return Object.assign(base, { corner1: { x: getN(g, 10, 0), y: getN(g, 20, 0) }, corner2: { x: getN(g, 11, 0), y: getN(g, 21, 0) },
+          corner3: { x: getN(g, 12, 0), y: getN(g, 22, 0) }, corner4: { x: getN(g, 13, getN(g, 12, 0)), y: getN(g, 23, getN(g, 22, 0)) } });
+        case 'TEXT': return Object.assign(base, textOf(g, 73));
+        case 'MTEXT': {
+          // הטקסט מחולק לקודי 3 ובסוף קוד 1
+          const parts = g.filter(p => p[0] === 3).map(p => p[1]).join('') + get(g, 1, '');
+          const dx = getN(g, 11, null), dy = getN(g, 21, 0);
+          return Object.assign(base, { text: parts, styleName: get(g, 7, ''), insertionPoint: { x: getN(g, 10, 0), y: getN(g, 20, 0) }, textHeight: getN(g, 40, 0),
+            attachmentPoint: getN(g, 71, 1), direction: dx != null ? { x: dx, y: dy } : null, rotation: getN(g, 50, 0) * D2R });
+        }
+        case 'HATCH': return hatch(g, base);
         case 'INSERT': return Object.assign(base, { name: get(g, 2, ''), insertionPoint: { x: getN(g, 10, 0), y: getN(g, 20, 0) }, xScale: getN(g, 41, 1), yScale: getN(g, 42, 1), rotation: getN(g, 50, 0) * D2R,
-          attribs: (more || []).filter(x => x.type === 'ATTRIB').map(x => ({ tag: get(x.g, 2, ''), text: { text: get(x.g, 1, '') } })) });
+          attribs: (more || []).filter(x => x.type === 'ATTRIB').map(x => Object.assign(common(x), { tag: get(x.g, 2, ''), flags: getN(x.g, 70, 0), text: textOf(x.g, 74) })) });
         default: return null;
       }
     }
@@ -78,6 +167,12 @@
         const name = (P[i + 1] || [])[1];
         i += 2;
         if (name === 'ENTITIES') readEntities(['ENDSEC'], entities);
+        else if (name === 'HEADER') {
+          while (i < P.length && !(P[i][0] === 0 && P[i][1] === 'ENDSEC')) {
+            if (P[i][0] === 9 && (P[i][1] === '$LTSCALE' || P[i][1] === '$CELTSCALE') && P[i + 1]) header[P[i][1].slice(1)] = num(P[i + 1][1]);
+            i++;
+          }
+        }
         else if (name === 'BLOCKS') {
           while (i < P.length && !(P[i][0] === 0 && P[i][1] === 'ENDSEC')) {
             if (P[i][0] === 0 && P[i][1] === 'BLOCK') {
@@ -91,14 +186,21 @@
           while (i < P.length && !(P[i][0] === 0 && P[i][1] === 'ENDSEC')) {
             if (P[i][0] === 0 && P[i][1] === 'LAYER') {
               const l = readEnt();
-              const nm = get(l.g, 2, null);
-              if (nm != null) layers.push({ name: nm, frozen: (getN(l.g, 70, 0) & 1) === 1, off: false, colorIndex: getN(l.g, 62, 7) });
+              const nm = get(l.g, 2, null), tc = get(l.g, 420, null);
+              if (nm != null) layers.push({ name: nm, frozen: (getN(l.g, 70, 0) & 1) === 1, off: false, colorIndex: getN(l.g, 62, 7), lineType: get(l.g, 6, 'CONTINUOUS'),
+                color: tc != null ? parseInt(tc, 10) & 0xFFFFFF : undefined });
+            } else if (P[i][0] === 0 && P[i][1] === 'LTYPE') {
+              const l = readEnt();
+              ltypes.push({ name: get(l.g, 2, ''), pattern: l.g.filter(p => p[0] === 49).map(p => ({ elementLength: num(p[1]) })) });
+            } else if (P[i][0] === 0 && P[i][1] === 'STYLE') {
+              const l = readEnt();
+              styles.push({ name: get(l.g, 2, ''), font: get(l.g, 3, '') });
             } else i++;
           }
         }
       } else i++;
     }
-    return { entities, tables: { BLOCK_RECORD: { entries: blocks }, LAYER: { entries: layers } } };
+    return { entities, header, tables: { BLOCK_RECORD: { entries: blocks }, LAYER: { entries: layers }, LTYPE: { entries: ltypes }, STYLE: { entries: styles } } };
   }
 
   // ---------- גאומטריה של דף (PDF, DWFx) ----------

@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.33.1';
+  const APP_VERSION = '1.34.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -629,7 +629,7 @@
     await DB.putPhoto({ id: planKey({ id }), geom: g });
     await DB.putPhoto({ id: 'plandwg:' + id, blob: new Blob([f], { type: f.type || 'application/octet-stream' }), name: f.name });
     if (r.image) await DB.putPhoto({ id: 'planimg:' + id, blob: r.image });
-    cur.plan = { id, name: g.name, file: f.name, crs: g.crs, treeBlock: g.treeBlock, added: Date.now() };
+    cur.plan = { id, name: g.name, file: f.name, crs: g.crs, treeBlock: g.treeBlock, added: Date.now(), gv: g.v || 1 };
     if (g.crs === 'paper') cur.plan.scale = old && old.scale || 250;
     if (old) for (const k of [planKey(old), 'plandwg:' + old.id, 'planimg:' + old.id]) DB.deletePhoto(k).catch(() => {});
     await saveNow(); Sync.kick(true);
@@ -662,8 +662,24 @@
       if (await loadPlanFile(f)) renderSurvey();
     });
   }
+  const GEOM_V = 2; // 2: צבעים, סוגי קו, טקסטים ומילויים מהקובץ
   async function planGeom(p) {
     let d = await DB.getPhoto(planKey(p)), g = d && d.geom;
+    // מדידה שנקראה בגרסה קודמת: קוראים שוב מהקובץ המקורי ששמור במכשיר, כדי שתיראה כמו ב-BricsCAD
+    if (g && (g.v || 1) < GEOM_V && !Plan.isPaper(p)) {
+      const o = await DB.getPhoto('plandwg:' + p.id);
+      if (o && o.blob) {
+        try {
+          const r = await Plan.parseFile(new File([o.blob], p.file || o.name || 'plan.dwg'));
+          if (r.geom.paths.length) {
+            g = r.geom;
+            await DB.putPhoto({ id: planKey(p), geom: g });
+            p.gv = GEOM_V; p.odGeoId = null; // עולה שוב לגוגל דרייב, כדי שגם המכשיר השני יקבל
+            await saveNow(); Sync.kick();
+          }
+        } catch (e) { console.warn('plan re-read', e); }
+      } else if (p.gv >= GEOM_V && p.odGeoId) g = null; // במכשיר אחר כבר נקראה מחדש: מורידים
+    }
     // נטענה במכשיר אחר: מגוגל דרייב
     if (!g) {
       if (!p.odGeoId) return null;

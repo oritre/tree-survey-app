@@ -29,8 +29,12 @@
     let selPoly = null;         // תחום נבחר
     let moving = false;         // ממתין לנגיעה במיקום החדש
     let drawing = null;         // נקודות של תחום בציור
-    let showSurv = await DB.getKV('planShowSurv', true);
     let aerial = await DB.getKV('planAerial', false);
+    // רקע שחור כמו ב-BricsCAD, כשיש בקובץ צבעים (DWG, DXF)
+    const hasStyle = !!(g.st && g.st.length);
+    let dark = hasStyle && await DB.getKV('planDark', true);
+    // מספרי המודד: בקובץ עם תכונות גלויות הם כבר בשרטוט עצמו
+    let showSurv = await DB.getKV('planShowSurv', !hasStyle);
     const undo = [];
     let gpsWatch = null, gpsPos = null;
 
@@ -66,16 +70,15 @@
     let base = null;
     async function setBase() {
       if (base) { map.removeLayer(base); base = null; }
-      mapEl.classList.toggle('plan-white', !(aerial && itm));
+      mapEl.classList.toggle('plan-white', !(aerial && itm) && !dark);
+      mapEl.classList.toggle('plan-dark', !(aerial && itm) && dark);
       if (!(aerial && itm)) return;
       const pref = await DB.getKV('mapLayer', 'גוגל – לוויין');
       base = ctx.tileLayer(pref).addTo(map);
       base.bringToBack && base.bringToBack();
     }
-    const renderer = L.canvas({ padding: 0.5 });
-    const lines = g.paths.map(p => { const out = []; for (let i = 0; i < p.length; i += 2) out.push(toMap(p[i] + g.ox, p[i + 1] + g.oy)); return out; });
-    // מעל תמונה (PDF): קווים שקופים למחצה, כדי שהצבעים והטקסט של השרטוט ייראו
-    const planLayer = L.polyline(lines, { renderer, color: g.image ? '#000' : '#333', weight: 1, opacity: g.image ? 0.45 : 0.9, interactive: false }).addTo(map);
+    // השרטוט עצמו מצויר בקנבס של העצים (drawCad), עם הצבעים, סוגי הקו, המילויים והטקסטים מהקובץ
+    const cad = prepCad(g);
     // שרטוט שהוא תמונה (סריקה, צילום)
     if (g.image && ctx.imageUrl) L.imageOverlay(ctx.imageUrl, [toMap(0, 0), toMap(g.image.w, g.image.h)], { interactive: false }).addTo(map).bringToBack();
     const v = g.view;
@@ -119,7 +122,8 @@
         c.width = W * dpr; c.height = H * dpr; c.style.width = W + 'px'; c.style.height = H + 'px';
         L.DomUtil.setPosition(c, map.containerPointToLayerPoint([0, 0]).subtract(pad));
         const cx = c.getContext('2d');
-        cx.setTransform(dpr, 0, 0, dpr, pad.x, pad.y);
+        cx.setTransform(dpr, 0, 0, dpr, pad.x * dpr, pad.y * dpr);
+        drawCad(cx, size, pad, dpr);
         draw(cx, size, pad);
       },
     });
@@ -132,6 +136,90 @@
       const m = fromMap(c), q = map.latLngToContainerPoint(toMap(m[0] + 1, m[1]));
       // פיקסלים ליחידת שרטוט, כפול יחידות למטר (בשרטוט על דף: לפי קנה המידה)
       return Math.max(0.01, Math.hypot(q.x - p.x, q.y - p.y) * root.Plan.upm(s.plan));
+    }
+
+    // ---------- ציור השרטוט ----------
+    function onDark() { return dark && !(aerial && itm); }
+    function drawCad(cx, size, pad, dpr) {
+      if (!cad.n) return;
+      // מטריצה מקואורדינטות השרטוט (יחסית ל-ox,oy) לפיקסלים במסך. האזור קטן, אז ההיטל כמעט ליניארי
+      const c = fromMap(map.getCenter()), P = ll => map.latLngToContainerPoint(ll), d0 = 10 / root.Plan.upm(s.plan);
+      const p0 = P(toMap(c[0], c[1])), p1 = P(toMap(c[0] + d0, c[1])), p2 = P(toMap(c[0], c[1] + d0));
+      const a = (p1.x - p0.x) / d0, b = (p1.y - p0.y) / d0, cc = (p2.x - p0.x) / d0, dd = (p2.y - p0.y) / d0;
+      const wx = c[0] - g.ox, wy = c[1] - g.oy, e = p0.x - a * wx - cc * wy, f = p0.y - b * wx - dd * wy;
+      const sc = Math.hypot(a, b);   // פיקסלים ליחידת שרטוט
+      // האזור שבמסך, ביחידות השרטוט
+      const det = a * dd - b * cc;
+      const inv = (X, Y) => [(dd * (X - e) - cc * (Y - f)) / det, (-b * (X - e) + a * (Y - f)) / det];
+      const cs = [inv(-pad.x, -pad.y), inv(size.x + pad.x, -pad.y), inv(-pad.x, size.y + pad.y), inv(size.x + pad.x, size.y + pad.y)];
+      const vx0 = Math.min(...cs.map(q => q[0])), vx1 = Math.max(...cs.map(q => q[0])), vy0 = Math.min(...cs.map(q => q[1])), vy1 = Math.max(...cs.map(q => q[1]));
+      const fg = onDark() ? '#fff' : '#000';
+      const css = col => col < 0 ? fg : '#' + col.toString(16).padStart(6, '0');
+      const W = () => cx.setTransform(dpr * a, dpr * b, dpr * cc, dpr * dd, dpr * (e + pad.x), dpr * (f + pad.y));
+      const S = () => cx.setTransform(dpr, 0, 0, dpr, pad.x * dpr, pad.y * dpr);
+      const vis = i => !(cad.bb[i * 4 + 2] < vx0 || cad.bb[i * 4] > vx1 || cad.bb[i * 4 + 3] < vy0 || cad.bb[i * 4 + 1] > vy1);
+      cx.save();
+      // מילויים
+      for (const fl of g.fills || []) {
+        cx.beginPath(); W();
+        for (let k = 1; k < fl.length; k++) { const L2 = fl[k]; for (let i = 0; i < L2.length; i += 2) i ? cx.lineTo(L2[i], L2[i + 1]) : cx.moveTo(L2[i], L2[i + 1]); cx.closePath(); }
+        S(); cx.fillStyle = css(g.st[fl[0]][0]); cx.fill('evenodd');
+      }
+      // קווים, לפי סגנון (צבע וקווקוו)
+      cx.lineWidth = 1; cx.lineCap = 'round'; cx.lineJoin = 'round';
+      if (!hasStyle) { cx.globalAlpha = g.image ? 0.45 : 0.9; }
+      for (const [si, list] of cad.groups) {
+        const st = hasStyle ? g.st[si] : [0x333333, -1];
+        cx.beginPath(); W();
+        let any = false;
+        for (const i of list) {
+          if (!vis(i)) continue;
+          const p = g.paths[i];
+          cx.moveTo(p[0], p[1]);
+          if (p.length === 4 && p[0] === p[2] && p[1] === p[3]) { cx.lineTo(p[0] + 0.5 / sc, p[1]); any = true; continue; }
+          for (let k = 2; k < p.length; k += 2) cx.lineTo(p[k], p[k + 1]);
+          any = true;
+        }
+        S();
+        if (!any) continue;
+        const dash = st[1] >= 0 && g.dash && g.dash[st[1]];
+        if (dash) {
+          let px = dash.map(v => Math.max(v === 0 ? 1 : 0.5, Math.abs(v) * sc));
+          if (dash[0] < 0) px = px.slice(1).concat(px[0]);
+          if (px.length % 2) px = px.concat(px);
+          cx.setLineDash(px.reduce((x, y) => x + y, 0) < 4 ? [] : px);
+        } else cx.setLineDash([]);
+        cx.strokeStyle = g.image ? '#000' : css(st[0]); cx.stroke();
+      }
+      cx.setLineDash([]); cx.globalAlpha = 1;
+      // טקסטים: גובה הטקסט בקובץ הוא גובה האותיות, ובקנבס גודל הגופן גדול בערך פי 1.4
+      cx.textAlign = 'left'; cx.textBaseline = 'alphabetic';
+      for (const t of g.texts || []) {
+        const [x, y, hh, r, str, si, ha, va, wf, lg] = t;
+        const hp = hh * sc;
+        if (hp < 2.2) continue;
+        if (x + hh * str.length < vx0 - hh * 2 || x - hh * str.length > vx1 + hh * 2 || y + hh * 4 < vy0 || y - hh * 4 > vy1) continue;
+        const X = a * x + cc * y + e, Y = b * x + dd * y + f;
+        const ang = Math.atan2(b * Math.cos(r) + dd * Math.sin(r), a * Math.cos(r) + cc * Math.sin(r));
+        const lines = str.split('\n');
+        const fsz = hp * 1.38;
+        cx.setTransform(dpr, 0, 0, dpr, pad.x * dpr, pad.y * dpr);
+        cx.translate(X, Y); cx.rotate(ang); if (wf !== 1) cx.scale(wf, 1);
+        cx.font = `${fsz.toFixed(1)}px Arimo, Arial, sans-serif`;
+        cx.fillStyle = css(g.st[si][0]);
+        const lh = hp * 1.667, tot = hp + (lines.length - 1) * lh;
+        let y0 = va === 3 ? hp : va === 2 ? hp - tot / 2 : va === 1 ? -(lines.length - 1) * lh : -(lines.length - 1) * lh;
+        if (lines.length === 1 && va === 2) y0 = hp / 2;
+        for (const ln of lines) {
+          // גופן SHX: הטקסט שמור בסדר חזותי ומצויר כמו שהוא, משמאל לימין. גופן TrueType: עברית רגילה מימין לשמאל
+          const txt = /[\u0590-\u05FF]/.test(ln) ? (lg ? '\u202B' : '\u202D') + ln + '\u202C' : ln;
+          const w = ha ? cx.measureText(txt).width : 0;
+          cx.fillText(txt, ha === 1 ? -w / 2 : ha === 2 ? -w : 0, y0);
+          y0 += lh;
+        }
+      }
+      cx.restore();
+      S();
     }
 
     function draw(cx, size, pad) {
@@ -171,7 +259,8 @@
         const p = P(llOf('s', t.x, t.y));
         if (!inView(p)) continue;
         cx.beginPath(); cx.arc(p.x, p.y, rS, 0, 7);
-        cx.fillStyle = 'rgba(255,255,255,.85)'; cx.fill(); cx.lineWidth = 1.5; cx.strokeStyle = SURV; cx.stroke();
+        if (hasStyle) { cx.lineWidth = 1.2; cx.strokeStyle = onDark() ? 'rgba(0,229,255,.7)' : 'rgba(0,120,160,.75)'; cx.stroke(); }
+        else { cx.fillStyle = 'rgba(255,255,255,.85)'; cx.fill(); cx.lineWidth = 1.5; cx.strokeStyle = SURV; cx.stroke(); }
         hits.push({ kind: 'sv', id: t.h, x: p.x, y: p.y, r: rS });
         occ.push(box(p.x - rS, p.y - rS, rS * 2, rS * 2));
         svPts.push({ t, p });
@@ -460,7 +549,8 @@
       const box = h('div', { class: 'modal', onclick: e => { if (e.target === box) box.remove(); } },
         h('div', { class: 'card stack', style: 'max-width:380px;width:92%' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'תצוגה'),
-          itm ? row('תצלום אוויר מתחת למדידה (צריך קליטה)', aerial, v => { aerial = v; DB.setKV('planAerial', v); setBase(); }) : null,
+          itm ? row('תצלום אוויר מתחת למדידה (צריך קליטה)', aerial, v => { aerial = v; DB.setKV('planAerial', v); setBase(); redraw(); }) : null,
+          hasStyle ? row('רקע שחור (כמו ב-BricsCAD)', dark, v => { dark = v; DB.setKV('planDark', v); setBase(); redraw(); }) : null,
           surveyor.length ? row('מספרי המודד (בזום קרוב)', showSurv, v => { showSurv = v; DB.setKV('planShowSurv', v); redraw(); }) : null,
           root.Plan.isPaper(s.plan) ? paperBox(() => box) : null,
           h('button', { class: 'btn', onclick: () => { map.fitBounds(fit, { padding: [20, 20] }); box.remove(); } }, 'כל המדידה'),
@@ -560,8 +650,22 @@
       $$('.plan-flash').forEach(x => x.remove());
       done(openId || null);
     }
-    void planLayer;
     return new Promise(r => { done = r; });
+  }
+
+  // הכנה לציור: קבוצות קווים לפי סגנון, ומלבן חוסם לכל קו
+  function prepCad(g) {
+    const n = (g.paths || []).length, bb = new Float32Array(n * 4), groups = new Map();
+    for (let i = 0; i < n; i++) {
+      const p = g.paths[i];
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let k = 0; k < p.length; k += 2) { const x = p[k], y = p[k + 1]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      bb[i * 4] = x0; bb[i * 4 + 1] = y0; bb[i * 4 + 2] = x1; bb[i * 4 + 3] = y1;
+      const si = g.ps ? g.ps[i] : 0;
+      let L = groups.get(si); if (!L) groups.set(si, L = []);
+      L.push(i);
+    }
+    return { n: n + ((g.texts || []).length) + ((g.fills || []).length), bb, groups };
   }
 
   root.PlanView = { open };
