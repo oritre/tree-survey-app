@@ -510,6 +510,8 @@
 
     zip.file('xl/worksheets/sheet1.xml', sheet.toXml());
     zip.file('xl/worksheets/sheet4.xml', params.toXml());
+    // עצים שסומנו על מדידת המודד: גיליון "מדידה" עם המיקומים, בשביל הפקודה שמעדכנת את ה-DWG ב-BricsCAD
+    if (root.Plan && survey.trees.some(t => t.px != null)) await root.Plan.addSheet(zip, survey);
     // חישוב מלא בפתיחה
     let wb = await zip.file('xl/workbook.xml').async('string');
     wb = wb.replace(/<calcPr([^>]*?)\s*\/>/, (m, a) => `<calcPr${a.replace(/\sfullCalcOnLoad="\d"/, '')} fullCalcOnLoad="1"/>`);

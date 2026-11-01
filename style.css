@@ -423,3 +423,28 @@ textarea.doc-text.b { font-weight: 700; }
 .voice-log div.warn { background: #7a1d1dc0; }
 .voice-log q { opacity: .85; }
 .voice-help { font-size: 13px; opacity: .8; text-shadow: 0 1px 3px #000; }
+
+/* מסך המדידה (סקר לבנייה) */
+.plan-map.plan-white, .plan-map.plan-white .leaflet-container { background: #fff; }
+.plan-map { background: #fff; }
+.plan-canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+.plan-ov .annot-bar .txt.on { background: #2f6b2f; outline: 2px solid #fff; }
+.plan-ov .annot-bar button.on { background: #1565c0; }
+.plan-hint { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 600; background: rgba(17,17,17,.82); color: #fff;
+  padding: 6px 12px; border-radius: 10px; font-size: 15px; pointer-events: none; max-width: 90%; text-align: center; }
+.plan-hint:empty { display: none; }
+.plan-sheet { position: absolute; left: 8px; right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); z-index: 650; background: var(--surface, #fff); color: var(--text, #111);
+  border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.35); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; max-width: 640px; margin: 0 auto; }
+.plan-sheet-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-inline-end: 40px; position: relative; }
+.plan-x { position: absolute; inset-inline-end: 0; top: -4px; width: 40px; height: 40px; font-size: 20px; background: transparent; border: 0; cursor: pointer; color: inherit; }
+.plan-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; }
+.plan-chip::before { content: ''; width: 14px; height: 14px; border-radius: 50%; background: var(--c); border: 1px solid #333; }
+.plan-legend { position: absolute; top: 8px; inset-inline-start: 8px; z-index: 600; display: flex; flex-direction: column; gap: 3px; background: rgba(255,255,255,.88);
+  color: #111; border-radius: 8px; padding: 6px 8px; font-size: 12px; pointer-events: none; }
+.plan-legend span { display: flex; align-items: center; gap: 6px; }
+.plan-legend i { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #555; display: inline-block; }
+.plan-flash { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 90; background: #111; color: #fff; padding: 8px 16px;
+  border-radius: 20px; font-size: 17px; font-weight: 600; pointer-events: none; box-shadow: 0 4px 14px rgba(0,0,0,.3); }
+.plan-tag { align-items: center; justify-content: space-between; gap: 8px; background: var(--surface-2); border-radius: 10px; padding: 6px 10px; }
+.plan-ov .leaflet-control-zoom { margin-top: 64px; }
+@media (max-width: 600px) { .plan-flash { top: 128px; } .plan-ov .leaflet-control-zoom { margin-top: 8px; } }
