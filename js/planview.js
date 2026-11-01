@@ -283,9 +283,16 @@
         cx.beginPath(); cx.arc(p.x, p.y, rM, 0, 7); cx.fillStyle = col; cx.fill();
         cx.lineWidth = 2; cx.strokeStyle = t.pref ? '#111' : '#fff'; cx.stroke();
         if (t.pref) { cx.beginPath(); cx.arc(p.x, p.y, Math.max(1.5, rM * 0.3), 0, 7); cx.fillStyle = '#111'; cx.fill(); }
+        // עץ חדש (לא של המודד): מסגרת מרובעת סביבו, כמו בפקודה ב-BricsCAD
+        else {
+          const q = rM + 8;
+          cx.lineWidth = 5; cx.strokeStyle = onDark() ? '#fff' : '#111'; cx.strokeRect(p.x - q, p.y - q, q * 2, q * 2);
+          cx.lineWidth = 2.5; cx.strokeStyle = col; cx.strokeRect(p.x - q, p.y - q, q * 2, q * 2);
+        }
         if (t.id === selId) { cx.beginPath(); cx.arc(p.x, p.y, rM + 6, 0, 7); cx.lineWidth = 3; cx.strokeStyle = '#ff1744'; cx.stroke(); }
+        const rr = t.pref ? rM : rM + 9;
         hits.push({ kind: 'my', id: t.id, x: p.x, y: p.y, r: rM });
-        occ.push(box(p.x - rM, p.y - rM, rM * 2, rM * 2));
+        occ.push(box(p.x - rr, p.y - rr, rr * 2, rr * 2));
       }
       // מספרים שלי: במקום פנוי ליד הנקודה, ואם צפוף אז רחוק יותר עם קו מוביל.
       // בזום רחוק (פחות מ-4 פיקסלים למטר) רק מספרים שיש להם מקום ליד הנקודה, כדי שלא ייווצר כוכב של קווים
@@ -297,7 +304,7 @@
         if (!inView(p)) continue;
         const txt = String(t.num || '?');
         const w = cx.measureText(txt).width + 10, hh = fs + 6;
-        const spot = place(p, w, hh, rM, occ.concat(placed), k < 4);
+        const spot = place(p, w, hh, t.pref ? rM : rM + 9, occ.concat(placed), k < 4);
         if (!spot) { hidden++; continue; }
         placed.push(spot.b);
         const st = root.Plan.statusOf(t.status);
@@ -372,15 +379,58 @@
     function hitAt(pt) {
       for (const b of boxes) if (pt.x >= b.b.x - 4 && pt.x <= b.b.x + b.b.w + 4 && pt.y >= b.b.y - 4 && pt.y <= b.b.y + b.b.h + 4) return { kind: 'my', id: b.id };
       let best = null, bd = Infinity;
+      // עץ של המודד נתפס גם בנגיעה לא מדויקת: עד כ-26 פיקסלים, ובזום קרוב עד 70 ס"מ ממנו
+      const svTol = Math.max(26, Math.min(60, 0.7 * ppm()));
       for (const t of hits) {
         const d = Math.hypot(t.x - pt.x, t.y - pt.y) - t.r;
         // העצים שלי קודמים לעצי המודד כשהם באותו מקום
         const dd = d - (t.kind === 'my' ? 4 : 0);
-        if (d < 16 && dd < bd) { bd = dd; best = t; }
+        if (d < (t.kind === 'sv' ? svTol : 16) && dd < bd) { bd = dd; best = t; }
       }
       return best;
     }
+    // גרירה של עץ שסימנתי (לא של המודד): לוחצים על העץ ומושכים. נגיעה בלי תזוזה בוחרת אותו כרגיל
+    let drag = null, skipClick = false;
+    const cPt = e => { const r = mapEl.getBoundingClientRect(); return L.point(e.clientX - r.left, e.clientY - r.top); };
+    mapEl.addEventListener('pointerdown', e => {
+      if (mode !== 'mark' || calStep || drawing || moving || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      const pt = cPt(e), hit = hitAt(pt);
+      const t = hit && hit.kind === 'my' && s.trees.find(x => x.id === hit.id && x.px != null);
+      if (!t || t.pref) return;
+      // נקודת הגרירה צריכה להיות על העץ עצמו, לא על המספר שלו
+      const p = map.latLngToContainerPoint(toMap(t.px, t.py));
+      if (Math.hypot(p.x - pt.x, p.y - pt.y) > 30) return;
+      e.stopPropagation();
+      drag = { t, id: e.pointerId, start: pt, off: L.point(p.x - pt.x, p.y - pt.y), old: [t.px, t.py, t.lat, t.lon, t.gpsSrc], moved: false };
+      map.dragging.disable();
+      try { mapEl.setPointerCapture(e.pointerId); } catch (_) {}
+    }, true);
+    mapEl.addEventListener('pointermove', e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const pt = cPt(e);
+      if (!drag.moved && Math.hypot(pt.x - drag.start.x, pt.y - drag.start.y) < 6) return;
+      drag.moved = true;
+      e.stopPropagation(); e.preventDefault();
+      const xy = fromMap(map.containerPointToLatLng(pt.add(drag.off)));
+      setXY(drag.t, xy[0], xy[1]);
+      selId = drag.t.id;
+      redraw();
+    }, true);
+    const endDrag = e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const d = drag; drag = null;
+      map.dragging.enable();
+      if (!d.moved) return;
+      e.stopPropagation();
+      skipClick = true; setTimeout(() => { skipClick = false; }, 400);
+      undo.push({ what: `הזזת עץ ${d.t.num}`, run: () => { [d.t.px, d.t.py, d.t.lat, d.t.lon, d.t.gpsSrc] = d.old; } });
+      changed(); renderSheet(); flash(`עץ ${d.t.num || ''} הוזז`);
+    };
+    mapEl.addEventListener('pointerup', endDrag, true);
+    mapEl.addEventListener('pointercancel', endDrag, true);
+
     map.on('click', e => {
+      if (skipClick) { skipClick = false; return; }
       const pt = e.containerPoint, xy = fromMap(e.latlng);
       if (calStep) return calTap(xy);
       if (mode === 'area') return areaTap(pt, xy);
@@ -464,7 +514,7 @@
       updateBar();
       if (mode === 'area') return renderAreaSheet();
       const t = selId && s.trees.find(x => x.id === selId);
-      if (!t) { sheet.classList.add('hidden'); hint.textContent = moving ? '' : 'נגיעה בעץ של המודד מסמנת אותו. נגיעה במקום ריק מוסיפה עץ.'; hint.classList.toggle('hidden', false); return; }
+      if (!t) { sheet.classList.add('hidden'); hint.textContent = moving ? '' : 'נגיעה בעץ של המודד מסמנת אותו. נגיעה במקום ריק מוסיפה עץ. עץ שהוספת אפשר לגרור.'; hint.classList.toggle('hidden', false); return; }
       hint.textContent = moving ? 'גע במיקום החדש של העץ' : '';
       hint.classList.toggle('hidden', !moving);
       const st = t.status ? root.Plan.statusOf(t.status) : null;
@@ -631,7 +681,8 @@
       const items = root.Plan.STATUSES.filter(x => used.has(x.key)).map(x => [x.color, x.key]);
       if (used.has('')) items.push([MY, 'עץ מסומן']);
       items.push(['#fff', 'עץ של המודד']);
-      legend.replaceChildren(...items.map(([c, t]) => h('span', {}, h('i', { style: `background:${c}` }), t)));
+      if (myTrees().some(t => !t.pref)) items.push(['sq', 'עץ שהוספתי (בריבוע)']);
+      legend.replaceChildren(...items.map(([c, t]) => h('span', {}, c === 'sq' ? h('i', { class: 'sq' }) : h('i', { style: `background:${c}` }), t)));
     }
     function updateBar() {
       markBtn.classList.toggle('on', mode === 'mark'); areaBtn.classList.toggle('on', mode === 'area');
