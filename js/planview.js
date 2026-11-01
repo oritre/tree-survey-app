@@ -33,6 +33,8 @@
     // רקע שחור כמו ב-BricsCAD, כשיש בקובץ צבעים (DWG, DXF)
     const hasStyle = !!(g.st && g.st.length);
     let dark = hasStyle && await DB.getKV('planDark', true);
+    // ברירת מחדל: הצבעים המקוריים. בלחיצה: כל השרטוט בצבע אחד (לבן על שחור, שחור על לבן), כדי שהעצים יבלטו
+    let mono = hasStyle && await DB.getKV('planMono', false);
     // מספרי המודד: בקובץ עם תכונות גלויות הם כבר בשרטוט עצמו
     let showSurv = await DB.getKV('planShowSurv', !hasStyle);
     const undo = [];
@@ -52,11 +54,15 @@
     const gpsBtn = btn('📍', 'המיקום שלי', toggleGps);
     gpsBtn.hidden = !canGps();
     const layersBtn = btn('⋯', 'תצוגה', showLayers);
+    const monoBtn = btn('צבע אחד', 'שרטוט בצבעים המקוריים / בצבע אחד', () => setMono(!mono));
+    monoBtn.hidden = !hasStyle;
+    function setMono(v) { mono = v; DB.setKV('planMono', v); monoBtn.textContent = mono ? 'צבעים' : 'צבע אחד'; monoBtn.classList.toggle('on', mono); redraw(); }
+    if (mono) { monoBtn.textContent = 'צבעים'; monoBtn.classList.add('on'); }
     const ov = h('div', { class: 'annot map-ov plan-ov' },
       h('div', { class: 'annot-bar' },
         h('span', { class: 'sp', style: 'font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, s.plan.name || 'מדידה'),
         h('div', { class: 'grp' }, markBtn, areaBtn),
-        undoBtn, gpsBtn, layersBtn,
+        undoBtn, gpsBtn, monoBtn, layersBtn,
         btn('סגור', null, () => close(), 'save')),
       h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, hint, legend, sheet));
     document.body.append(ov);
@@ -154,7 +160,7 @@
       const cs = [inv(-pad.x, -pad.y), inv(size.x + pad.x, -pad.y), inv(-pad.x, size.y + pad.y), inv(size.x + pad.x, size.y + pad.y)];
       const vx0 = Math.min(...cs.map(q => q[0])), vx1 = Math.max(...cs.map(q => q[0])), vy0 = Math.min(...cs.map(q => q[1])), vy1 = Math.max(...cs.map(q => q[1]));
       const fg = onDark() ? '#fff' : '#000';
-      const css = col => col < 0 ? fg : '#' + col.toString(16).padStart(6, '0');
+      const css = col => col < 0 || mono ? fg : '#' + col.toString(16).padStart(6, '0');
       const W = () => cx.setTransform(dpr * a, dpr * b, dpr * cc, dpr * dd, dpr * (e + pad.x), dpr * (f + pad.y));
       const S = () => cx.setTransform(dpr, 0, 0, dpr, pad.x * dpr, pad.y * dpr);
       const vis = i => !(cad.bb[i * 4 + 2] < vx0 || cad.bb[i * 4] > vx1 || cad.bb[i * 4 + 3] < vy0 || cad.bb[i * 4 + 1] > vy1);
@@ -545,12 +551,13 @@
     // ---------- תצוגה ומיקום ----------
     function showLayers() {
       const row = (label, val, set) => h('label', { class: 'row', style: 'gap:10px;align-items:center;font-size:17px;padding:6px 0' },
-        h('input', { type: 'checkbox', checked: val ? '' : null, style: 'width:22px;height:22px', onchange: e => set(e.target.checked) }), label);
+        h('input', { type: 'checkbox', checked: !!val, style: 'width:22px;height:22px', onchange: e => set(e.target.checked) }), label);
       const box = h('div', { class: 'modal', onclick: e => { if (e.target === box) box.remove(); } },
         h('div', { class: 'card stack', style: 'max-width:380px;width:92%' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'תצוגה'),
           itm ? row('תצלום אוויר מתחת למדידה (צריך קליטה)', aerial, v => { aerial = v; DB.setKV('planAerial', v); setBase(); redraw(); }) : null,
           hasStyle ? row('רקע שחור (כמו ב-BricsCAD)', dark, v => { dark = v; DB.setKV('planDark', v); setBase(); redraw(); }) : null,
+          hasStyle ? row('שרטוט בצבע אחד (שחור או לבן לפי הרקע)', mono, v => setMono(v)) : null,
           surveyor.length ? row('מספרי המודד (בזום קרוב)', showSurv, v => { showSurv = v; DB.setKV('planShowSurv', v); redraw(); }) : null,
           root.Plan.isPaper(s.plan) ? paperBox(() => box) : null,
           h('button', { class: 'btn', onclick: () => { map.fitBounds(fit, { padding: [20, 20] }); box.remove(); } }, 'כל המדידה'),
