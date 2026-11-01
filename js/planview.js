@@ -53,7 +53,10 @@
     const undoBtn = btn('↶', 'בטל פעולה אחרונה', doUndo);
     // GPS: במדידה ברשת ישראל, או בשרטוט על דף אחרי כיול
     const canGps = () => itm || !!(root.proj4 && root.Plan.isPaper(s.plan) && s.plan.cal);
-    const gpsBtn = btn('📍', 'המיקום שלי על השרטוט (GPS)', toggleGps);
+    // כפתור מיקום כמו בגוגל מפות: עיגול בתוך עיגול
+    const locIcon = () => { const d = document.createElement('span'); d.className = 'loc-ico';
+      d.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/></svg>'; return d; };
+    const gpsBtn = btn(locIcon(), 'המיקום שלי על השרטוט (GPS)', toggleGps, 'loc-btn');
     gpsBtn.hidden = !canGps();
     const layersBtn = btn('⋯', 'תצוגה', showLayers);
     const monoBtn = btn('צבע אחד', 'שרטוט בצבעים המקוריים / בצבע אחד', () => setMono(!mono));
@@ -348,9 +351,23 @@
       }
       // מיקום GPS
       if (gpsPos) {
-        const p = P(gpsLL()), r = Math.max(8, gpsPos.acc * k);
-        cx.beginPath(); cx.arc(p.x, p.y, r, 0, 7); cx.fillStyle = 'rgba(33,150,243,.15)'; cx.fill();
-        cx.beginPath(); cx.arc(p.x, p.y, 7, 0, 7); cx.fillStyle = '#2196f3'; cx.fill(); cx.lineWidth = 3; cx.strokeStyle = '#fff'; cx.stroke();
+        const p = P(gpsLL()), r = Math.max(10, gpsPos.acc * k);
+        // עיגול הדיוק
+        cx.beginPath(); cx.arc(p.x, p.y, r, 0, 7); cx.fillStyle = 'rgba(66,133,244,.16)'; cx.fill();
+        cx.lineWidth = 1; cx.strokeStyle = 'rgba(66,133,244,.45)'; cx.stroke();
+        // אלומת הכיוון אליו פונים (מצפן, ובהליכה גם כיוון התנועה)
+        const hd = heading();
+        if (hd != null) {
+          const a = northAngle() + hd * Math.PI / 180, R = 64, half = 0.42;
+          const gr = cx.createRadialGradient(p.x, p.y, 4, p.x, p.y, R);
+          gr.addColorStop(0, 'rgba(66,133,244,.95)'); gr.addColorStop(1, 'rgba(66,133,244,0)');
+          cx.beginPath(); cx.moveTo(p.x, p.y); cx.arc(p.x, p.y, R, a - half, a + half); cx.closePath();
+          cx.fillStyle = gr; cx.fill();
+        }
+        // הנקודה עצמה: כחולה עם מסגרת לבנה וצל
+        cx.save(); cx.shadowColor = 'rgba(0,0,0,.35)'; cx.shadowBlur = 5;
+        cx.beginPath(); cx.arc(p.x, p.y, 9, 0, 7); cx.fillStyle = '#fff'; cx.fill(); cx.restore();
+        cx.beginPath(); cx.arc(p.x, p.y, 6.5, 0, 7); cx.fillStyle = '#4285f4'; cx.fill();
       }
     }
 
@@ -711,23 +728,84 @@
     // אחרי שינוי קנה מידה או כיול: נ"צ של העצים שמיקומם מהשרטוט
     function refreshLL() { for (const t of myTrees()) if (t.lat == null || t.gpsSrc === 'plan') { delete t.lat; delete t.lon; setXY(t, t.px, t.py); } }
 
+    // ---------- המיקום שלי (GPS), כמו בגוגל מפות ----------
+    // לחיצה ראשונה: מדליק ועוקב (המפה זזה איתך). גרירה של המפה מפסיקה לעקוב; לחיצה חוזרת ממרכזת שוב. לחיצה בזמן מעקב מכבה
+    let follow = false, compass = null, onOrient = null, rafH = 0;
+    function llOfGps(lat, lon) {
+      if (itm) return L.latLng(lat, lon);
+      const w = root.Plan.fromLL(lat, lon), q = root.Plan.fromWorld(s.plan, w[0], w[1]);
+      return toMap(q[0], q[1]);
+    }
+    // הזווית של הצפון במסך (ברדיאנים, 0 = ימינה). במפה רגילה הצפון למעלה; בשרטוט מכויל הוא יכול להיות מסובב
+    function northAngle() {
+      const a = map.latLngToContainerPoint(llOfGps(gpsPos.lat, gpsPos.lon)), b = map.latLngToContainerPoint(llOfGps(gpsPos.lat + 0.0002, gpsPos.lon));
+      return Math.atan2(b.y - a.y, b.x - a.x);
+    }
+    // כיוון במעלות מהצפון: מהמצפן, ואם אין מצפן אז כיוון התנועה בהליכה
+    function heading() {
+      if (compass != null) return compass;
+      if (gpsPos && gpsPos.hd != null && gpsPos.spd > 0.6) return gpsPos.hd;
+      return null;
+    }
+    function setFollow(v) { follow = v; gpsBtn.classList.toggle('follow', v); }
+    map.on('dragstart', () => { if (follow) setFollow(false); });
+    function startCompass() {
+      onOrient = e => {
+        let hd = null;
+        if (e.webkitCompassHeading != null) hd = e.webkitCompassHeading;           // אייפון
+        else if (e.absolute && e.alpha != null) hd = 360 - e.alpha;                // אנדרואיד
+        if (hd == null) return;
+        const so = (screen.orientation && screen.orientation.angle) || root.orientation || 0;
+        hd = (hd + so + 360) % 360;
+        if (compass != null && Math.abs(((hd - compass + 540) % 360) - 180) < 2) return;
+        compass = hd;
+        if (!rafH) rafH = requestAnimationFrame(() => { rafH = 0; redraw(); });
+      };
+      const add = () => {
+        if ('ondeviceorientationabsolute' in root) root.addEventListener('deviceorientationabsolute', onOrient);
+        else root.addEventListener('deviceorientation', onOrient);
+      };
+      const D = root.DeviceOrientationEvent;
+      // אייפון (וחלק מהדפדפנים) מבקשים אישור למצפן. גם בלי אישור מאזינים: אם אין אירועים, פשוט אין חץ
+      if (D && typeof D.requestPermission === 'function') D.requestPermission().catch(() => null).then(() => { if (onOrient) add(); });
+      else add();
+    }
+    function stopGps() {
+      if (gpsWatch != null) navigator.geolocation.clearWatch(gpsWatch);
+      gpsWatch = null; gpsPos = null; compass = null; setFollow(false);
+      if (onOrient) { root.removeEventListener('deviceorientationabsolute', onOrient); root.removeEventListener('deviceorientation', onOrient); onOrient = null; }
+      gpsBtn.classList.remove('on');
+    }
     function toggleGps() {
-      if (gpsWatch != null) { navigator.geolocation.clearWatch(gpsWatch); gpsWatch = null; gpsPos = null; gpsBtn.classList.remove('on'); redraw(); return; }
+      if (gpsWatch != null) {
+        // דלוק אבל לא עוקב (גררו את המפה): חוזרים למיקום
+        if (!follow && gpsPos) { setFollow(true); map.panTo(gpsLL()); return; }
+        stopGps(); redraw(); if (mode === 'xy') renderXySheet(); return;
+      }
       if (!navigator.geolocation) { toast('אין GPS בדפדפן הזה'); return; }
-      gpsBtn.classList.add('on');
+      gpsBtn.classList.add('on'); setFollow(true);
+      startCompass();
       let first = true;
       gpsWatch = navigator.geolocation.watchPosition(p => {
-        gpsPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy };
+        const c = p.coords;
+        gpsPos = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, hd: c.heading, spd: c.speed };
+        const ll = gpsLL();
         if (first) {
           first = false;
           // מחוץ לשטח המדידה: לא קופצים לשם, רק אומרים כמה רחוק
-          const ll = gpsLL();
-          if (fit.pad(0.5).contains(ll)) map.panTo(ll);
-          else toast(itm ? `המיקום שלך מחוץ למדידה, כ-${Math.round(map.distance(ll, fit.getCenter()))} מ' ממנה` : 'המיקום שלך מחוץ לשרטוט', 4000);
+          if (!fit.pad(0.5).contains(ll)) {
+            setFollow(false);
+            toast(itm ? `המיקום שלך מחוץ למדידה, כ-${Math.round(map.distance(ll, fit.getCenter()))} מ' ממנה` : 'המיקום שלך מחוץ לשרטוט', 4000);
+          }
         }
+        if (follow) map.panTo(ll, { animate: true, duration: 0.5 });
         if (mode === 'xy') renderXySheet();
         redraw();
-      }, err => { toast(err.code === 1 ? 'צריך לאשר גישה למיקום בדפדפן' : 'אין מיקום כרגע', 3000); }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+      }, err => {
+        // הפסקה רגעית בקליטה כשכבר יש מיקום: ממשיכים בשקט עם המיקום האחרון
+        if (err.code === 1) { toast('צריך לאשר גישה למיקום בדפדפן', 3000); stopGps(); redraw(); }
+        else if (!gpsPos) toast('אין מיקום כרגע', 3000);
+      }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
     }
 
     function legendHtml() {
@@ -756,7 +834,7 @@
 
     let done;
     function close(openId) {
-      if (gpsWatch != null) navigator.geolocation.clearWatch(gpsWatch);
+      stopGps();
       DB.setKV('planView:' + s.id, { c: map.getCenter(), z: map.getZoom() });
       map.remove(); ov.remove();
       $$('.plan-flash').forEach(x => x.remove());

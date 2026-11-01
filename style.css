@@ -455,3 +455,8 @@ textarea.doc-text.b { font-weight: 700; }
 .drop-plan > div { display: flex; align-items: center; gap: 10px; padding: 28px 36px; border: 3px dashed var(--accent, #2e7d32); border-radius: 18px; background: var(--surface, #fff); font-size: 20px; font-weight: 600; }
 .plan-map.plan-dark, .plan-map.plan-dark .leaflet-container { background: #212830; }
 .plan-legend i.sq { border-radius: 2px; border: 2px solid #1565c0; background: transparent; }
+/* כפתור המיקום שלי: אפור כבוי, כחול דלוק, כחול מלא כשהמפה עוקבת */
+.plan-ov .annot-bar button.loc-btn { display: inline-flex; align-items: center; justify-content: center; }
+.plan-ov .annot-bar button.loc-btn .loc-ico { display: inline-flex; }
+.plan-ov .annot-bar button.loc-btn.on { background: #fff; color: #4285f4; outline: none; }
+.plan-ov .annot-bar button.loc-btn.on.follow { background: #4285f4; color: #fff; }
