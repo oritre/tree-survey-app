@@ -271,6 +271,33 @@
       }
     }
 
+    // מדידה של המודד (סקר לבנייה): הגאומטריה שנקראה מה-DWG, כדי שתיפתח גם במכשיר אחר, וגם קובץ ה-DWG המקורי
+    if (s.plan && (!s.plan.odGeoId || !s.plan.odDwgId || !s.plan.odImgId)) {
+      const p = s.plan, base = String(p.name || 'מדידה').replace(/[\\/:*?<>|"]+/g, ' ').trim();
+      if (!p.odGeoId) {
+        const d = await DB.getPhoto('plan:' + p.id);
+        if (d && d.geom) {
+          const item = await OD.upload(s.odFolderId, `מדידה - ${base}.json`, new Blob([JSON.stringify(d.geom)], { type: 'application/json' }), true);
+          if (item && item.id && s.plan === p) { p.odGeoId = item.id; await DB.putSurvey(s, false); }
+        }
+      }
+      if (!p.odDwgId) {
+        const d = await DB.getPhoto('plandwg:' + p.id);
+        if (d && d.blob) {
+          const item = await OD.upload(s.odFolderId, p.file || base + '.dwg', d.blob, true);
+          if (item && item.id && s.plan === p) { p.odDwgId = item.id; await DB.putSurvey(s, false); }
+        } else p.odDwgId = 'none'; // נטענה במכשיר אחר: הקובץ המקורי כבר שם
+      }
+      // שרטוט שהוא תמונה (סריקה / צילום)
+      if (!p.odImgId) {
+        const d = await DB.getPhoto('planimg:' + p.id);
+        if (d && d.blob) {
+          const item = await OD.upload(s.odFolderId, `מדידה - ${base}.jpg`, d.blob, true);
+          if (item && item.id && s.plan === p) { p.odImgId = item.id; await DB.putSurvey(s, false); }
+        } else p.odImgId = 'none';
+      }
+    }
+
     // נתוני הסקר ושכבת GIS: אחרי כל שינוי (גם מספרי הודעות טלגרם ומזהי תמונות, כדי שמכשיר אחר לא ישלח שוב)
     await pushData(s);
     await updateIndex(s);

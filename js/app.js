@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.32.0';
+  const APP_VERSION = '1.33.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -600,6 +600,79 @@
     t.lat = res[0]; t.lon = res[1]; t.acc = null; t.gpsSrc = 'map'; t.gpsTime = Date.now();
     saveSoon(); refreshRow(t); renderGps(t);
     toast('המיקום עודכן מהמפה', 2000);
+  }
+
+  // ---------- מדידה (DWG) בסקר לבנייה ----------
+  // הקובץ נקרא פעם אחת לגאומטריה קטנה שנשמרת בטאבלט ובגוגל דרייב, כך שבשטח עובד גם בלי קליטה
+  const planKey = p => 'plan:' + p.id;
+  function pickFile(accept) {
+    return new Promise(res => {
+      const inp = h('input', { type: 'file', accept, class: 'hidden' });
+      inp.onchange = () => { res(inp.files[0] || null); inp.remove(); };
+      document.body.append(inp); inp.click();
+    });
+  }
+  async function loadPlanFile() {
+    const f = await pickFile('.dwg,.dxf,.pdf,.dwfx,.dwf,.jpg,.jpeg,.png,.webp,image/*,application/pdf');
+    if (!f) return false;
+    toast('קורא את המדידה…', 2500);
+    let r;
+    try { r = await Plan.parseFile(f); }
+    catch (e) { console.error(e); alert('לא הצלחתי לקרוא את הקובץ: ' + e.message); return false; }
+    const g = r.geom;
+    if (!g.paths.length && !g.image) { alert('לא נמצאו קווים בקובץ'); return false; }
+    const old = cur.plan;
+    const id = uid();
+    await DB.putPhoto({ id: planKey({ id }), geom: g });
+    await DB.putPhoto({ id: 'plandwg:' + id, blob: new Blob([f], { type: f.type || 'application/octet-stream' }), name: f.name });
+    if (r.image) await DB.putPhoto({ id: 'planimg:' + id, blob: r.image });
+    cur.plan = { id, name: g.name, file: f.name, crs: g.crs, treeBlock: g.treeBlock, added: Date.now() };
+    if (g.crs === 'paper') cur.plan.scale = old && old.scale || 250;
+    if (old) for (const k of [planKey(old), 'plandwg:' + old.id, 'planimg:' + old.id]) DB.deletePhoto(k).catch(() => {});
+    await saveNow(); Sync.kick(true);
+    const nsv = Plan.surveyorTrees(g).length;
+    toast(g.crs === 'paper' ? 'השרטוט נטען. קנה מידה וכיול: בכפתור ⋯ במסך המדידה' : `המדידה נטענה${nsv ? `: ${nsv} עצים של המודד` : ''}${g.crs === 'itm' ? '' : ' (לא ברשת ישראל, בלי תצלום אוויר ו-GPS)'}`, 4500);
+    return true;
+  }
+  async function planGeom(p) {
+    let d = await DB.getPhoto(planKey(p)), g = d && d.geom;
+    // נטענה במכשיר אחר: מגוגל דרייב
+    if (!g) {
+      if (!p.odGeoId) return null;
+      const blob = await OD.download(p.odGeoId);
+      if (!blob) return null;
+      g = JSON.parse(await blob.text());
+      await DB.putPhoto({ id: planKey(p), geom: g });
+    }
+    // שרטוט שהוא תמונה: התמונה נשמרת לחוד
+    let img = null;
+    if (g.image) {
+      const di = await DB.getPhoto('planimg:' + p.id);
+      img = di && di.blob;
+      if (!img && p.odImgId) { img = await OD.download(p.odImgId); if (img) await DB.putPhoto({ id: 'planimg:' + p.id, blob: img }); }
+    }
+    return { g, img };
+  }
+  async function openPlan(focusId) {
+    if (!cur.plan && !(await loadPlanFile())) return;
+    let pg;
+    try { pg = await planGeom(cur.plan); } catch (e) { console.error(e); }
+    const g = pg && pg.g;
+    if (!g) { toast(cur.plan.odGeoId ? 'לא הצלחתי להוריד את המדידה מגוגל דרייב. צריך קליטה' : 'המדידה עוד לא עלתה מהמכשיר שבו נטענה', 4000); return; }
+    try { await loadLeaflet(); } catch (e) { toast(e.message, 3000); return; }
+    const before = cur.trees.length;
+    const imageUrl = pg.img ? URL.createObjectURL(pg.img) : null;
+    const openId = await PlanView.open({
+      survey: cur, geom: g, imageUrl, h, toast, uid, makeTree, focusId,
+      askNumber, save: saveSoon,
+      tileLayer: name => tileLayer(...(LAYERS[name] || LAYERS['גוגל – לוויין'])),
+    });
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    await saveNow();
+    if (openId && treeById(openId)) { curTreeId = openId; go(`#/s/${cur.id}/trees/t/${encodeURIComponent(openId)}`); return; }
+    if (!treeById(curTreeId)) curTreeId = (Core.sortTrees(cur.trees)[0] || {}).id || null;
+    if (before !== cur.trees.length || tab !== 'trees') { renderSurvey(); return; }
+    renderTreeList(); renderEditor();
   }
 
   // ---------- חיפוש סקרים בענן ----------
@@ -1247,6 +1320,7 @@
       h('div', { class: 'row', style: 'align-items:stretch' },
         h('div', { style: 'flex:1;min-width:160px' }, field('גוש', inp('gush', { inputmode: 'numeric' }))),
         h('div', { style: 'flex:1;min-width:160px' }, field('חלקה', inp('helka', { inputmode: 'numeric' })))),
+      planCard(),
       h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
         h('label', { class: 'set-row' },
           h('input', { type: 'checkbox', checked: !!cur.cset.embedPhotos, onchange: e => { cur.cset.embedPhotos = e.target.checked; saveSoon(); } }),
@@ -1254,6 +1328,27 @@
         h('h3', { style: 'margin:8px 0 0;font-size:18px' }, 'הגדרות הסקר'),
         h('div', { class: 'muted small' }, 'כמו בלשונית "חד גזעי" באקסל. חלות על כל העצים בסקר.'),
         Construction.SETTINGS.map(toggle), diam));
+  }
+
+  // מדידה של המודד (DWG): טעינה, החלפה והסרה
+  function planCard() {
+    const p = cur.plan;
+    const marked = cur.trees.filter(t => t.px != null).length;
+    return h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
+      h('h3', { style: 'margin:0;font-size:18px' }, 'מדידה (DWG)'),
+      p ? h('div', {}, h('b', {}, p.file || p.name), h('div', { class: 'muted small' }, `${marked} עצים מסומנים במדידה` + (p.crs === 'itm' ? '' : p.crs === 'paper' ? ` · שרטוט על דף, ${p.cal ? 'מכויל' : '1:' + (p.scale || 250)}` : ' · לא ברשת ישראל')))
+        : h('div', { class: 'muted small' }, 'קובץ המדידה של המודד: DWG או DXF (עם קואורדינטות), או PDF, DWFx ותמונה (שרטוט על דף). בטאבלט מסמנים עליו את העצים, והמיקומים יוצאים באקסל לגיליון "מדידה".'),
+      h('div', { class: 'row' },
+        p ? h('button', { class: 'btn primary', onclick: () => openPlan() }, 'פתח מדידה') : null,
+        h('button', { class: 'btn', onclick: async () => {
+          if (p && !confirm('להחליף את קובץ המדידה? העצים שסימנת נשארים באותן קואורדינטות.')) return;
+          if (await loadPlanFile()) renderSurvey();
+        } }, p ? 'החלף קובץ' : 'טען מדידה (DWG / PDF)'),
+        p ? h('button', { class: 'btn danger', onclick: async () => {
+          if (!confirm('להסיר את המדידה מהסקר? העצים והמיקומים שלהם נשארים.')) return;
+          for (const k of [planKey(p), 'plandwg:' + p.id, 'planimg:' + p.id]) DB.deletePhoto(k).catch(() => {});
+          cur.plan = null; await saveNow(); Sync.kick(); renderSurvey();
+        } }, 'הסר') : null));
   }
 
   async function deleteSurvey() {
@@ -1325,6 +1420,7 @@
     if (!search) treeFilter = '';
     pane.replaceChildren(...[
       h('button', { class: 'btn primary big block', onclick: addTree }, icon('plus'), 'עץ חדש'),
+      Construction.isConstruction(cur) ? h('button', { class: 'btn big block', onclick: () => openPlan() }, icon('pin'), cur.plan ? 'מדידה' : 'טען מדידה (DWG / PDF)') : null,
       Construction.isConstruction(cur) ? null : h('button', { class: 'btn big block', onclick: voiceMode }, icon('mic'), 'מצב דיבור'),
       h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > Core.MAX_TREES ? ` (בתבנית יש מקום ל-${Core.MAX_TREES})` : ''))),
       search,
@@ -1362,13 +1458,17 @@
     return others;
   }
 
-  async function addTree() {
-    refreshSuggestions();
+  function makeTree() {
     const t = { id: uid(), num: Core.nextNum(cur.trees), species: '', notes: '', urgency: '', pines: null, split: false, photos: [], created: Date.now() };
     defaultUrgency(t);
     // סקר לבנייה: מין העץ של העץ הקודם עובר לעץ החדש (מוצג באפור). בלי לגעת הוא נשאר; בלחיצה בוחרים מין אחר בלי למחוק
     const prev = cur.trees[cur.trees.length - 1];
     if (Construction.isConstruction(cur) && prev && (prev.species || '').trim()) { t.species = prev.species; t.speciesAuto = true; }
+    return t;
+  }
+  async function addTree() {
+    refreshSuggestions();
+    const t = makeTree();
     cur.trees.push(t);
     selectTree(t.id);
     await saveNow();
@@ -1502,6 +1602,9 @@
         h('div', { class: 'grid2' },
           h('div', {}, field('מספר העץ', numIn), splitWrap),
           h('div', {}, field('מין עץ', build ? speciesCombo(spIn, t) : spIn))),
+        build && cur.plan && t.px != null ? h('div', { class: 'row plan-tag' },
+          h('span', { class: 'muted small' }, t.pref ? `במדידה: עץ של המודד${t.pname ? ' ' + t.pname : ''}` : 'במדידה: עץ שסימנתי'),
+          h('button', { class: 'btn', onclick: () => openPlan(t.id) }, icon('pin'), 'הצג במדידה')) : null,
         build ? null : spChips,
         build ? null : pineWrap,
         build,
@@ -2256,6 +2359,15 @@
           splitStatus),
         h('div', { class: 'row' },
           h('button', { class: 'btn', onclick: () => exportZip(status) }, 'כל התמונות בקובץ ZIP'))),
+      cur.plan || cur.trees.some(t => t.px != null) ? h('div', { class: 'card stack' },
+        h('h2', { style: 'margin:0;font-size:20px' }, 'עדכון המדידה ב-BricsCAD'),
+        h('div', { class: 'small' }, `${cur.trees.filter(t => t.px != null).length} עצים סומנו על המדידה${(cur.planPolys || []).length ? `, ${cur.planPolys.length} תחומים` : ''}. באקסל יש גיליון "מדידה" עם המיקום של כל עץ.`),
+        h('ol', { class: 'small', style: 'margin:0;padding-inline-start:20px;line-height:1.7' },
+          h('li', {}, 'מורידים את האקסל (למעלה) וממלאים את הייעוד בעמודה BC, כרגיל. שומרים.'),
+          h('li', {}, 'ב-BricsCAD פותחים את קובץ המדידה (DWG), טוענים פעם אחת את הקובץ trees.lsp (APPLOAD), ומקלידים TREES.'),
+          h('li', {}, 'בפעם הראשונה בוחרים את קובץ האקסל. העצים מצוירים בטבעת בצבע הייעוד עם המספר, בשכבות TREE-*. אחרי כל שינוי באקסל מקלידים TREES שוב.')),
+        h('div', { class: 'row' },
+          h('a', { class: 'btn', href: 'tools/bricscad/trees.lsp', download: 'trees.lsp' }, 'הורד את trees.lsp'))) : null,
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'שכבת GIS'),
         h('div', { class: 'muted small' }, `${cur.trees.filter(t => t.lat != null).length} עצים עם נ"צ.`),
