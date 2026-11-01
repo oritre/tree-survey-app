@@ -21,7 +21,8 @@
   }
 
   // בלוק של עץ אצל המודד: קוד מפ"י 1502 (M1502), או שם עם "tree"/"עץ"
-  const TREE_BLOCK_RE = /^(m?150[0-9]|.*tree.*|.*עץ.*)$/i;
+  // בלוקים של עץ אצל המודד: נקודת עץ (M1502) ועץ עם צמרת (M2801), או שם עם "tree"/"עץ"
+  const TREE_BLOCK_RE = /^(m?1502|m?2801|.*tree.*|.*עץ.*)$/i;
   const LABEL_TAGS = ['NAME', 'NUM', 'NO', 'NUMBER', 'ID', 'MARK', 'PNT', 'POINT'];
 
   // ---------- קריאת הקובץ ----------
@@ -126,7 +127,7 @@
   }
 
   function attrLabel(e) {
-    const at = (e.attribs || []).map(a => ({ tag: String(a.tag || '').toUpperCase(), v: String((a.text && a.text.text) || a.text || '').trim() })).filter(a => a.v);
+    const at = (e.attribs || []).map(a => ({ tag: String(a.tag || '').toUpperCase(), v: String(a.text && typeof a.text === 'object' ? (a.text.text || '') : (a.text || '')).trim() })).filter(a => a.v);
     for (const t of LABEL_TAGS) { const a = at.find(x => x.tag === t); if (a) return a.v; }
     const a = at.find(x => !/HEIGHT|ELEV|LEVEL|Z$/.test(x.tag) && !/^-?\d+\.\d+$/.test(x.v));
     return a ? a.v : '';
@@ -462,9 +463,19 @@
   }
 
   // עצי המודד: [{h, x, y, name}] בקואורדינטות המקוריות
+  // עצי המודד מכל בלוקי העצים בשרטוט (גם במדידה שנקראה בגרסה קודמת: הבלוקים כולם שמורים ב-inserts)
   function surveyorTrees(g, block) {
+    const ins = g.inserts || {}, names = new Set(Object.keys(ins).filter(n => TREE_BLOCK_RE.test(n)));
     const b = block == null ? g.treeBlock : block;
-    return ((g.inserts || {})[b] || []).map(r => ({ h: r[0], x: r[1] + g.ox, y: r[2] + g.oy, name: r[3] }));
+    if (b) names.add(b);
+    const out = [], seen = new Set();
+    for (const n of names) for (const r of ins[n] || []) {
+      if (seen.has(r[0])) continue;
+      seen.add(r[0]);
+      // מספר המודד: רק אם יש בו ספרה (בבלוק של עץ עם צמרת כתוב לפעמים "עץ")
+      out.push({ h: r[0], x: r[1] + g.ox, y: r[2] + g.oy, name: /\d/.test(r[3] || '') ? r[3] : '' });
+    }
+    return out;
   }
   const toLL = (x, y) => { const p = root.proj4(ITM, 'WGS84', [x, y]); return [p[1], p[0]]; };
   const fromLL = (lat, lon) => root.proj4('WGS84', ITM, [lon, lat]);

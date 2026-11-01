@@ -253,9 +253,21 @@
         label(cx, top.x, top.y - 16, [poly.name || 'תחום', n + ' עצים'].join(' · '), { bg: 'rgba(255,255,255,.9)', fg: '#6a1b9a', size: 13 });
       }
       if (drawing) {
+        // נקודות ההצמדה של תחומים קיימים
+        for (const poly of s.planPolys) for (const q of poly.pts) {
+          const p = P(llOf('a', q[0], q[1])); if (!inView(p)) continue;
+          cx.beginPath(); cx.arc(p.x, p.y, 5, 0, 7); cx.fillStyle = '#fff'; cx.fill(); cx.lineWidth = 2; cx.strokeStyle = '#9c27b0'; cx.stroke();
+        }
         const pts = drawing.map(q => P(llOf('a', q[0], q[1])));
         cx.beginPath(); pts.forEach((p, i) => i ? cx.lineTo(p.x, p.y) : cx.moveTo(p.x, p.y));
         cx.lineWidth = 2.5; cx.strokeStyle = '#9c27b0'; cx.stroke();
+        if (pts.length >= 3) {
+          // קו מקווקו חזרה לנקודה הראשונה, ומעגל הצמדה סביבה: נגיעה בו סוגרת את התחום
+          const a = pts[pts.length - 1], b = pts[0];
+          cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); cx.setLineDash([6, 6]); cx.lineWidth = 1.5; cx.stroke(); cx.setLineDash([]);
+          cx.beginPath(); cx.arc(b.x, b.y, SNAP_PX, 0, 7); cx.fillStyle = 'rgba(46,125,50,.15)'; cx.fill(); cx.lineWidth = 2; cx.strokeStyle = '#2e7d32'; cx.stroke();
+          cx.strokeStyle = '#9c27b0';
+        }
         for (const p of pts) { cx.beginPath(); cx.arc(p.x, p.y, 6, 0, 7); cx.fillStyle = '#fff'; cx.fill(); cx.lineWidth = 2; cx.stroke(); }
       }
 
@@ -486,6 +498,20 @@
       changed(); select(t.id, true);
       flash(`עץ ${t.num}` + (sv.name ? ` (מודד ${sv.name})` : ''));
     }
+    // עץ מודד פנוי עד מטר מהעץ
+    function nearSurveyor(t) {
+      const used = linked();
+      let best = null, bd = 1;
+      for (const sv of surveyor) { if (used.has(sv.h)) continue; const d = Math.hypot(sv.x - t.px, sv.y - t.py) / root.Plan.upm(s.plan); if (d < bd) { bd = d; best = sv; } }
+      return best;
+    }
+    function linkSurveyor(t, sv) {
+      const old = [t.px, t.py, t.lat, t.lon, t.gpsSrc, t.pref, t.pname];
+      t.pref = sv.h; t.pname = sv.name || '';
+      setXY(t, sv.x, sv.y);
+      undo.push({ what: `שיוך עץ ${t.num}`, run: () => { [t.px, t.py, t.lat, t.lon, t.gpsSrc, t.pref, t.pname] = old; } });
+      changed(); renderSheet(); flash(`עץ ${t.num} שויך לעץ המודד`);
+    }
     function addAt(xy) {
       const t = ctx.makeTree();
       t.num = nearestNum();
@@ -560,6 +586,8 @@
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
           h('button', { class: 'btn', onclick: () => renumber(t) }, 'מספר'),
           t.pref ? null : h('button', { class: 'btn' + (moving ? ' primary' : ''), onclick: () => { moving = !moving; renderSheet(); } }, moving ? 'ביטול הזזה' : 'הזז'),
+          // עץ שהוספתי ממש על עץ של המודד: מצמידים אליו (המספר והפרטים נשארים)
+          (sv => sv ? h('button', { class: 'btn', onclick: () => linkSurveyor(t, sv) }, 'שייך לעץ המודד') : null)(t.pref ? null : nearSurveyor(t)),
           h('button', { class: 'btn', onclick: () => removeTree(t) }, 'בטל סימון'),
           h('button', { class: 'btn primary', onclick: () => close(t.id) }, 'פרטי העץ')));
     }
@@ -581,10 +609,31 @@
       renderSheet(); redraw();
     }
     function areaTap(pt, xy) {
-      if (drawing) { drawing.push([Math.round(xy[0] * 100) / 100, Math.round(xy[1] * 100) / 100]); renderSheet(); redraw(); return; }
+      if (drawing) {
+        // הצמדה כמו OSNAP באוטוקאד: נגיעה ליד הנקודה הראשונה סוגרת את התחום, ליד קודקוד קיים נצמדת אליו
+        const sn = snapAt(pt);
+        if (sn && sn.first) { if (drawing.length >= 3) finishPoly(); else flash('צריך לפחות 3 נקודות כדי לסגור'); return; }
+        if (sn && sn.last) return;
+        drawing.push(sn ? sn.q.slice() : [Math.round(xy[0] * 100) / 100, Math.round(xy[1] * 100) / 100]);
+        renderSheet(); redraw(); return;
+      }
       const hit = [...s.planPolys].reverse().find(p => root.Plan.inside(xy, p.pts));
       selPoly = hit ? hit.id : null;
       renderSheet(); redraw();
+    }
+    // הקודקוד הקרוב לנגיעה (בפיקסלים): הנקודה הראשונה של התחום בציור, נקודה שכבר סומנה בו, או קודקוד של תחום קיים
+    const SNAP_PX = 28;
+    function snapAt(pt) {
+      let best = null, bd = SNAP_PX;
+      const test = (q, info) => {
+        const p = map.latLngToContainerPoint(llOf('a', q[0], q[1])), d = Math.hypot(p.x - pt.x, p.y - pt.y);
+        if (d < bd) { bd = d; best = Object.assign({ q }, info); }
+      };
+      drawing.forEach((q, i) => test(q, i === 0 ? { first: true } : i === drawing.length - 1 ? { last: true } : {}));
+      // סגירה מקבלת עדיפות כשהנקודה הראשונה בטווח
+      if (best && best.first) return best;
+      for (const poly of s.planPolys) for (const q of poly.pts) test(q, {});
+      return best;
     }
     // ---------- נ.צ ברשת ישראל החדשה ----------
     // מחזיר [X, Y] ברשת ישראל, או null בשרטוט על דף שלא כויל
@@ -623,7 +672,7 @@
       sheet.classList.remove('hidden'); hint.classList.add('hidden');
       if (drawing) {
         sheet.replaceChildren(
-          h('div', { class: 'plan-sheet-head' }, h('b', {}, 'תחום חדש'), h('span', { class: 'muted small' }, `גע בפינות התחום לפי הסדר (${drawing.length} נקודות)`)),
+          h('div', { class: 'plan-sheet-head' }, h('b', {}, 'תחום חדש'), h('span', { class: 'muted small' }, drawing.length >= 3 ? `${drawing.length} נקודות. נגיעה בעיגול הירוק סוגרת את התחום` : `גע בפינות התחום לפי הסדר (${drawing.length} נקודות)`)),
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
             h('button', { class: 'btn', disabled: drawing.length ? null : '', onclick: () => { drawing.pop(); renderSheet(); redraw(); } }, 'בטל נקודה'),
             h('button', { class: 'btn', onclick: () => { drawing = null; renderSheet(); redraw(); } }, 'ביטול'),
