@@ -549,6 +549,29 @@
     });
 
     function nearestNum() { return root.Core.nextNum(s.trees); }
+    // פוליגון עצים: רשומה רגילה בסקר עם המספר P1, P2... (כמות העצים בשדה הכמות), מקושרת לתחום
+    const polyTree = poly => poly && s.trees.find(t => t.polyId === poly.id);
+    function nextPolyNum() { let m = 0; for (const t of s.trees) { const r = /^P(\d+)$/i.exec(String(t.num || '').trim()); if (r) m = Math.max(m, +r[1]); } return 'P' + (m + 1); }
+    function openPolyTree(poly) {
+      let t = polyTree(poly);
+      if (!t) {
+        t = ctx.makeTree();
+        t.num = nextPolyNum(); t.polyId = poly.id;
+        if (poly.ref) t.ref = true;
+        const c = poly.pts.reduce((a, q) => [a[0] + q[0] / poly.pts.length, a[1] + q[1] / poly.pts.length], [0, 0]);
+        setXY(t, c[0], c[1]);
+        s.trees.push(t);
+        if (!poly.name) poly.name = t.num;
+        changed();
+      }
+      close(t.id);
+    }
+    function setPolyRef(poly, v) {
+      const t = polyTree(poly), old = [poly.ref, t && t.ref];
+      poly.ref = v || undefined; if (t) t.ref = v || undefined;
+      undo.push({ what: 'לא להתייחסות', run: () => { poly.ref = old[0]; if (t) t.ref = old[1]; } });
+      changed(); renderSheet();
+    }
     function setXY(t, x, y) {
       t.px = Math.round(x * 100) / 100; t.py = Math.round(y * 100) / 100;
       const w = root.proj4 && root.Plan.itmOf(s.plan, t.px, t.py);
@@ -656,6 +679,8 @@
           // עץ שהוספתי ממש על עץ של המודד: מצמידים אליו (המספר והפרטים נשארים)
           (sv => sv ? h('button', { class: 'btn', onclick: () => linkSurveyor(t, sv) }, 'שייך לעץ המודד') : null)(t.pref ? null : nearSurveyor(t)),
           h('button', { class: 'btn' + (t.ref ? ' primary' : ''), title: 'נשמר בסקר לגיבוי. בהפקת דוח שואלים אם לכלול', onclick: () => {
+            const pl = t.polyId && s.planPolys.find(p => p.id === t.polyId);
+            if (pl) return setPolyRef(pl, !t.ref);
             const old = t.ref; t.ref = !t.ref || undefined; undo.push({ what: 'לא להתייחסות', run: () => { t.ref = old; } }); changed(); renderSheet();
           } }, t.ref ? '✓ לא להתייחסות' : 'לא להתייחסות'),
           h('button', { class: 'btn', onclick: () => removeTree(t) }, 'בטל סימון'),
@@ -950,7 +975,8 @@
             changed(); renderSheet();
           } }, 'מחק תחום'),
           h('button', { class: 'btn', onclick: () => setBound(poly.pts.map(q => q.slice())) }, 'זה הקו הכחול'),
-          h('button', { class: 'btn' + (poly.ref ? ' primary' : ''), onclick: () => { const old = poly.ref; poly.ref = !poly.ref || undefined; undo.push({ what: 'לא להתייחסות', run: () => { poly.ref = old; } }); changed(); renderSheet(); } }, poly.ref ? '✓ לא להתייחסות' : 'לא להתייחסות'),
+          h('button', { class: 'btn' + (poly.ref ? ' primary' : ''), onclick: () => setPolyRef(poly, !poly.ref) }, poly.ref ? '✓ לא להתייחסות' : 'לא להתייחסות'),
+          h('button', { class: 'btn primary', onclick: () => openPolyTree(poly) }, polyTree(poly) ? `פרטי פוליגון ${polyTree(poly).num}` : 'פרטי פוליגון'),
           h('button', { class: 'btn primary', onclick: () => { drawing = []; selPoly = null; renderSheet(); } }, '+ תחום חדש')));
     }
     function finishPoly() {

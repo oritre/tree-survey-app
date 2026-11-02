@@ -1747,7 +1747,7 @@
         h('div', { class: 'grid2' },
           h('div', {}, field('מספר העץ', numIn), splitWrap,
             h('label', { class: 'row', style: 'margin-top:6px;cursor:pointer', title: 'נשמר בסקר לגיבוי. בהפקת דוח שואלים אם לכלול אותו' },
-              h('input', { type: 'checkbox', checked: !!t.ref, style: 'width:24px;height:24px', onchange: e => { t.ref = e.target.checked || undefined; changed(); } }),
+              h('input', { type: 'checkbox', checked: !!t.ref, style: 'width:24px;height:24px', onchange: e => { t.ref = e.target.checked || undefined; const pl = t.polyId && (cur.planPolys || []).find(p => p.id === t.polyId); if (pl) pl.ref = t.ref; changed(); } }),
               h('span', {}, 'לא להתייחסות (גיבוי בלבד)'))),
           h('div', {}, field('מין עץ', build ? speciesCombo(spIn, t) : spIn))),
         build && cur.plan && t.px != null ? h('div', { class: 'row plan-tag' },
