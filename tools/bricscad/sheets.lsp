@@ -20,11 +20,14 @@
 ;;;
 ;;; The title block is inserted at paper size (1 drawing unit = 1 mm) and exploded, so its texts can be edited on
 ;;; each sheet. The scale text ("1:250"), the paper size text ("A4"..) and the dates are filled in by themselves.
-;;; Model units: meters (INSUNITS 6 or 0), millimeters (4), centimeters (5).
+;;; Model units: meters (any INSUNITS except 4 = millimeters and 1 = inches; 5 is taken as meters too).
 ;;; Plotter: "Print As PDF.pc3" (or the first plotter with PDF in its name). For a roll sheet the plotter needs a
 ;;; paper of that size; if it has none you get a message (add a custom paper size in the plotter configuration).
 
 (vl-load-com)
+
+;; title block library: the "sheets" folder next to sheets.lsp. The only place to change when the folder moves.
+(setq *sh-libdir* "C:/Users/origr/Downloads/OriSheets/sheets/")
 
 (setq *sh-app* "ORISHEET")
 (setq *sh-papers* '(("A4" 297.0 210.0) ("A3" 420.0 297.0) ("A2" 594.0 420.0) ("A1" 841.0 594.0) ("A0" 1189.0 841.0)))
@@ -60,10 +63,11 @@
                    (cons 290 (if (caddr spec) 1 0)))))
   (car spec))
 
-;; millimeters on paper per model unit
+;; millimeters on paper per model unit. Survey drawings are in meters even when INSUNITS says centimeters (5),
+;; so only millimeters (4) and inches (1) are taken from INSUNITS.
 (defun sh:upm (/ u)
   (setq u (getvar "INSUNITS"))
-  (cond ((= u 4) 1.0) ((= u 5) 10.0) ((= u 1) 25.4) (T 1000.0)))
+  (cond ((= u 4) 1.0) ((= u 1) 25.4) (T 1000.0)))
 
 (defun sh:k (scale) (/ (sh:upm) (float scale)))
 
@@ -73,11 +77,11 @@
   (setq v (getenv (strcat "OriSheet" typ)))
   (if (and v (/= v "")) v (cdr (assoc typ *sh-types*))))
 
-(defun sh:libdir (/ f d)
-  (if (setq f (findfile "HEBFIX.lsp"))
-    (progn (setq d (strcat (vl-filename-directory f) "\\sheets"))
+(defun sh:libdir (/ d)
+  (if (and *sh-libdir* (/= *sh-libdir* ""))
+    (progn (setq d (vl-string-right-trim "/\\" *sh-libdir*))
            (vl-mkdir d)
-           (strcat d "\\"))))
+           (strcat d "/"))))
 
 ;; make sure the block is in the drawing; from the library if needed. Returns T when it is.
 (defun sh:ensureblock (blk / d f)
@@ -92,10 +96,16 @@
 
 ;; ---------- xdata ----------
 
-(defun sh:tag (e vals / ed)
+;; through ActiveX: entmod does not keep xdata on viewports in BricsCAD
+(defun sh:tag (e vals / l codes data)
   (if (not (tblsearch "APPID" *sh-app*)) (regapp *sh-app*))
-  (setq ed (entget e))
-  (entmod (append ed (list (list -3 (cons *sh-app* vals))))))
+  (setq l (cons (cons 1001 *sh-app*) vals))
+  (setq codes (vlax-make-safearray vlax-vbInteger (cons 0 (1- (length l))))
+        data (vlax-make-safearray vlax-vbVariant (cons 0 (1- (length l)))))
+  (vlax-safearray-fill codes (mapcar 'car l))
+  (vlax-safearray-fill data (mapcar '(lambda (x) (vlax-make-variant (cdr x))) l))
+  (vla-SetXData (vlax-ename->vla-object e) codes data)
+  e)
 
 (defun sh:xd (e / x)
   (setq x (assoc -3 (entget e (list *sh-app*))))
@@ -244,13 +254,14 @@
   (setq i 1 tok "")
   (while (<= i (1+ (strlen s)))
     (setq c (if (<= i (strlen s)) (substr s i 1) " "))
-    (if (wcmatch c "#,.")
+    (if (or (wcmatch c "#") (= c "."))   ; not "#,." - in wcmatch "." is any non-alphanumeric character
       (setq tok (strcat tok c))
       (progn (if (and (/= tok "") (/= tok ".")) (setq r (cons (atof tok) r))) (setq tok "")))
     (setq i (1+ i)))
   (reverse r))
 
-(defun sh:findmedia (lo pw ph / best n a b)
+;; best paper of that size: full bleed first, then the same orientation (no plot rotation)
+(defun sh:findmedia (lo pw ph / best bs n a b s)
   (foreach m (sh:list (vla-GetCanonicalMediaNames lo))
     (if (wcmatch (strcase m) "*MM*")
       (progn
@@ -258,7 +269,9 @@
         (if (>= (length n) 2)
           (progn (setq a (cadr n) b (car n))
                  (if (or (and (equal a pw 1.0) (equal b ph 1.0)) (and (equal a ph 1.0) (equal b pw 1.0)))
-                   (if (or (null best) (wcmatch (strcase m) "*FULL*BLEED*")) (setq best m))))))))
+                   (progn
+                     (setq s (+ (if (wcmatch (strcase m) "*FULL*BLEED*") 2 0) (if (equal a pw 1.0) 1 0)))
+                     (if (or (null best) (> s bs)) (setq best m bs s)))))))))
   best)
 
 (defun sh:plot (pw ph / lo dev l media w h)
@@ -376,9 +389,9 @@
   (if pt (setq r (cons pt r)))
   (reverse r))
 
-;; sel = (cU wU hU ang pline) ; pc = paper center
+;; sel = (cW wU hU ang pline) ; pc = paper center
 (defun sh:addvp (sel scale pc lay / k cW ang vp e c s pts pl)
-  (setq k (sh:k scale) cW (trans (car sel) 1 0) ang (cadddr sel))
+  (setq k (sh:k scale) cW (car sel) ang (cadddr sel))
   (setq vp (vla-AddPViewport (vla-get-PaperSpace (sh:doc)) (vlax-3d-point (car pc) (cadr pc) 0)
                              (* k (cadr sel)) (* k (caddr sel))))
   (vla-put-Layer vp (sh:layer *sh-vp-layer*))
@@ -478,7 +491,7 @@
 
 (defun sh:off (u dx dy) (list (+ (car u) dx) (+ (cadr u) dy)))
 
-;; pick the drawing -> (sel scale forced) ; sel = (cU wU hU ang pline)
+;; pick the drawing -> (sel scale forced) ; sel = (cW wU hU ang pline), cW = center in WCS
 (defun sh:pick (typ scale allowframe / p1 p2 r e pts mn mx)
   (while (not r)
     (initget (if allowframe "Polyline Frame Rotate" "Polyline Rotate"))
@@ -506,6 +519,8 @@
              (setq r (list (list (list (/ (+ (car p1) (car p2)) 2.0) (/ (+ (cadr p1) (cadr p2)) 2.0) 0.0)
                                  (abs (- (car p2) (car p1))) (abs (- (cadr p2) (cadr p1))) (sh:ucsang) nil)
                            scale ""))))))
+  ;; center to WCS now, while the model UCS is current (the layout has its own UCS)
+  (if (listp r) (setq r (cons (cons (trans (car (car r)) 1 0) (cdr (car r))) (cdr r))))
   (if (= r 'cancel) nil r))
 
 ;; ---------- commands ----------
