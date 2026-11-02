@@ -13,7 +13,13 @@
 ;;; Needs BricsCAD (or AutoCAD) on Windows with Microsoft Excel installed: the Excel is read through Excel itself,
 ;;; so the designations are read even while the file is open in Excel (save it first to be safe).
 ;;; Re-running TREES updates colors and numbers. Numbers you moved by hand keep their place.
+;;; Moved drawing: the marks may be copied to another drawing and moved / rotated there. TREES then works out the
+;;; move from the trees already in the drawing (Excel X,Y -> where the tree is now), keeps every existing tree where
+;;; it is, and places new trees and the areas with the same move. Run TREES once in the original place first.
 ;;; The surveyor's own tree blocks are never changed.
+;;; Each tree is an insert of the block "trees" (*ts-block*). If the drawing already has a block with that name,
+;;; it is used as is, so you can draw your own tree symbol; otherwise a ring is created. Put the symbol on layer 0
+;;; so it takes the designation color of the tree's layer.
 
 (vl-load-com)
 
@@ -21,6 +27,7 @@
 (setq *ts-txt* 0.5)   ; number height (m)
 (setq *ts-r* 0.45)    ; ring radius (m)
 (setq *ts-w* 0.12)    ; ring width (m)
+(setq *ts-block* "trees") ; block inserted at every tree
 
 ;; code -> (layer color)   colors as in the Excel template's conditional formatting
 (setq *ts-layers*
@@ -101,12 +108,22 @@
   r)
 
 ;; ---------- drawing ----------
+; the block "trees": kept if the drawing has it, else a ring on layer 0 (color BYLAYER)
+(defun ts:block ()
+  (if (not (tblsearch "BLOCK" *ts-block*))
+    (progn
+      (entmake (list '(0 . "BLOCK") (cons 2 *ts-block*) '(70 . 0) '(10 0.0 0.0 0.0)))
+      (entmake (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") '(8 . "0") '(100 . "AcDbPolyline") '(90 . 2) '(70 . 1)
+                     (cons 43 *ts-w*)
+                     (list 10 (- *ts-r*) 0.0) '(42 . 1.0)
+                     (list 10 *ts-r* 0.0) '(42 . 1.0)))
+      (entmake '((0 . "ENDBLK")))))
+  *ts-block*)
+
 (defun ts:ring (c lay num)
   (entmake (append
-    (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 lay) '(100 . "AcDbPolyline") '(90 . 2) '(70 . 1)
-          (cons 43 *ts-w*)
-          (list 10 (- (car c) *ts-r*) (cadr c)) '(42 . 1.0)
-          (list 10 (+ (car c) *ts-r*) (cadr c)) '(42 . 1.0))
+    (list '(0 . "INSERT") '(100 . "AcDbEntity") (cons 8 lay) '(100 . "AcDbBlockReference") (cons 2 (ts:block))
+          (list 10 (car c) (cadr c) 0.0) '(41 . 1.0) '(42 . 1.0) '(43 . 1.0) '(50 . 0.0))
     (ts:xd num "ring"))))
 
 ; square frame around a tree that is not the surveyor's (added in the field)
@@ -160,6 +177,39 @@
           (list 11 (car p) (cadr p) 0.0) '(100 . "AcDbText") '(73 . 1))
     (ts:xd s "areaname"))))
 
+;; ---------- moved drawing ----------
+;; where an existing tree mark is now (block insert, or the ring of older versions)
+(defun ts:center (e / d pts)
+  (setq d (entget e))
+  (if (= (cdr (assoc 0 d)) "INSERT")
+    (list (car (cdr (assoc 10 d))) (cadr (cdr (assoc 10 d))))
+    (progn
+      (setq pts (mapcar 'cdr (vl-remove-if-not '(lambda (x) (= (car x) 10)) d)))
+      (list (/ (apply '+ (mapcar 'car pts)) (length pts)) (/ (apply '+ (mapcar 'cadr pts)) (length pts))))))
+
+;; move + rotation from pairs ((excel-pt drawing-pt) ...): (a b tx ty), X = a x - b y + tx, Y = b x + a y + ty
+;; one pair = move only; two or more = the two pairs farthest apart give the rotation too
+(defun ts:fit (pairs / p1 p2 d dx dy ux uy n a b)
+  (if pairs
+    (progn
+      (setq p1 (car pairs) d 0.0)
+      (foreach q (cdr pairs) (if (> (distance (car p1) (car q)) d) (setq p2 q d (distance (car p1) (car q)))))
+      (if (> d 1.0)
+        (setq dx (- (car (car p2)) (car (car p1))) dy (- (cadr (car p2)) (cadr (car p1)))
+              ux (- (car (cadr p2)) (car (cadr p1))) uy (- (cadr (cadr p2)) (cadr (cadr p1)))
+              n (+ (* dx dx) (* dy dy))
+              a (/ (+ (* dx ux) (* dy uy)) n) b (/ (- (* dx uy) (* dy ux)) n))
+        (setq a 1.0 b 0.0))
+      (list a b
+            (- (car (cadr p1)) (- (* a (car (car p1))) (* b (cadr (car p1)))))
+            (- (cadr (cadr p1)) (+ (* b (car (car p1))) (* a (cadr (car p1)))))))))
+
+(defun ts:tp (tr p)
+  (if tr
+    (list (+ (* (nth 0 tr) (car p)) (- (* (nth 1 tr) (cadr p))) (nth 2 tr))
+          (+ (* (nth 1 tr) (car p)) (* (nth 0 tr) (cadr p)) (nth 3 tr)))
+    p))
+
 ;; "X,Y;X,Y;..." -> ((x y) ...)
 (defun ts:pts (s / out part i)
   (setq s (ts:str s))
@@ -180,24 +230,32 @@
   p)
 
 ;; ---------- commands ----------
-(defun ts:run (path / doc rows old seen x y lx ly code lay num c e tp cnt areas)
+(defun ts:run (path / doc rows old seen x y lx ly code lay num c e tp cnt areas pairs tr)
   (princ (strcat "\nReading " path " ..."))
   (setq rows (ts:read path))
   (setq old (ts:existing) cnt 0)
   (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
   (vla-StartUndoMark doc)
+  ;; the drawing may have been moved: compare the trees already drawn with their X,Y in the Excel
+  (foreach r rows
+    (setq num (ts:str (nth 0 r)) x (ts:num (nth 1 r)) y (ts:num (nth 2 r)))
+    (if (and (/= num "") x y (setq e (ts:find old num "ring")) (entget e))
+      (setq pairs (cons (list (list x y) (ts:center e)) pairs))))
+  (setq tr (ts:fit pairs))
+  (if (and tr (or (> (abs (nth 2 tr)) 0.01) (> (abs (nth 3 tr)) 0.01) (> (abs (nth 1 tr)) 1e-6)))
+    (princ "\nThe marks were moved in this drawing: new trees and areas are placed with the same move."))
   ;; trees
   (foreach r rows
     (setq num (ts:str (nth 0 r)) x (ts:num (nth 1 r)) y (ts:num (nth 2 r)))
     (if (and (/= num "") x y)
       (progn
-        (setq c (list x y)
+        (setq c (ts:tp tr (list x y))
               lx (ts:num (nth 3 r)) ly (ts:num (nth 4 r))
               code (fix (cond ((ts:num (nth 8 r))) (0)))
               lay (ts:layer (cdr (cond ((assoc code *ts-layers*)) ((assoc 0 *ts-layers*))))))
         (setq seen (cons num seen) cnt (1+ cnt))
-        ;; ring: always at the tree, color by designation
-        (if (setq e (ts:find old num "ring")) (entdel e))
+        ;; tree mark (block "trees"), color by designation. An existing one stays where it is
+        (if (setq e (ts:find old num "ring")) (progn (setq c (ts:center e)) (entdel e)))
         (ts:ring c lay num)
         ;; square frame: a tree added in the field (no surveyor tree, column H empty)
         (if (setq e (ts:find old num "box")) (entdel e))
@@ -205,7 +263,7 @@
         ;; number: keep it where it is (it may have been moved by hand), else at the place from the app
         (if (setq e (ts:find old num "num"))
           (progn (setq tp (ts:text-pt e)) (entmod (subst (cons 1 num) (assoc 1 (entget e)) (entget e))))
-          (progn (setq tp (if (and lx ly) (list lx ly) (list (+ x *ts-r* *ts-txt*) y))) (ts:text tp num)))
+          (progn (setq tp (if (and lx ly) (ts:tp tr (list lx ly)) (list (+ (car c) *ts-r* *ts-txt*) (cadr c)))) (ts:text tp num)))
         ;; leader from the ring to the number, when the number is not right next to it
         (if (setq e (ts:find old num "lead")) (entdel e))
         (ts:lead c tp num))))
@@ -218,7 +276,7 @@
   (setq areas 0)
   (foreach r rows
     (if (and (nth 10 r) (> (length (ts:pts (nth 10 r))) 2))
-      (progn (ts:area (ts:str (nth 9 r)) (ts:pts (nth 10 r))) (setq areas (1+ areas)))))
+      (progn (ts:area (ts:str (nth 9 r)) (mapcar '(lambda (p) (ts:tp tr p)) (ts:pts (nth 10 r)))) (setq areas (1+ areas)))))
   (vla-EndUndoMark doc)
   (princ (strcat "\nTREES: " (itoa cnt) " trees" (if (> areas 0) (strcat ", " (itoa areas) " areas") "") " updated."))
   (princ))
