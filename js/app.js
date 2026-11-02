@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.46.0';
+  const APP_VERSION = '1.47.0';
   const REF_SUFFIX = 'כולל לא להתייחסות';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
@@ -1747,6 +1747,14 @@
     pane.replaceChildren(
       h('datalist', { id: 'speciesList' }, (build ? [...Construction.SPECIES.keys()] : safetySpecies()).map(s => h('option', { value: s }))),
       h('div', { class: 'card stack' },
+        // הצילום ראשון בטופס, כדי לא לפספס אותו (ori, כל סוגי הסקרים)
+        h('div', {},
+          h('label', { class: 'f' }, 'תמונות'),
+          h('div', { class: 'row', style: 'margin-bottom:10px' },
+            h('button', { class: 'btn primary big', id: 'shootBtn', onclick: takePhotos }, icon('camera'), 'צלם'),
+            h('button', { class: 'btn big', onclick: () => pickPhoto('galInput') }, icon('image'), 'מהגלריה'),
+            gpsBox),
+          photosBox),
         h('div', { class: 'grid2' },
           h('div', {}, field('מספר העץ', numIn), splitWrap,
             h('label', { class: 'row', style: 'margin-top:6px;cursor:pointer', title: 'נשמר בסקר לגיבוי. בהפקת דוח שואלים אם לכלול אותו' },
@@ -1762,13 +1770,6 @@
         field(build ? 'הערות' : 'הערות וטיפול מומלץ', notesIn),
         notesChips,
         build ? null : field('דחיפות', seg),
-        h('div', {},
-          h('label', { class: 'f' }, 'תמונות'),
-          h('div', { class: 'row', style: 'margin-bottom:10px' },
-            h('button', { class: 'btn primary big', onclick: takePhotos }, icon('camera'), 'צלם'),
-            h('button', { class: 'btn big', onclick: () => pickPhoto('galInput') }, icon('image'), 'מהגלריה'),
-            gpsBox),
-          photosBox),
         h('div', { class: 'editor-foot' },
           h('button', { class: 'btn danger', onclick: deleteTree }, icon('trash'), 'מחק עץ'),
           build ? null : h('button', { class: 'btn', onclick: () => duplicateTree(t) }, icon('copy'), 'שכפל עץ'),
@@ -2244,6 +2245,9 @@
     const box = $('#photosBox');
     const t = treeById(curTreeId);
     if (!box || !t) return;
+    // עץ בלי תמונה: כפתור הצילום מודגש עד שמצלמים
+    const shoot = $('#shootBtn');
+    if (shoot) shoot.classList.toggle('needs-photo', !t.photos.length);
     const split = Core.splitActive(t);
     const nums = split ? Core.expandNum(t.num) : [];
     if (!t.photos.length) { box.replaceChildren(h('div', { class: 'muted' }, 'אין תמונות לעץ הזה')); return; }
@@ -2324,6 +2328,33 @@
   }
 
   // ---------- הפקה ----------
+  // עצים בלי תמונה (ובעץ מפוצל: מספר בלי תמונה), כדי לגלות עוד בשטח עץ שלא צולם בטעות
+  function treesWithoutPhoto(s) {
+    const trees = Core.sortTrees(s.trees.filter(Core.hasContent));
+    const build = Construction.isConstruction(s);
+    const covered = build ? Construction.coveredNums(trees) : new Set();
+    const out = [];
+    for (const t of trees) {
+      const ph = t.photos || [];
+      const name = t.num || (Core.isOk(t) ? 'תקין' : '');
+      const label = [name, (t.species || '').trim()].filter(Boolean).join(' · ') || 'עץ בלי מספר';
+      if (!ph.length) { if (!(build && covered.has(Core.firstNum(t.num)))) out.push({ t, label }); continue; }
+      if (!build && Core.splitActive(t)) {
+        const miss = Core.expandNum(t.num).filter(n => !ph.some(p => p.sub === n));
+        if (miss.length) out.push({ t, label: `${miss.join(', ')} (מתוך ${t.num})` });
+      }
+    }
+    return out;
+  }
+  function noPhotoBox(s) {
+    const list = treesWithoutPhoto(s);
+    if (!list.length) return h('div', { class: 'okbox' }, '📷 לכל העצים יש תמונה.');
+    return h('div', { class: 'nophoto-box', role: 'alert' },
+      h('div', { class: 'nophoto-title' }, icon('camera'), list.length === 1 ? 'עץ אחד בלי תמונה:' : `${list.length} עצים בלי תמונה:`),
+      h('div', { class: 'chips' }, list.map(({ t, label }) => h('button', { class: 'chip nophoto-chip', type: 'button', title: 'פתח את העץ',
+        onclick: () => { curTreeId = t.id; go(`#/s/${s.id}/trees/t/${encodeURIComponent(t.id)}`); } }, label))),
+      h('div', { class: 'small muted' }, 'לחיצה על עץ פותחת אותו לצילום. אם לא צילמת בכוונה, אפשר לסיים בכל זאת.'));
+  }
   const NO_SIG = 'אין במכשיר הזה חתימה וחותמת, והדוח ייצא בלעדיהן. מוסיפים בהגדרות, או מתחברים לגוגל דרייב והיא תיטען משם.';
   async function renderExport(body) {
     if (Construction.isConstruction(cur)) return renderConstructionExport(body);
@@ -2357,6 +2388,7 @@
     body.append(h('div', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'סיום סקר'),
+        noPhotoBox(cur),
         finishBox,
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', onclick: async e => {
@@ -2486,6 +2518,7 @@
         h('div', { class: 'muted small' }, 'הסטטוס המוצע (שימור / כריתה / העתקה) ממולא ידנית באקסל, ואז מתעדכנים אזור השורשים והטבלה המסכמת.')),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'סיום סקר'),
+        noPhotoBox(cur),
         cur.finished ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}. האקסל בתיקיית הפרויקט בגוגל דרייב.`)
           : cur.finishPending ? h('div', { class: 'small' }, '⟳ מעלה את התמונות ואת האקסל…')
           : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר את קובץ האקסל בגוגל דרייב ומפנה את התמונות מהטאבלט.'),
