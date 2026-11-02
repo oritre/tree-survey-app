@@ -140,18 +140,38 @@
     if (!s.odPhotosId) { s.odPhotosId = await OD.folder(s.odFolderId, 'תמונות'); await DB.putSurvey(s, false); }
   }
 
-  // בתיקיית הדוחות: תיקייה לכל פרויקט, וכל קבצי הסקרים ישירות בתוכה (בלי תיקייה לכל סקר)
+  // בתיקיית הדוחות: תיקייה לכל פרויקט. סקר בטיחות: הקבצים ישירות בתוכה.
+  // סקר לבנייה: תת-תיקייה לכל סקר בשם הסקר (ori, גרסה 1.45), כדי שקבצים של כמה סקרים לא יתערבבו
+  const isBuild = s => !!(root.Construction && root.Construction.isConstruction(s));
+  const buildDirName = s => (root.App && root.App.reportDirName ? root.App.reportDirName(s) : (s.site || 'ללא שם'));
   async function reportFolder(s) {
+    // סקר לבנייה מלפני 1.45 שמר את תיקיית הפרויקט: עוברים לתת-תיקייה של הסקר
+    if (isBuild(s) && s.odReportDir && !s.odReportDirName) s.odReportDir = null;
     // התיקייה שנשמרה בסקר: בודקים פעם אחת בכל הפעלה שלא הועברה לפח (אחרת הקבצים היו נשמרים בתוך תיקייה בפח)
     if (s.odReportDir && !OD._verified.has(s.odReportDir)) {
       const j = await OD.api('GET', `/files/${s.odReportDir}?fields=id,trashed&supportsAllDrives=true`).catch(() => null);
       if (j && !j.trashed) OD._verified.add(s.odReportDir); else s.odReportDir = null;
     }
+    if (s.odReportDir && isBuild(s) && s.odReportDirName !== buildDirName(s)) {
+      // שם הסקר השתנה: משנים את שם התיקייה (הקבצים הקודמים נשארים בה)
+      const name = buildDirName(s);
+      if (await OD.rename(s.odReportDir, name).catch(() => null)) { s.odReportDirName = name; await DB.putSurvey(s, false); }
+      else s.odReportDir = null;
+    }
     if (!s.odReportDir) {
-      s.odReportDir = await OD.folder(await reportRoot(), s.project || 'ללא פרויקט');
+      const proj = await OD.folder(await reportRoot(), s.project || 'ללא פרויקט');
+      if (isBuild(s)) {
+        const name = buildDirName(s);
+        s.odReportDir = await OD.folder(proj, name);
+        s.odReportDirName = name;
+      } else s.odReportDir = proj;
       await DB.putSurvey(s, false);
     }
     return s.odReportDir;
+  }
+  // הנתיב לתצוגה: סקרי עצים / פרויקט [/ שם הסקר]
+  async function reportPath(s) {
+    return [(await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים', s.project || 'ללא פרויקט'].concat(isBuild(s) ? [s.odReportDirName || buildDirName(s)] : []).join(' / ');
   }
 
   // קובץ דוח: נשמר בתיקיית הגיבוי, ועותק שלו (העתקה בתוך גוגל דרייב, בלי גלישה נוספת) בתיקיית הדוחות
@@ -795,8 +815,10 @@
     // קובץ נוסף לתיקיית הדוחות (למשל טבלאות ותמונות בנפרד בסקר לבנייה)
     async uploadFile(s, name, blob) {
       await syncFolders(s); await putReportFile(s, name, blob); log('ok', name + ' נשמר בגוגל דרייב', s); await DB.putSurvey(s, false);
-      return { folderId: await reportFolder(s), path: [(await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים', s.project || 'ללא פרויקט'].join(' / ') };
+      const folderId = await reportFolder(s);
+      return { folderId, path: await reportPath(s) };
     },
+    reportPath,
     cloudIndex, allInCloud, freeLocal, log, hashSurvey, loadSurvey, mergeSurvey,
     // לפני פתיחת סקר: מושכים את הגרסה האחרונה מהענן (עד כמה שניות), על אותו עותק שהגיבוי מחזיק
     async refresh(id) {
