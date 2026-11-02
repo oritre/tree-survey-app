@@ -324,7 +324,29 @@
     (progn (setq r (sh:roles f)) (list (cadr r) (caddr r)))
     (list "None" "")))
 
-(defun sh:fit (typ forced / lay vps strip sbb sw shh bb gw gh paper pw ph m p colL acx acy dx dy f scs main a big)
+;; the picked part of a drawing on the paper (from its xdata), around the viewport center: (min max)
+(defun sh:core (e / x k c w h)
+  (setq x (sh:reals e) k (sh:k (car x)) c (sh:vpcenter e) w (* 0.5 k (nth 3 x)) h (* 0.5 k (nth 4 x)))
+  (list (list (- (car c) w) (- (cadr c) h) 0.0) (list (+ (car c) w) (+ (cadr c) h) 0.0)))
+
+(defun sh:corebox (vps / bb mn mx)
+  (foreach e vps
+    (setq bb (sh:core e)
+          mn (if mn (mapcar 'min mn (car bb)) (car bb))
+          mx (if mx (mapcar 'max mx (cadr bb)) (cadr bb))))
+  (if mn (list mn mx)))
+
+;; size an unclipped viewport (paper mm) around its center and set its view again from the xdata
+(defun sh:sizevp (e w h / vp x)
+  (setq vp (vlax-ename->vla-object e) x (sh:reals e))
+  (if (not (and (equal (vla-get-Width vp) w 1e-6) (equal (vla-get-Height vp) h 1e-6)))
+    (progn
+      (vla-put-DisplayLocked vp :vlax-false)
+      (vla-put-Width vp w)
+      (vla-put-Height vp h)
+      (sh:setview vp (list (nth 1 x) (nth 2 x) 0.0) (nth 5 x) (sh:k (car x))))))
+
+(defun sh:fit (typ forced / lay vps strip sbb sw shh bb gw gh paper pw ph m p colL acx acy dx dy f scs main a big x)
   (setq lay (getvar "CTAB"))
   (if (null typ) (setq typ (car (sh:info lay))))
   (if (null forced) (setq forced (cadr (sh:info lay))))
@@ -338,7 +360,12 @@
               sw (- (car (cadr sbb)) (car (car sbb)))
               shh (- (cadr (cadr sbb)) (cadr (car sbb))))
         (setq sw 0.0 shh 0.0))
-      (setq bb (sh:bbox vps)
+      ;; several drawings (or a polyline clip): each viewport shows just the picked part
+      (foreach e vps
+        (if (not (sh:clip e))
+          (progn (setq x (sh:reals e)) (sh:sizevp e (* (sh:k (car x)) (nth 3 x)) (* (sh:k (car x)) (nth 4 x))))))
+      ;; the paper is chosen by the picked parts, not by the viewports (they may have grown to the frame)
+      (setq bb (sh:corebox vps)
             gw (- (car (cadr bb)) (car (car bb)))
             gh (- (cadr (cadr bb)) (cadr (car bb))))
       (setq paper (cond ((sh:forced forced)) ((sh:choose gw gh sw shh))))
@@ -358,6 +385,9 @@
       (setq dx (- acx (/ (+ (car (car bb)) (car (cadr bb))) 2.0))
             dy (- acy (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))
       (foreach e vps (sh:movevp e dx dy))
+      ;; one drawing: the viewport fills the frame up to the title block, the picked part stays in the middle
+      (if (and (null (cdr vps)) (not (sh:clip (car vps))))
+        (sh:sizevp (car vps) (- colL m) (- ph m m)))
       (if (not (sh:fits (car paper) pw ph gw gh sw shh))
         (princ (strcat "\nThe drawings do not fit on " (sh:papername paper) ". Use SHEETSIZE Auto or a smaller scale.")))
       (if (and (= (car paper) "ROLL") (or (> (min pw ph) *sh-roll-max-short*) (> (max pw ph) *sh-roll-max-long*)))
@@ -376,8 +406,16 @@
           (strcat "1:" (itoa main))))
       (sh:plot pw ph)
       (command "_.ZOOM" "_E")
-      (princ (strcat "\nSheet " lay ": " (sh:papername paper)
-                     (if (= (car paper) "ROLL") " mm (roll)" (if (> pw ph) " landscape" " portrait"))))))
+      (setq *sh-paper* (sh:papername paper) *sh-main-scale* main)
+      ;; shown by sh:end, after the command echo
+      (setq *sh-msg* (strcat "\nSheet " lay ": " (sh:papername paper)
+                             (if (= (car paper) "ROLL") " mm (roll)" (if (> pw ph) " landscape" " portrait"))
+                             ", 1:" (itoa main)))
+      ;; a layout named by paper and scale ("A3 1-250") follows the sheet when the scale or the paper changes
+      (if (and (wcmatch lay "A# 1-#*,#*x#* 1-#*")
+               (not (wcmatch lay (strcat (sh:papername paper) " 1-" (itoa main) ","
+                                         (sh:papername paper) " 1-" (itoa main) " (#*)"))))
+        (setq *sh-last-layout* (sh:rename lay (sh:autoname (sh:papername paper) main))))))
   (princ))
 
 ;; ---------- viewports ----------
@@ -548,7 +586,7 @@
 
 (defun sh:begin ()
   (setq *sh-olderr* *error* *sh-oldecho* (getvar "CMDECHO") *sh-oldosmode* (getvar "OSMODE"))
-  (setq *error* sh:error)
+  (setq *error* sh:error *sh-msg* nil *sh-paper* nil)
   (setvar "CMDECHO" 0)
   (vla-StartUndoMark (sh:doc)))
 
@@ -557,6 +595,8 @@
   (setvar "CMDECHO" *sh-oldecho*)
   (setvar "OSMODE" *sh-oldosmode*)
   (setq *error* *sh-olderr*)
+  (if *sh-msg* (prompt *sh-msg*))
+  (setq *sh-msg* nil)
   (princ))
 
 (defun sh:error (msg)
@@ -581,7 +621,7 @@
   (if (and s (> s 0)) (setq *sh-last-scale* s))
   *sh-last-scale*)
 
-(defun c:SHEET (/ typ scale pick name doc lay ss i e blk)
+(defun c:SHEET (/ typ scale pick name doc lay ss i e blk auto)
   (sh:begin)
   (sh:gotomodel)
   (initget "Construction Tabaa None")
@@ -590,8 +630,8 @@
   (setq scale (sh:askscale))
   (if (setq pick (sh:pick typ scale T))
     (progn
-      (setq name (getstring T (strcat "\nLayout name <" (sh:newname) ">: ")))
-      (if (= name "") (setq name (sh:newname)))
+      (setq name (getstring T "\nLayout name <paper and scale, e.g. A3 1-250>: "))
+      (if (= name "") (setq name (sh:newname) auto T))
       (if (member (strcase name) (mapcar 'strcase (layoutlist)))
         (princ (strcat "\nLayout " name " already exists. Use SHEETADD to add to it."))
         (progn
@@ -608,8 +648,23 @@
           (if (/= blk "") (sh:addstrip blk name))
           (sh:addvp (car pick) (cadr pick) '(0.0 0.0) name)
           (sh:fit typ (caddr pick))
+          (if (and auto *sh-paper*) (setq name (sh:rename name (sh:autoname *sh-paper* *sh-main-scale*))))
           (setq *sh-last-layout* name)))))
   (sh:end))
+
+;; "A3 1-250", or "A3 1-250 (2)" when taken
+(defun sh:autoname (paper scale / base n i)
+  (setq base (strcat paper " 1-" (itoa scale)) n base i 1)
+  (while (member (strcase n) (mapcar 'strcase (layoutlist))) (setq i (1+ i) n (strcat base " (" (itoa i) ")")))
+  n)
+
+(defun sh:rename (old new)
+  (if (vl-catch-all-error-p (vl-catch-all-apply 'vla-put-Name (list (vla-Item (vla-get-Layouts (sh:doc)) old) new)))
+    old
+    (progn (if *sh-msg* (setq *sh-msg* (sh:subst-name *sh-msg* old new))) new)))
+
+(defun sh:subst-name (s old new / i)
+  (if (setq i (vl-string-search old s)) (strcat (substr s 1 i) new (substr s (+ i 1 (strlen old)))) s))
 
 (defun c:SHEETADD (/ lays name scale pick bb wP pc vps)
   (sh:begin)
@@ -628,7 +683,7 @@
           (setvar "CTAB" name)
           (command "_.PSPACE")
           ;; new drawing to the left of the drawings already there
-          (setq vps (sh:items name '("vp")) bb (sh:bbox vps) wP (* (sh:k scale) (cadr (car pick))))
+          (setq vps (sh:items name '("vp")) bb (sh:corebox vps) wP (* (sh:k scale) (cadr (car pick))))
           (setq pc (if bb
                      (list (- (car (car bb)) *sh-gap* (/ wP 2.0)) (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0))
                      '(0.0 0.0)))
@@ -637,7 +692,7 @@
           (setq *sh-last-layout* name)))))
   (sh:end))
 
-(defun sh:pickvp (/ es e r)
+(defun sh:pickvp (/ es e r bb)
   (if (= (getvar "TILEMODE") 1)
     (progn (princ "\nGo to the sheet layout first.") nil)
     (progn
@@ -646,7 +701,14 @@
         (progn
           (setq e (car es))
           (cond ((member "vp" (sh:roles e)) (setq r e))
-                (T (foreach v (sh:items (getvar "CTAB") '("vp")) (if (equal (sh:clip v) e) (setq r v)))))))
+                (T (foreach v (sh:items (getvar "CTAB") '("vp")) (if (equal (sh:clip v) e) (setq r v)))))
+          ;; the frame lies on the viewport edge: take the viewport under the picked point
+          (if (not r)
+            (foreach v (sh:items (getvar "CTAB") '("vp"))
+              (if (and (not r) (setq bb (sh:bbox (list v)))
+                       (<= (- (car (car bb)) 0.5) (car (cadr es)) (+ (car (cadr bb)) 0.5))
+                       (<= (- (cadr (car bb)) 0.5) (cadr (cadr es)) (+ (cadr (cadr bb)) 0.5)))
+                (setq r v))))))
       (if (not r) (princ "\nThat is not a drawing placed by SHEET."))
       r)))
 
