@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.50.0';
+  const APP_VERSION = '1.51.0';
   const REF_SUFFIX = 'כולל לא להתייחסות';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
@@ -52,6 +52,7 @@
     next: 'M19 12H5M11 6l-6 6 6 6',
     sprout: 'M12 21v-8M12 13c0-4 3-7 8-7 0 4-3 7-8 7zM12 13c0-3-2-5-6-5 0 3 2 5 6 5z',
     copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
+    hide: 'M3 7h18v4H3zM5 11v9h14v-9M10 15h4',
     mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3',
   };
   function icon(name, cls) {
@@ -66,8 +67,9 @@
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const fmtDate = iso => iso ? iso.split('-').reverse().join('/') : '';
-  function toast(msg, ms) {
-    const t = h('div', { class: 'toast', role: 'status' }, msg);
+  function toast(msg, ms, actLabel, act) {
+    const t = h('div', { class: 'toast', role: 'status' }, msg,
+      actLabel ? h('button', { class: 'toast-act', onclick: () => { t.remove(); act(); } }, actLabel) : null);
     document.body.append(t);
     setTimeout(() => t.remove(), ms || 2600);
   }
@@ -302,8 +304,10 @@
     const odOn = await OD.connected();
     // סקר שעוד לא לחצו בו "סיום סקר" נשאר במסך הבית גם בימים הבאים (ממשיכים אותו מכאן), והתמונות שלו נשארות בטאבלט
     // סקרים שיובאו מאקסל ישן לא מוצגים כאן (הם בחיפוש בענן), אלא אם עבדו עליהם היום
-    const surveys = all.filter(s => dayOf(s.updated || s.created) === today() || (!s.imported && (!inCloud(s, odOn) || !s.finished)));
-    const hiddenN = all.length - surveys.length;
+    // סקר שהוסר מהדף הראשי (offHome) לא מוצג כאן, אבל לא נמחק: הוא ב"חיפוש סקרים בענן" תחת "הוסרו מהדף הראשי"
+    const surveys = all.filter(s => !s.offHome && (dayOf(s.updated || s.created) === today() || (!s.imported && (!inCloud(s, odOn) || !s.finished))));
+    const offN = all.filter(s => s.offHome).length;
+    const hiddenN = all.length - surveys.length - offN;
     cleanupOld(all.filter(s => !surveys.includes(s)));
     const projects = [...new Set(surveys.map(s => s.project || ''))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b, 'he'));
     if (projectFilter != null && !projects.includes(projectFilter)) projectFilter = null;
@@ -322,6 +326,8 @@
             h('span', {}, icon('tree'), `${n} עצים`),
             h('span', {}, icon('camera'), `${ph} תמונות`),
             status)),
+        h('button', { class: 'icon-btn hide-btn', title: 'הסר מהדף הראשי', 'aria-label': 'הסר מהדף הראשי (בלי למחוק)',
+          onclick: e => { e.stopPropagation(); setOffHome(s, true); }, onkeydown: e => e.stopPropagation() }, icon('hide')),
         h('span', { class: 'arrow', 'aria-hidden': 'true' }, '‹'));
     };
     const shown = projectFilter == null ? projects : [projectFilter];
@@ -345,6 +351,8 @@
         chips, list,
         hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} סקרים מימים קודמים שמורים בענן. `,
           h('a', { href: '#/cloud' }, 'לחיפוש סקרים בענן')) : null,
+        offN ? h('div', { class: 'muted small', style: 'text-align:center' }, `${offN} סקרים הוסרו מהדף הראשי (לא נמחקו). `,
+          h('a', { href: '#/cloud' }, 'להצגה ולהחזרה')) : null,
         h('p', { class: 'muted small', style: 'text-align:center', id: 'homeFoot' }, 'סקר פתוח נשמר בטאבלט (כדי לעבוד גם בלי קליטה) ומגובה לטלגרם ולגוגל דרייב. אחרי "סיום סקר" התמונות מפונות מהטאבלט ונשארות בענן. גרסה ' + APP_VERSION)));
     plannedList(odOn).then(pl => {
       const box = $('#plannedBox');
@@ -358,6 +366,15 @@
     if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => {
       const el = $('#homeFoot'); if (el && e.usage != null) el.append(` · בשימוש בטאבלט: ${(e.usage / 1048576).toFixed(0)} MB`);
     }).catch(() => {});
+  }
+
+  // הסרה מהדף הראשי בלי מחיקה (או החזרה). עובר גם למכשיר השני בסנכרון; זה לא מחיקה, והסקר נשאר בטאבלט ובענן כמו שהוא
+  async function setOffHome(s, off) {
+    if (off) s.offHome = Date.now(); else delete s.offHome;
+    await DB.putSurvey(s, false); // לא נחשב לעבודה על הסקר היום
+    Sync.kick();
+    if (off) toast('הסקר הוסר מהדף הראשי ולא נמחק. אפשר להחזיר אותו מ"חיפוש סקרים בענן"', 4000, 'בטל', () => setOffHome(s, false));
+    if (/^#\/?$/.test(location.hash || '#/')) renderHome();
   }
 
   const dayOf = t => { const d = new Date(t || 0); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -411,6 +428,8 @@
     // פתיחה ביום אחר מהיום שבו הסקר נוצר: לפני העריכה של היום, הגרסה שבענן (נתונים, אקסל, PDF) נשמרת ב"גרסאות קודמות".
     // פעם אחת בכל יום, בלי קשר לזמן העדכון האחרון (שמשתנה גם מהגיבוי עצמו)
     if (s.odDataId && dayOf(s.created) !== t && s.snapDay !== t && !s.snapshotFrom) { s.snapshotFrom = t; s.snapDay = t; }
+    // סקר שהוסר מהדף הראשי ונפתח שוב: חוזר לדף הראשי
+    if (s.offHome) { delete s.offHome; toast('הסקר חזר לדף הראשי', 2500); }
     await DB.putSurvey(s, false);
     return s;
   }
@@ -809,13 +828,29 @@
     const list = h('div', { class: 'stack' });
     const msg = h('div', { class: 'muted small', role: 'status' });
     const arch = h('div', { class: 'stack' });
+    // סקרים שהוסרו מהדף הראשי (בטאבלט, גם בלי קליטה): פתיחה או החזרה לדף הראשי
+    const offBox = h('div', { class: 'stack' });
+    const drawOff = async () => {
+      const off = (await DB.allSurveys()).filter(s => s.offHome).sort((a, b) => (b.offHome || 0) - (a.offHome || 0));
+      const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const shown = off.filter(s => { const t = [s.code, s.siteName, s.street, s.city, s.project, s.site].join(' ').toLowerCase(); return words.every(w => t.includes(w)); });
+      offBox.replaceChildren(...(off.length ? [h('h2', { class: 'proj-head' }, `הוסרו מהדף הראשי (${off.length})`),
+        ...shown.map(s => h('div', { class: 'card stack' },
+          h('div', { class: 't', style: 'font-weight:600' }, s.site || 'סקר ללא שם'),
+          h('div', { class: 'muted small' }, [s.code ? 'סמל ' + s.code : null, s.project, fmtDate(s.date)].filter(Boolean).join(' · ')),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary', onclick: async () => { await setOffHome(s, false); toast('הסקר חזר לדף הראשי', 2500); drawOff(); } }, 'החזר לדף הראשי'),
+            h('button', { class: 'btn', onclick: () => go('#/s/' + s.id) }, 'פתח'))))] : []));
+    };
+    q.addEventListener('input', drawOff);
     const archBtn = h('button', { class: 'btn primary', onclick: () => searchArchive(q.value, arch, archBtn) }, '🔎 חפש גם בארכיון בגוגל דרייב (קובצי אקסל)');
     const archive = await DB.getKV('gdArchive', null);
     const archWhere = h('div', { class: 'muted small' }, 'הארכיון: ' + (archive ? 'התיקייה "' + archive.name + '" ותתי התיקיות שלה' : 'כל הדרייב') + ' · ',
       h('a', { href: '#/settings' }, 'שינוי בהגדרות'));
     q.addEventListener('keydown', e => { if (e.key === 'Enter') searchArchive(q.value, arch, archBtn); });
     app.replaceChildren(bar('חיפוש סקרים בענן', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' }, q,
-      h('div', { class: 'row' }, archBtn, h('button', { class: 'btn', onclick: () => go('#/import') }, '📥 ייבוא סקרים ישנים מאקסל')), archWhere, arch, msg, list));
+      h('div', { class: 'row' }, archBtn, h('button', { class: 'btn', onclick: () => go('#/import') }, '📥 ייבוא סקרים ישנים מאקסל')), archWhere, arch, offBox, msg, list));
+    drawOff();
     if (!(await OD.connected())) { msg.textContent = 'צריך לחבר את גוגל דרייב בהגדרות כדי לחפש בענן.'; return; }
     if (archive && navigator.onLine) OD.folderTree(archive.id).catch(() => {}); // מכין מראש את מבנה התיקיות של הארכיון, כדי שהחיפוש יהיה מהיר
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
@@ -1423,6 +1458,7 @@
       h('div', { class: 'row' },
         h('button', { class: 'btn primary big', onclick: () => go(`#/s/${cur.id}/trees`) }, 'המשך לעצים'),
         h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn', onclick: async () => { const s = cur; await saveNow(); cur = null; go('#/'); await setOffHome(s, true); } }, icon('hide'), 'הסר מהדף הראשי'),
         h('button', { class: 'btn danger', onclick: deleteSurvey }, 'מחק סקר'))));
   }
 
