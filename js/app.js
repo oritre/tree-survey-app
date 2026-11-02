@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.39.1';
+  const APP_VERSION = '1.39.2';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1256,6 +1256,7 @@
       for (const k of ['siteName', 'street', 'city', 'manager']) if (preset[k]) s[k] = preset[k];
       if (preset.date) s.date = preset.date;
       s.plannedId = preset.id;
+      if (preset.jobId) s.jobId = preset.jobId; // העבודה שכבר פתוחה בתוכנת מעקב ביקורות
       const used = await DB.getKV('plannedUsed', []);
       if (!used.includes(preset.id)) await DB.setKV('plannedUsed', [...used, preset.id].slice(-200));
     }
