@@ -23,7 +23,9 @@
   // בלוק של עץ אצל המודד: קוד מפ"י 1502 (M1502), או שם עם "tree"/"עץ"
   // בלוקים של עץ אצל המודד: נקודת עץ (M1502) ועץ עם צמרת (M2801), או שם עם "tree"/"עץ"
   const BOUND_LAYER_RE = /^(m?1602|.*גבול.*|.*קו.?כחול.*|.*kav.?kachol.*|.*blue.?line.*|.*bound.*|.*plot.*)$/i;
-  const TREE_BLOCK_RE = /^(m?1502|m?2801|.*tree.*|.*עץ.*)$/i;
+  // עץ בקודי המדידה: 2801 (סמל עץ עם צמרת). 1502 הוא נקודת גובה, לא עץ
+  const TREE_BLOCK_RE = /^(m?2801|.*tree.*|.*עץ.*)$/i;
+  const NOT_TREE_RE = /^m?15\d\d$/i;
   const LABEL_TAGS = ['NAME', 'NUM', 'NO', 'NUMBER', 'ID', 'MARK', 'PNT', 'POINT'];
 
   // ---------- קריאת הקובץ ----------
@@ -472,7 +474,7 @@
   function surveyorTrees(g, block) {
     const ins = g.inserts || {}, names = new Set(Object.keys(ins).filter(n => TREE_BLOCK_RE.test(n)));
     const b = block == null ? g.treeBlock : block;
-    if (b) names.add(b);
+    if (b && !NOT_TREE_RE.test(b)) names.add(b); // מדידה ישנה: נשמר בה 1502 (נקודות גובה) כבלוק העצים
     const out = [], seen = new Set();
     for (const n of names) for (const r of ins[n] || []) {
       if (seen.has(r[0])) continue;
