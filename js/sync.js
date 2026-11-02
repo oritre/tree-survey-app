@@ -641,22 +641,29 @@
   // אקסל (ואם ביקשו גם PDF) לתיקיית הסקר בגוגל דרייב, באותו שם
   async function uploadReport(s, opts) {
     await syncFolders(s);
+    // יש עצים או תחומים "לא להתייחסות": עולות שתי גרסאות. הנקייה בשם הרגיל, והמלאה עם " - כולל לא להתייחסות"
+    const twoSets = root.App.hasRef(s);
+    const clean = twoSets ? Object.assign({}, s, { inclRef: false }) : s;
     // האקסל וה-PDF שהוכנו כבר בלחיצה על "סיום סקר" (בזמן שהתמונות עלו), אם הסקר לא השתנה מאז
     const hash = hashSurvey(s);
     const ready = await DB.getKV('xlsm:' + s.id, null);
-    const r = ready && ready.hash === hash && ready.blob ? ready : await root.App.buildReport(s);
+    const r = !twoSets && ready && ready.hash === hash && ready.blob ? ready : await root.App.buildReport(clean);
     await putReportFile(s, r.name, r.blob);
+    if (twoSets) {
+      const full = await root.App.buildReport(Object.assign({}, s, { inclRef: true }));
+      await putReportFile(s, full.name.replace(/(\.[^.]+)$/, ' - ' + root.App.REF_SUFFIX + '$1'), full.blob);
+    }
     DB.delKV('xlsm:' + s.id).catch(() => {});
     s.odReportHash = hashSurvey(s); s.odReportAt = Date.now();
     log('ok', 'האקסל נשמר בגוגל דרייב', s);
-    // סקר לבנייה: גם קובץ המדידה והסימונים עליה, כדי להמשיך לעבוד במחשב
+    // סקר לבנייה: גם קובץ המדידה והסימונים עליה (נקי, ואם יש גם המלא), כדי להמשיך לעבוד במחשב
     try {
       for (const f of await root.App.planFiles(s)) await putReportFile(s, f.name, f.blob);
     } catch (e) { log('error', 'קובץ המדידה לא עלה: ' + e.message, s); }
     let pdf = null;
     if (opts && opts.pdf) {
       const last = await DB.getKV('pdf:' + s.id, null);
-      pdf = last && last.hash === hash && last.blob ? last : await root.App.buildPdf(s);
+      pdf = !twoSets && last && last.hash === hash && last.blob ? last : await root.App.buildPdf(clean);
     }
     if (pdf) await uploadPdf(s, pdf);
     await DB.putSurvey(s, false);

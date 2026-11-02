@@ -284,7 +284,7 @@
         toast('הסקר עודכן ממכשיר אחר', 2500);
       } else if (!cur && /^#\/?$/.test(location.hash || '#/')) renderHome();
     },
-    buildReport, buildPdf, planFiles,
+    buildReport, buildPdf, planFiles, hasRef: s => hasRef(s), REF_SUFFIX: 'כולל לא להתייחסות',
     // שם תת-התיקייה של סקר לבנייה בתיקיית הדוחות (שם הקבצים בלי "סקר עצים לבנייה - ")
     reportDirName: s => fileBase(s).replace(/^סקר עצים לבנייה - /, ''),
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
@@ -2362,7 +2362,7 @@
             const btn = e.currentTarget;
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
             if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
-            if (!(await askRef(cur))) return;
+            if (hasRef(cur)) toast('יש עצים "לא להתייחסות": יעלו שתי גרסאות, נקייה ו"כולל לא להתייחסות"', 4000);
             cur.finishPending = true; cur.finished = false;
             const sid = cur.id; Sync.preparing.add(sid);
             await saveNow(); Sync.now(); drawSync();
@@ -2479,7 +2479,7 @@
           h('button', { class: 'btn primary big', onclick: async () => {
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
             if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
-            if (!(await askRef(cur))) return;
+            if (hasRef(cur)) toast('יש עצים "לא להתייחסות": יעלו שתי גרסאות, נקייה ו"כולל לא להתייחסות"', 4000);
             cur.finishPending = true; cur.finished = false;
             await saveNow(); Sync.finishNow(cur.id); go(`#/s/${cur.id}/export`);
             toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה לגוגל דרייב…', 3000);
@@ -2609,9 +2609,11 @@
     const out = [];
     const o = await DB.getPhoto('plandwg:' + s.plan.id).catch(() => null);
     if (o && o.blob) out.push({ name: s.plan.file || o.name || 'מדידה.dwg', blob: o.blob });
-    const v = reportView(s);
-    if (v.trees.some(t => t.px != null) || (v.planPolys || []).length || v.planBound)
-      out.push({ name: fileBase(s) + ' - סימונים במדידה.dxf', blob: new Blob([Plan.markupDxf(v)], { type: 'application/dxf' }) });
+    // סימונים נקיים (בלי "לא להתייחסות"), ואם יש כאלה גם קובץ מלא שמסמן אותם בשכבה TREES_REF
+    const dxf = (v, suffix) => { if (v.trees.some(t => t.px != null) || (v.planPolys || []).length || v.planBound)
+      out.push({ name: fileBase(s) + ' - סימונים במדידה' + suffix + '.dxf', blob: new Blob([Plan.markupDxf(v)], { type: 'application/dxf' }) }); };
+    if (hasRef(s)) { dxf(reportView(Object.assign({}, s, { inclRef: false })), ''); dxf(s, ' - כולל לא להתייחסות'); }
+    else dxf(s, '');
     return out;
   }
 
