@@ -27,7 +27,7 @@
 (vl-load-com)
 
 ;; title block library: the "sheets" folder next to sheets.lsp. The only place to change when the folder moves.
-(setq *sh-libdir* "C:/Users/origr/Downloads/OriSheets/sheets/")
+(setq *sh-libdir* "G:/האחסון שלי/PyCharmMiscProject/bricscad/sheets/")
 
 (setq *sh-app* "ORISHEET")
 (setq *sh-papers* '(("A4" 297.0 210.0) ("A3" 420.0 297.0) ("A2" 594.0 420.0) ("A1" 841.0 594.0) ("A0" 1189.0 841.0)))
