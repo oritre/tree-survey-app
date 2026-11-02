@@ -14,8 +14,12 @@
 ;;;   SHEETSCALE  change the scale of a drawing on the current sheet; the sheet size is fitted again.
 ;;;   SHEETFIT    fit the current sheet again: size, frame, title block, centering, inset cuts. Viewports stretched
 ;;;               by hand keep their size; edges within 5 mm of the frame or the title block go onto it.
-;;;   SHEETPAN    move what a drawing shows inside its locked viewport: click inside it, then a point and where
-;;;               it goes (again and again, Enter when done). The scale stays and SHEETFIT keeps the new view.
+;;;   SHEETPAN    move what a drawing shows: click inside it, then a point and where it goes (again and again,
+;;;               Enter when done). The scale stays.
+;;;
+;;; The viewports are not locked: double-click into one to pan or wheel-zoom. SHEETFIT (and the other commands)
+;;; read the scale and view each viewport has now; a scale within 0.5% of a whole number is set exactly to it and
+;;; written in the title block.
 ;;;   SHEETFILL   grow every drawing to the frame, the title block or the next drawing (scale and middle stay).
 ;;;   SHEETSIZE   force a sheet size on the current sheet (A4..A0, landscape/portrait, custom W x H) or back to Auto.
 ;;;   SHEETBLOCK  choose which block is the title block of each type, and save it to the title block library.
@@ -435,7 +439,7 @@
                                                        (list (entlast))))))
   (if (and old (entget old) (not (equal old (sh:clip e)))) (entdel old))
   (sh:tag e xd)
-  (vla-put-DisplayLocked (vlax-ename->vla-object e) :vlax-true)
+  (vla-put-DisplayLocked (vlax-ename->vla-object e) :vlax-false)
   e)
 
 ;; remove a clip made by an inset (not a polyline the drawing was picked with)
@@ -499,6 +503,23 @@
       (vla-put-Height vp h)
       (sh:setview vp (list (nth 1 x) (nth 2 x) 0.0) (nth 5 x) (sh:k (car x))))))
 
+;; the viewports are not locked: read the scale and the view center they have now (zoomed or panned by hand)
+;; into the xdata. A scale within 0.5% of a whole number is taken as that number.
+(defun sh:sync (e / x cs s r v)
+  (setq x (sh:reals e) cs (vla-get-CustomScale (vlax-ename->vla-object e)))
+  (if (and x (> cs 0))
+    (progn
+      (setq s (/ (sh:upm) cs) r (fix (+ s 0.5)) v (sh:vpview e))
+      ;; and zoomed to exactly that scale, so the printed scale is true
+      (if (and (> r 0) (< (abs (- s r)) (* 0.005 s)))
+        (progn (setq s (float r))
+               (if (not (equal cs (sh:k r) 1e-9)) (sh:setview (vlax-ename->vla-object e) v (nth 5 x) (sh:k r)))))
+      (if (not (and (equal s (car x) 1e-6) (equal (car v) (nth 1 x) 1e-6) (equal (cadr v) (nth 2 x) 1e-6)))
+        (sh:tag e (append (mapcar '(lambda (q) (cons 1000 q)) (sh:roles e))
+                          (list (cons 1040 s) (cons 1040 (car v)) (cons 1040 (cadr v))
+                                (cons 1040 (nth 3 x)) (cons 1040 (nth 4 x)) (cons 1040 (nth 5 x))))))))
+  e)
+
 ;; model point (WCS) at the center of a viewport
 (defun sh:vpview (e / ed c t0 a)
   (setq ed (entget e) c (cdr (assoc 12 ed)) t0 (cdr (assoc 17 ed)) a (- (cdr (assoc 51 ed))))
@@ -540,8 +561,8 @@
   (setq lay (getvar "CTAB") info (sh:info lay))
   (if (null typ) (setq typ (car info)))
   (if (null forced) (setq forced (cadr info)))
-  ;; cuts made for insets are made again below
-  (foreach e (sh:items lay '("vp")) (sh:unclip e))
+  ;; scale and view as they are now; cuts made for insets are made again below
+  (foreach e (sh:items lay '("vp")) (sh:sync e) (sh:unclip e))
   (setq vps (sh:items lay '("vp"))
         insets (vl-remove-if-not 'sh:inset-p vps)
         mains (vl-remove-if 'sh:inset-p vps))
@@ -656,7 +677,7 @@
   (command "_.ZOOM" "_C" (trans cW 0 1) (strcat (rtos k 2 12) "XP"))
   (vla-put-CustomScale vp k)
   (vla-put-MSpace doc :vlax-false)
-  (vla-put-DisplayLocked vp :vlax-true)
+  (vla-put-DisplayLocked vp :vlax-false)
   (mapcar 'setvar names old))
 
 ;; points of a lightweight polyline: ((x y bulge) ...)
@@ -945,7 +966,7 @@
     (progn
       (command "_.PSPACE")
       (setq lay (getvar "CTAB") gap *sh-inset-gap*)
-      (foreach e (sh:items lay '("vp")) (sh:unclip e))
+      (foreach e (sh:items lay '("vp")) (sh:sync e) (sh:unclip e))
       (setq area (sh:bbox (sh:items lay '("frame"))) vps (sh:items lay '("vp")))
       (if (setq o (sh:bbox (sh:items lay '("divider")))) (setq area (list (car area) (list (car (car o)) (cadr (cadr area))))))
       (setq area (list (car (car area)) (cadr (car area)) (car (cadr area)) (cadr (cadr area))))
@@ -994,7 +1015,7 @@
   (sh:begin)
   (if (setq e (sh:pickvp))
     (progn
-      (setq x (sh:reals e) old (fix (car x)))
+      (setq x (sh:reals (sh:sync e)) old (fix (+ (car x) 0.5)))
       (setq new (getint (strcat "\nNew scale 1: <" (itoa old) ">: ")))
       (if (and new (> new 0) (/= new old))
         (progn
@@ -1031,7 +1052,7 @@
       (command "_.PSPACE")
       (if (setq e (sh:pickin "\nClick inside the drawing to move: "))
         (progn
-          (setq doc (sh:doc) vp (vlax-ename->vla-object e) x (sh:reals e) k (sh:k (car x)) v (sh:vpview e) go T)
+          (setq doc (sh:doc) vp (vlax-ename->vla-object e) x (sh:reals (sh:sync e)) k (sh:k (car x)) v (sh:vpview e) go T)
           (while go
             (vla-put-DisplayLocked vp :vlax-false)
             (vla-put-MSpace doc :vlax-true)
@@ -1043,7 +1064,7 @@
                 (sh:setview vp (list (car v) (cadr v) 0.0) (nth 5 x) k))
               (setq go nil)))
           (vla-put-MSpace doc :vlax-false)
-          (vla-put-DisplayLocked vp :vlax-true)
+          (vla-put-DisplayLocked vp :vlax-false)
           (sh:tag e (append (mapcar '(lambda (r) (cons 1000 r)) (sh:roles e))
                             (list (cons 1040 (car x)) (cons 1040 (car v)) (cons 1040 (cadr v))
                                   (cons 1040 (nth 3 x)) (cons 1040 (nth 4 x)) (cons 1040 (nth 5 x)))))))))
