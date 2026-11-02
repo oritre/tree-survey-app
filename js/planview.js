@@ -29,6 +29,9 @@
     let selPoly = null;         // תחום נבחר
     let moving = false;         // ממתין לנגיעה במיקום החדש
     let drawing = null;         // נקודות של תחום בציור
+    let drawKind = 'poly';      // poly: תחום רגיל | bound: קו כחול
+    let pickBound = false;      // ממתין לנגיעה בקו מהשרטוט
+    let boundCand = null;       // הקו שנבחר מהשרטוט, לפני אישור
     let aerial = await DB.getKV('planAerial', false);
     // רקע שחור כמו ב-BricsCAD, כשיש בקובץ צבעים (DWG, DXF)
     const hasStyle = !!(g.st && g.st.length);
@@ -45,6 +48,15 @@
     const hint = h('div', { class: 'plan-hint' });
     const sheet = h('div', { class: 'plan-sheet hidden' });
     const legend = h('div', { class: 'plan-legend' });
+    // מונה עצי המודד שסומנו, והדגשה בולטת של מה שעוד לא סומן (כדי לא לפספס עץ לפני שעוזבים את השטח)
+    let missOn = await DB.getKV('planMiss', false);
+    let jumpH = null;            // עץ המודד שאליו קפצנו אחרון
+    const skipped = new Set();   // עצים שדילגו עליהם ב"הבא"
+    const missTxt = h('span', {});
+    const missChip = h('div', { class: 'plan-miss' },
+      h('button', { class: 'pm-main', title: 'הדגשת עצי המודד שעוד לא סומנו', onclick: () => { missOn = !missOn; DB.setKV('planMiss', missOn); jumpH = null; updateBar(); redraw(); } }, missTxt),
+      h('button', { class: 'pm-next', title: 'לעץ הקרוב שעוד לא סומן', onclick: nextMissing }, 'הבא ›'),
+      h('button', { class: 'pm-bound', title: 'קו כחול: רק עצים בתוכו ועד 4 מ\' ממנו נספרים', onclick: () => { setMode('area'); if (!s.planBound) startPick(); } }, 'קו כחול'));
     const btn = (label, title, on, cls) => h('button', { class: 'txt ' + (cls || ''), title: title || null, 'aria-label': title || null, onclick: on }, label);
     const markBtn = btn('סימון עצים', 'נגיעה בעץ של המודד או במקום ריק', () => setMode('mark'));
     const areaBtn = btn('תחימה', 'תחימת קטע בפוליגון', () => setMode('area'));
@@ -69,8 +81,12 @@
         h('div', { class: 'grp' }, markBtn, areaBtn, xyBtn),
         undoBtn, gpsBtn, monoBtn, layersBtn,
         btn('סגור', null, () => close(), 'save')),
-      h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, hint, legend, sheet));
+      h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, hint, legend, missChip, sheet));
     document.body.append(ov);
+    // המונה עולה מעל החלון התחתון כשהוא פתוח
+    const placeMiss = () => { missChip.style.bottom = sheet.classList.contains('hidden') ? '' : (sheet.offsetHeight + 20) + 'px'; };
+    if (root.ResizeObserver) new ResizeObserver(placeMiss).observe(sheet);
+    new MutationObserver(placeMiss).observe(sheet, { attributes: true, attributeFilter: ['class'] });
     const $$ = sel => [...document.querySelectorAll(sel)];
 
     // ---------- מפה ----------
@@ -239,6 +255,18 @@
       const k = ppm();
       const inView = p => p.x > -pad.x && p.y > -pad.y && p.x < size.x + pad.x && p.y < size.y + pad.y;
 
+      // קו כחול (גבול התכנית) ורצועה סביבו
+      const bpts = boundCand || (s.planBound && s.planBound.pts);
+      if (bpts && bpts.length >= 3) {
+        const pts = bpts.map(q => P(llOf('a', q[0], q[1])));
+        const path = () => { cx.beginPath(); pts.forEach((p, i) => i ? cx.lineTo(p.x, p.y) : cx.moveTo(p.x, p.y)); cx.closePath(); };
+        const bw = (s.planBound && s.planBound.buf != null ? s.planBound.buf : BOUND_BUF) * k;
+        cx.save(); cx.lineJoin = 'round';
+        path(); cx.fillStyle = 'rgba(33,150,243,.08)'; cx.fill();
+        if (bw > 1) { cx.lineWidth = bw * 2; cx.strokeStyle = 'rgba(33,150,243,.16)'; cx.stroke(); }
+        cx.lineWidth = boundCand ? 5 : 3.5; cx.strokeStyle = boundCand ? '#ffea00' : '#2196f3'; cx.setLineDash(boundCand ? [10, 6] : []); cx.stroke();
+        cx.restore();
+      }
       // תחומים
       for (const poly of s.planPolys) {
         const pts = poly.pts.map(q => P(llOf('a', q[0], q[1])));
@@ -281,8 +309,17 @@
         if (used.has(t.h)) continue;
         const p = P(llOf('s', t.x, t.y));
         if (!inView(p)) continue;
+        if (missOn && inRange(t)) {
+          // הדגשה: הילה כתומה רחבה ועיגול אדום מלא, באותו גודל בכל זום
+          const R = t.h === jumpH ? 30 : 18;
+          cx.beginPath(); cx.arc(p.x, p.y, R, 0, 7); cx.fillStyle = 'rgba(255,61,0,.28)'; cx.fill();
+          cx.lineWidth = 4; cx.strokeStyle = '#ff3d00'; cx.stroke();
+          cx.beginPath(); cx.arc(p.x, p.y, 7, 0, 7); cx.fillStyle = '#ff1744'; cx.fill(); cx.lineWidth = 2; cx.strokeStyle = '#fff'; cx.stroke();
+          if (t.h === jumpH) { cx.beginPath(); cx.arc(p.x, p.y, R + 8, 0, 7); cx.lineWidth = 3; cx.strokeStyle = '#ffea00'; cx.stroke(); }
+        }
         cx.beginPath(); cx.arc(p.x, p.y, rS, 0, 7);
-        if (hasStyle) { cx.lineWidth = 1.2; cx.strokeStyle = onDark() ? 'rgba(0,229,255,.7)' : 'rgba(0,120,160,.75)'; cx.stroke(); }
+        if (missOn && inRange(t)) { /* כבר מודגש */ }
+        else if (hasStyle) { cx.lineWidth = 1.2; cx.strokeStyle = onDark() ? 'rgba(0,229,255,.7)' : 'rgba(0,120,160,.75)'; cx.stroke(); }
         else { cx.fillStyle = 'rgba(255,255,255,.85)'; cx.fill(); cx.lineWidth = 1.5; cx.strokeStyle = SURV; cx.stroke(); }
         hits.push({ kind: 'sv', id: t.h, x: p.x, y: p.y, r: rS });
         occ.push(box(p.x - rS, p.y - rS, rS * 2, rS * 2));
@@ -604,11 +641,17 @@
 
     // ---------- תחומים ----------
     function setMode(m) {
-      mode = m; moving = false; drawing = null; selPoly = null; xyPt = null;
+      mode = m; moving = false; drawing = null; selPoly = null; xyPt = null; pickBound = false; boundCand = null; drawKind = 'poly';
       if (m === 'area' || m === 'xy') selId = null;
       renderSheet(); redraw();
     }
     function areaTap(pt, xy) {
+      if (pickBound) {
+        const c = pickLine(xy);
+        if (!c) { flash('לא נמצא כאן קו סגור. אפשר לגעת ישר על הקו, או לשרטט אותו ידנית'); return; }
+        boundCand = c.pts; boundCand.open = c.open;
+        renderSheet(); redraw(); return;
+      }
       if (drawing) {
         // הצמדה כמו OSNAP באוטוקאד: נגיעה ליד הנקודה הראשונה סוגרת את התחום, ליד קודקוד קיים נצמדת אליו
         const sn = snapAt(pt);
@@ -633,7 +676,89 @@
       // סגירה מקבלת עדיפות כשהנקודה הראשונה בטווח
       if (best && best.first) return best;
       for (const poly of s.planPolys) for (const q of poly.pts) test(q, {});
+      if (s.planBound) for (const q of s.planBound.pts) test(q, {});
+      // פינות של קווי השרטוט (למשל גבול המגרש)
+      if (!best) for (const q of cadVertsNear(fromMap(map.containerPointToLatLng(pt)), SNAP_PX / ppm() * root.Plan.upm(s.plan))) test(q, {});
       return best;
+    }
+    // ---------- קווי השרטוט: פינות ובחירת קו ----------
+    const cadPaths = g.paths || [];
+    function cadVertsNear(xy, tol) {
+      const x = xy[0] - g.ox, y = xy[1] - g.oy, out = [];
+      for (let i = 0; i < cadPaths.length; i++) {
+        if (cad.bb[i * 4] > x + tol || cad.bb[i * 4 + 2] < x - tol || cad.bb[i * 4 + 1] > y + tol || cad.bb[i * 4 + 3] < y - tol) continue;
+        const p = cadPaths[i];
+        for (let k = 0; k < p.length; k += 2) if (Math.abs(p[k] - x) <= tol && Math.abs(p[k + 1] - y) <= tol) out.push([Math.round((p[k] + g.ox) * 100) / 100, Math.round((p[k + 1] + g.oy) * 100) / 100]);
+        if (out.length > 200) break;
+      }
+      return out;
+    }
+    // נגיעה בקו: הקו הקרוב, ואם הוא לא סגור, מחברים אליו קווים צמודים (באותו סגנון קודם) עד שנסגר
+    function pickLine(xy) {
+      const tol = 16 / ppm() * root.Plan.upm(s.plan), x = xy[0] - g.ox, y = xy[1] - g.oy;
+      const cand = [];
+      for (let i = 0; i < cadPaths.length; i++) {
+        if (cad.bb[i * 4] > x + tol || cad.bb[i * 4 + 2] < x - tol || cad.bb[i * 4 + 1] > y + tol || cad.bb[i * 4 + 3] < y - tol) continue;
+        const p = cadPaths[i];
+        if (p.length < 4) continue;
+        let d = Infinity;
+        for (let k = 0; k + 3 < p.length; k += 2) d = Math.min(d, segDist(x, y, p[k], p[k + 1], p[k + 2], p[k + 3]));
+        if (d <= tol) cand.push([d, i]);
+      }
+      cand.sort((a, b) => a[0] - b[0]);
+      // סמלים קטנים (עצים, עמודים) לא יכולים להיות קו כחול: מדלגים על תחום קטן מ-20 מ"ר
+      const minA = 20 * Math.pow(root.Plan.upm(s.plan), 2);
+      for (const [, i] of cand.slice(0, 12)) {
+        const r = chainFrom(i);
+        if (r && !r.open && polyArea(r.pts) >= minA) return { pts: r.pts.map(q => [Math.round((q[0] + g.ox) * 100) / 100, Math.round((q[1] + g.oy) * 100) / 100]), open: r.open };
+      }
+      return null;
+    }
+    function polyArea(P) { let a = 0; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[(i + 1) % P.length]; a += p[0] * q[1] - q[0] * p[1]; } return Math.abs(a / 2); }
+    function chainFrom(bi) {
+      const eps = 0.05 * root.Plan.upm(s.plan);
+      const toPts = p => { const o = []; for (let k = 0; k < p.length; k += 2) o.push([p[k], p[k + 1]]); return o; };
+      const same = (a, b) => Math.abs(a[0] - b[0]) <= eps && Math.abs(a[1] - b[1]) <= eps;
+      let chain = toPts(cadPaths[bi]);
+      const used = new Set([bi]), st0 = g.ps ? g.ps[bi] : 0;
+      const closed = () => chain.length > 3 && same(chain[0], chain[chain.length - 1]);
+      for (let guard = 0; guard < 400 && !closed(); guard++) {
+        const end = chain[chain.length - 1], beg = chain[0];
+        let found = null;
+        for (const pass of [0, 1]) {
+          for (let i = 0; i < cadPaths.length && !found; i++) {
+            if (used.has(i)) continue;
+            if (pass === 0 && g.ps && g.ps[i] !== st0) continue;
+            const p = cadPaths[i]; if (p.length < 4) continue;
+            const a = [p[0], p[1]], b = [p[p.length - 2], p[p.length - 1]];
+            if (same(a, end)) found = { i, pts: toPts(p).slice(1), at: 'end' };
+            else if (same(b, end)) found = { i, pts: toPts(p).reverse().slice(1), at: 'end' };
+            else if (same(b, beg)) found = { i, pts: toPts(p).slice(0, -1), at: 'beg' };
+            else if (same(a, beg)) found = { i, pts: toPts(p).reverse().slice(0, -1), at: 'beg' };
+          }
+          if (found) break;
+        }
+        if (!found) break;
+        used.add(found.i);
+        chain = found.at === 'end' ? chain.concat(found.pts) : found.pts.concat(chain);
+      }
+      const isClosed = closed();
+      if (isClosed) chain.pop();
+      if (chain.length < 3) return null;
+      return { pts: chain, open: !isClosed };
+    }
+    // קווי גבול סגורים שנמצאו בקובץ (למשל גבול חלקה, שכבה 1602)
+    const fileBounds = (g.bounds || []).map(b => ({ name: /1602/.test(b.layer) ? 'גבול חלקה' : b.layer, pts: b.pts.map(q => [Math.round((q[0] + g.ox) * 100) / 100, Math.round((q[1] + g.oy) * 100) / 100]) }))
+      .filter(b => polyArea(b.pts) >= 20 * Math.pow(root.Plan.upm(s.plan), 2)).sort((a, b) => polyArea(b.pts) - polyArea(a.pts)).slice(0, 3);
+    const fileBoundBtns = () => fileBounds.map(b => h('button', { class: 'btn', onclick: () => { pickBound = true; boundCand = b.pts.map(q => q.slice()); renderSheet(); redraw(); } }, b.name + ' מהמדידה'));
+    function startPick() { pickBound = true; boundCand = null; drawing = null; selPoly = null; renderSheet(); redraw(); }
+    function setBound(pts) {
+      const old = s.planBound;
+      s.planBound = { pts, buf: old && old.buf != null ? old.buf : BOUND_BUF };
+      pickBound = false; boundCand = null; drawing = null; drawKind = 'poly';
+      undo.push({ what: 'קו כחול', run: () => { s.planBound = old; } });
+      changed(); renderSheet();
+      flash(`קו כחול נקבע: ${missing().length} עצי מודד בתחום עוד לא סומנו`);
     }
     // ---------- נ.צ ברשת ישראל החדשה ----------
     // מחזיר [X, Y] ברשת ישראל, או null בשרטוט על דף שלא כויל
@@ -672,18 +797,52 @@
       sheet.classList.remove('hidden'); hint.classList.add('hidden');
       if (drawing) {
         sheet.replaceChildren(
-          h('div', { class: 'plan-sheet-head' }, h('b', {}, 'תחום חדש'), h('span', { class: 'muted small' }, drawing.length >= 3 ? `${drawing.length} נקודות. נגיעה בעיגול הירוק סוגרת את התחום` : `גע בפינות התחום לפי הסדר (${drawing.length} נקודות)`)),
+          h('div', { class: 'plan-sheet-head' }, h('b', {}, drawKind === 'bound' ? 'קו כחול' : 'תחום חדש'), h('span', { class: 'muted small' }, drawing.length >= 3 ? `${drawing.length} נקודות. נגיעה בעיגול הירוק סוגרת את התחום` : `גע בפינות התחום לפי הסדר (${drawing.length} נקודות)`)),
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
             h('button', { class: 'btn', disabled: drawing.length ? null : '', onclick: () => { drawing.pop(); renderSheet(); redraw(); } }, 'בטל נקודה'),
-            h('button', { class: 'btn', onclick: () => { drawing = null; renderSheet(); redraw(); } }, 'ביטול'),
+            h('button', { class: 'btn', onclick: () => { drawing = null; drawKind = 'poly'; renderSheet(); redraw(); } }, 'ביטול'),
             h('button', { class: 'btn primary', disabled: drawing.length >= 3 ? null : '', onclick: finishPoly }, 'סיום')));
         return;
       }
+      if (pickBound) {
+        const area = boundCand ? Math.round(Math.abs(boundCand.reduce((a, p, i) => { const q = boundCand[(i + 1) % boundCand.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0) / 2) / Math.pow(root.Plan.upm(s.plan), 2)) : 0;
+        sheet.replaceChildren(
+          h('div', { class: 'plan-sheet-head' }, h('b', {}, 'קו כחול'),
+            h('span', { class: 'muted small' }, boundCand
+              ? `נבחר קו (${boundCand.length} פינות, ${area.toLocaleString()} מ"ר)`
+              : fileBounds.length ? 'גע בקו הכחול בשרטוט, או בחר קו שנמצא במדידה' : 'גע בקו הכחול (או בגבול המגרש) בשרטוט')),
+          h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+            ...fileBoundBtns(),
+            h('button', { class: 'btn', onclick: () => { pickBound = false; boundCand = null; drawKind = 'bound'; drawing = []; renderSheet(); redraw(); } }, 'לשרטט ידנית'),
+            h('button', { class: 'btn', onclick: () => { pickBound = false; boundCand = null; renderSheet(); redraw(); } }, 'ביטול'),
+            boundCand ? h('button', { class: 'btn primary', onclick: () => setBound(boundCand.map(q => q.slice())) }, 'אישור') : null));
+        return;
+      }
+      const boundRow = () => {
+        const b = s.planBound;
+        if (!b) return h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' },
+          h('span', { class: 'muted small' }, 'קו כחול: לא הוגדר (נספרים כל עצי המודד)'),
+          h('button', { class: 'btn', onclick: startPick }, 'בחירת קו כחול'));
+        const buf = b.buf != null ? b.buf : BOUND_BUF;
+        return h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' },
+          h('span', { class: 'small' }, h('b', { style: 'color:#1976d2' }, 'קו כחול'), ` + רצועה של ${buf} מ'`),
+          h('button', { class: 'btn', onclick: () => {
+            const v = prompt('רוחב הרצועה מחוץ לקו הכחול (מטר)', String(buf)); if (v == null) return;
+            const n = parseFloat(v); if (!(n >= 0)) return;
+            const old = b.buf; b.buf = n; undo.push({ what: 'רצועה', run: () => { b.buf = old; } }); changed(); renderSheet();
+          } }, 'רצועה'),
+          h('button', { class: 'btn', onclick: startPick }, 'החלפה'),
+          h('button', { class: 'btn', onclick: () => {
+            if (!confirm('למחוק את הקו הכחול?')) return;
+            const old = s.planBound; s.planBound = null; undo.push({ what: 'מחיקת קו כחול', run: () => { s.planBound = old; } }); changed(); renderSheet();
+          } }, 'מחיקה'));
+      };
       const poly = s.planPolys.find(p => p.id === selPoly);
       if (!poly) {
         sheet.replaceChildren(
           h('div', { class: 'plan-sheet-head' }, h('b', {}, 'תחימה'), h('span', { class: 'muted small' }, s.planPolys.length ? 'נגיעה בתחום בוחרת אותו' : 'עוד אין תחומים')),
-          h('div', { class: 'row', style: 'gap:8px' }, h('button', { class: 'btn primary', onclick: () => { drawing = []; renderSheet(); } }, '+ תחום חדש')));
+          h('div', { class: 'row', style: 'gap:8px' }, h('button', { class: 'btn primary', onclick: () => { drawKind = 'poly'; drawing = []; renderSheet(); } }, '+ תחום חדש')),
+          boundRow());
         return;
       }
       const n = myTrees().filter(t => root.Plan.inside([t.px, t.py], poly.pts));
@@ -699,9 +858,11 @@
             undo.push({ what: 'מחיקת תחום', run: () => { s.planPolys.splice(i, 0, poly); } });
             changed(); renderSheet();
           } }, 'מחק תחום'),
+          h('button', { class: 'btn', onclick: () => setBound(poly.pts.map(q => q.slice())) }, 'זה הקו הכחול'),
           h('button', { class: 'btn primary', onclick: () => { drawing = []; selPoly = null; renderSheet(); } }, '+ תחום חדש')));
     }
     function finishPoly() {
+      if (drawKind === 'bound') return setBound(drawing);
       const name = prompt('שם התחום (לא חובה)', `קטע ${s.planPolys.length + 1}`);
       if (name == null) return;
       const poly = { id: ctx.uid(), pts: drawing, name: name.trim() };
@@ -862,10 +1023,58 @@
       const items = root.Plan.STATUSES.filter(x => used.has(x.key)).map(x => [x.color, x.key]);
       if (used.has('')) items.push([MY, 'עץ מסומן']);
       items.push(['#fff', 'עץ של המודד']);
+      if (missOn && missing().length) items.push(['#ff1744', 'עץ מודד שלא סומן']);
       if (myTrees().some(t => !t.pref)) items.push(['sq', 'עץ שהוספתי (בריבוע)']);
       legend.replaceChildren(...items.map(([c, t]) => h('span', {}, c === 'sq' ? h('i', { class: 'sq' }) : h('i', { style: `background:${c}` }), t)));
     }
+    // עצי המודד שבתחום הבדיקה: בתוך הקו הכחול או עד 4 מ' ממנו (בלי קו כחול: כולם)
+    const BOUND_BUF = 4;
+    function inRange(t) {
+      const b = s.planBound;
+      if (!b || !b.pts || b.pts.length < 3) return true;
+      if (root.Plan.inside([t.x, t.y], b.pts)) return true;
+      const lim = (b.buf != null ? b.buf : BOUND_BUF) * root.Plan.upm(s.plan);
+      return polyDist(t.x, t.y, b.pts) <= lim;
+    }
+    function segDist(px, py, ax, ay, bx, by) {
+      const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy;
+      const u = L ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L)) : 0;
+      return Math.hypot(px - ax - u * dx, py - ay - u * dy);
+    }
+    function polyDist(x, y, pts) {
+      let d = Infinity;
+      for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; d = Math.min(d, segDist(x, y, a[0], a[1], b[0], b[1])); }
+      return d;
+    }
+    function missing() { const used = linked(); return surveyor.filter(t => !used.has(t.h) && inRange(t)); }
+    function updateMiss() {
+      missChip.hidden = !surveyor.length;
+      const tot = surveyor.filter(inRange).length, n = missing().length, hasB = !!s.planBound;
+      missChip.classList.toggle('on', missOn); missChip.classList.toggle('done', !n);
+      const where = hasB ? ' בתחום' : '';
+      missTxt.textContent = n ? `${n} עצי מודד${where} לא סומנו (${tot - n}/${tot})` : `כל ${tot} עצי המודד${where} סומנו ✓`;
+      missChip.querySelector('.pm-next').hidden = !n;
+      missChip.querySelector('.pm-bound').hidden = hasB;
+    }
+    // קפיצה לעץ הקרוב שעוד לא סומן: קרוב למיקום ה-GPS אם יש, אחרת למרכז המסך
+    function nextMissing() {
+      let list = missing();
+      if (!list.length) return;
+      if (jumpH && list.some(t => t.h === jumpH)) skipped.add(jumpH);
+      let pool = list.filter(t => !skipped.has(t.h));
+      if (!pool.length) { skipped.clear(); pool = list; }
+      let ref = fromMap(map.getCenter());
+      if (gpsPos && itm) ref = root.Plan.fromLL(gpsPos.lat, gpsPos.lon);
+      const t = pool.reduce((a, b) => Math.hypot(b.x - ref[0], b.y - ref[1]) < Math.hypot(a.x - ref[0], a.y - ref[1]) ? b : a);
+      jumpH = t.h;
+      if (!missOn) { missOn = true; DB.setKV('planMiss', true); }
+      if (follow) setFollow(false);
+      map.setView(toMap(t.x, t.y), Math.max(map.getZoom(), itm ? 21 : 4));
+      flash(t.name ? `עץ המודד ${t.name}` : 'עץ מודד שלא סומן');
+      updateBar(); redraw();
+    }
     function updateBar() {
+      updateMiss();
       markBtn.classList.toggle('on', mode === 'mark'); areaBtn.classList.toggle('on', mode === 'area'); xyBtn.classList.toggle('on', mode === 'xy');
       undoBtn.disabled = !undo.length;
       legendHtml();

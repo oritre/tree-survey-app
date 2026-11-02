@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.37.1';
+  const APP_VERSION = '1.39.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -666,7 +666,9 @@
   async function planGeom(p) {
     let d = await DB.getPhoto(planKey(p)), g = d && d.geom;
     // מדידה שנקראה בגרסה קודמת: קוראים שוב מהקובץ המקורי ששמור במכשיר, כדי שתיראה כמו ב-BricsCAD
-    if (g && (g.v || 1) < GEOM_V && !Plan.isPaper(p)) {
+    // גם מדידת DWG שנקראה לפני שנשמרו קווי הגבול שבה (גבול חלקה)
+    const old = g && ((g.v || 1) < GEOM_V || (!g.bounds && /\.dwg$/i.test(p.file || '')));
+    if (old && !Plan.isPaper(p)) {
       const o = await DB.getPhoto('plandwg:' + p.id);
       if (o && o.blob) {
         try {
@@ -678,7 +680,7 @@
             await saveNow(); Sync.kick();
           }
         } catch (e) { console.warn('plan re-read', e); }
-      } else if (p.gv >= GEOM_V && p.odGeoId) g = null; // במכשיר אחר כבר נקראה מחדש: מורידים
+      } else if ((g.v || 1) < GEOM_V && p.gv >= GEOM_V && p.odGeoId) g = null; // במכשיר אחר כבר נקראה מחדש: מורידים
     }
     // נטענה במכשיר אחר: מגוגל דרייב
     if (!g) {
