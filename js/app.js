@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.44.0';
+  const APP_VERSION = '1.45.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -285,6 +285,8 @@
       } else if (!cur && /^#\/?$/.test(location.hash || '#/')) renderHome();
     },
     buildReport, buildPdf,
+    // שם תת-התיקייה של סקר לבנייה בתיקיית הדוחות (שם הקבצים בלי "סקר עצים לבנייה - ")
+    reportDirName: s => fileBase(s).replace(/^סקר עצים לבנייה - /, ''),
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
     ui: { h, icon, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, shareName, today, fmtDate },
   };
@@ -2383,7 +2385,7 @@
             await saveNow();
             status.textContent = 'מעלה אקסל לגוגל דרייב…';
             await Sync.uploadReport(cur);
-            status.textContent = '✓ האקסל הועלה לגוגל דרייב (תיקיית הפרויקט בסקרי עצים).';
+            status.textContent = `✓ האקסל הועלה לגוגל דרייב (${await Sync.reportPath(cur)}).`;
           }) }, '⬆ העלה אקסל לענן'))),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'דוח PDF'),
@@ -2882,7 +2884,7 @@
           tgStatus),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'גוגל דרייב'),
-          h('div', { class: 'muted small' }, 'אקסל ו-PDF נשמרים בתיקיית הדוחות, תיקייה לכל פרויקט. הנתונים, התמונות וההגדרות המשותפות נשמרים בתיקייה "גיבוי אפליקציית סקרי עצים".'),
+          h('div', { class: 'muted small' }, 'אקסל ו-PDF נשמרים בתיקיית הדוחות, תיקייה לכל פרויקט (בסקר לבנייה: תיקייה לכל סקר בתוך הפרויקט). הנתונים, התמונות וההגדרות המשותפות נשמרים בתיקייה "גיבוי אפליקציית סקרי עצים".'),
           odStatus,
           credLine, credBox,
           archLine,
