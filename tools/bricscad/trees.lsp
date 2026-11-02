@@ -14,6 +14,9 @@
 ;;; so the designations are read even while the file is open in Excel (save it first to be safe).
 ;;; Re-running TREES updates colors and numbers. Numbers you moved by hand keep their place.
 ;;; The surveyor's own tree blocks are never changed.
+;;; Each tree is an insert of the block "trees" (*ts-block*). If the drawing already has a block with that name,
+;;; it is used as is, so you can draw your own tree symbol; otherwise a ring is created. Put the symbol on layer 0
+;;; so it takes the designation color of the tree's layer.
 
 (vl-load-com)
 
@@ -21,6 +24,7 @@
 (setq *ts-txt* 0.5)   ; number height (m)
 (setq *ts-r* 0.45)    ; ring radius (m)
 (setq *ts-w* 0.12)    ; ring width (m)
+(setq *ts-block* "trees") ; block inserted at every tree
 
 ;; code -> (layer color)   colors as in the Excel template's conditional formatting
 (setq *ts-layers*
@@ -101,12 +105,22 @@
   r)
 
 ;; ---------- drawing ----------
+; the block "trees": kept if the drawing has it, else a ring on layer 0 (color BYLAYER)
+(defun ts:block ()
+  (if (not (tblsearch "BLOCK" *ts-block*))
+    (progn
+      (entmake (list '(0 . "BLOCK") (cons 2 *ts-block*) '(70 . 0) '(10 0.0 0.0 0.0)))
+      (entmake (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") '(8 . "0") '(100 . "AcDbPolyline") '(90 . 2) '(70 . 1)
+                     (cons 43 *ts-w*)
+                     (list 10 (- *ts-r*) 0.0) '(42 . 1.0)
+                     (list 10 *ts-r* 0.0) '(42 . 1.0)))
+      (entmake '((0 . "ENDBLK")))))
+  *ts-block*)
+
 (defun ts:ring (c lay num)
   (entmake (append
-    (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 lay) '(100 . "AcDbPolyline") '(90 . 2) '(70 . 1)
-          (cons 43 *ts-w*)
-          (list 10 (- (car c) *ts-r*) (cadr c)) '(42 . 1.0)
-          (list 10 (+ (car c) *ts-r*) (cadr c)) '(42 . 1.0))
+    (list '(0 . "INSERT") '(100 . "AcDbEntity") (cons 8 lay) '(100 . "AcDbBlockReference") (cons 2 (ts:block))
+          (list 10 (car c) (cadr c) 0.0) '(41 . 1.0) '(42 . 1.0) '(43 . 1.0) '(50 . 0.0))
     (ts:xd num "ring"))))
 
 ; square frame around a tree that is not the surveyor's (added in the field)

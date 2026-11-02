@@ -624,6 +624,7 @@
 
   // קובץ DXF עם הסימונים מהשטח (עצים, מספרים, תחומים, קו כחול), לפתיחה או להכנסה (Insert/Xref) ב-BricsCAD.
   // הקואורדינטות כמו במדידה (רשת ישראל, או השרטוט אחרי כיול). השכבות כמו בפקודת TREES
+  const TREE_BLOCK = 'trees';
   function markupDxf(survey) {
     const plan = survey.plan || {};
     const W = (x, y) => itmOf(plan, x, y) || (isPaper(plan) ? world(plan, x, y) : [x, y]);
@@ -635,7 +636,11 @@
     put(0, 'SECTION', 2, 'HEADER', 9, '$ACADVER', 1, 'AC1009', 9, '$INSUNITS', 70, 6, 0, 'ENDSEC');
     put(0, 'SECTION', 2, 'TABLES', 0, 'TABLE', 2, 'LAYER', 70, layers.size);
     for (const [n, c] of layers) put(0, 'LAYER', 2, n, 70, 0, 62, c, 6, 'CONTINUOUS');
-    put(0, 'ENDTAB', 0, 'ENDSEC', 0, 'SECTION', 2, 'ENTITIES');
+    put(0, 'ENDTAB', 0, 'ENDSEC');
+    // כל עץ הוא בלוק בשם trees (ori: ב-BricsCAD אפשר לבחור את כולם או להחליף את הסמל). העיגול בשכבה 0, אז הצבע לפי שכבת העץ
+    put(0, 'SECTION', 2, 'BLOCKS', 0, 'BLOCK', 8, '0', 2, TREE_BLOCK, 70, 0, 10, 0, 20, 0, 30, 0, 3, TREE_BLOCK,
+      0, 'CIRCLE', 8, '0', 10, 0, 20, 0, 30, 0, 40, 0.5, 0, 'ENDBLK', 8, '0', 0, 'ENDSEC');
+    put(0, 'SECTION', 2, 'ENTITIES');
     const text = (lay, x, y, h, str) => put(0, 'TEXT', 8, lay, 10, f(x), 20, f(y), 30, 0, 40, h, 1, enc(str), 72, 1, 11, f(x), 21, f(y), 31, 0);
     const poly = (lay, pts, closed) => {
       put(0, 'POLYLINE', 8, lay, 66, 1, 70, closed ? 1 : 0);
@@ -646,7 +651,7 @@
       if (t.px == null || t.polyId) continue;
       const [x, y] = W(t.px, t.py);
       const lay = t.ref ? 'TREES_REF' : statusOf(t.status).layer;
-      put(0, 'CIRCLE', 8, lay, 10, f(x), 20, f(y), 30, 0, 40, 0.5);
+      put(0, 'INSERT', 8, lay, 2, TREE_BLOCK, 10, f(x), 20, f(y), 30, 0);
       // עץ שנוסף במקום בלי עץ של המודד: ריבוע סביבו, כמו בפקודת TREES
       if (!t.pref) poly('TREES_BOX', [[x - 0.8, y - 0.8], [x + 0.8, y - 0.8], [x + 0.8, y + 0.8], [x - 0.8, y + 0.8]], true);
       if (t.num) text('TREES_NUM', x + 1.1, y + 0.6, 0.6, t.num);
