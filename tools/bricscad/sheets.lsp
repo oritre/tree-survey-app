@@ -339,8 +339,10 @@
                  (if (and (cadddr r) (/= (cadddr r) ""))
                    (cadddr r)
                    ;; sheets made before the paper was kept: the frame is centered on the paper
-                   (sh:papercode (+ (car (car bb)) (car (cadr bb))) (+ (cadr (car bb)) (cadr (cadr bb)))))))
-    (list "None" "" "")))
+                   (sh:papercode (+ (car (car bb)) (car (cadr bb))) (+ (cadr (car bb)) (cadr (cadr bb)))))
+                 ;; title block layout: "column", "corner" or "" = by the paper
+                 (if (nth 4 r) (nth 4 r) "")))
+    (list "None" "" "" "")))
 
 ;; paper as a SHEETSIZE string: "A3L", "A3P" or "W,H"
 (defun sh:papercode (pw ph / r)
@@ -463,7 +465,9 @@
 
 ;; moving rectangle w x h on the sheet -> its center, or nil on Enter. snap: flush to the frame / title block.
 (defun sh:place (w h snap prompt / fr dv go g c v u r hw hh tol)
-  (setq fr (sh:bbox (sh:items (getvar "CTAB") '("frame"))) dv (sh:bbox (sh:items (getvar "CTAB") '("divider")))
+  ;; corner layout (two divider lines): the drawing area reaches the right side of the frame under the title block
+  (setq fr (sh:bbox (sh:items (getvar "CTAB") '("frame"))) dv (sh:items (getvar "CTAB") '("divider"))
+        dv (if (null (cdr dv)) (sh:bbox dv))
         hw (+ (/ w 2.0) *sh-inset-gap*) hh (+ (/ h 2.0) *sh-inset-gap*) tol *sh-snap* go T)
   (if fr (setq fr (list (car (car fr)) (cadr (car fr)) (if dv (car (car dv)) (car (cadr fr))) (cadr (cadr fr)))))
   (princ prompt)
@@ -557,7 +561,7 @@
   (list (max (nth 0 r) (nth 0 area)) (max (nth 1 r) (nth 1 area)) (min (nth 2 r) (nth 2 area)) (min (nth 3 r) (nth 3 area))))
 
 (defun sh:fit (typ forced / lay info vps insets mains strip sbb sw shh bb ab gw gh paper pw ph m p colL acx acy dx dy f
-                scs main a big x area R Ks)
+                scs main a big x area carea R Ks wrap yb sbox)
   (setq lay (getvar "CTAB") info (sh:info lay))
   (if (null typ) (setq typ (car info)))
   (if (null forced) (setq forced (cadr info)))
@@ -585,25 +589,46 @@
                         ((sh:choose gw gh sw shh))))
       (setq pw (cadr paper) ph (caddr paper))
       (setq m (sh:margin (car paper) pw ph) p (sh:pad (car paper) pw ph))
+      ;; title block layout: column (a line down the whole sheet) or corner (the drawing also fills the space under
+      ;; the title block); by the paper unless chosen with SHEETWRAP
+      (setq wrap (and strip
+                      (cond ((= (cadddr info) "column") nil)
+                            ((= (cadddr info) "corner") T)
+                            (T (or (= (car paper) "ROLL") (>= (min pw ph) 400.0))))))
       ;; frame and divider
       (foreach e (sh:items lay '("frame" "divider" "insetframe")) (entdel e))
       (setq f (sh:rect m m (- pw m) (- ph m) lay (sh:layer *sh-frame-layer*)))
       (sh:tag f (list (cons 1000 "frame") (cons 1000 typ) (cons 1000 (if forced forced ""))
-                      (cons 1000 (sh:papercode pw ph))))
-      (setq colL (- pw m (sh:col sw)) area (list m m colL (- ph m)))
+                      (cons 1000 (sh:papercode pw ph)) (cons 1000 (cadddr info))))
+      (setq colL (- pw m (sh:col sw)) carea (list m m colL (- ph m)))
+      (if wrap
+        (setq yb (- ph m (* 2.0 *sh-inset*) shh)
+              sbox (list colL yb (- pw m) (- ph m))
+              area (list m m (- pw m) (- ph m)))
+        (setq sbox nil area carea))
       (if strip
         (progn
-          (sh:tag (sh:line colL m colL (- ph m) lay (sh:layer *sh-frame-layer*)) (list (cons 1000 "divider")))
+          (if wrap
+            (progn
+              (sh:tag (sh:line colL yb colL (- ph m) lay (sh:layer *sh-frame-layer*)) (list (cons 1000 "divider")))
+              (sh:tag (sh:line colL yb (- pw m) yb lay (sh:layer *sh-frame-layer*)) (list (cons 1000 "divider"))))
+            (sh:tag (sh:line colL m colL (- ph m) lay (sh:layer *sh-frame-layer*)) (list (cons 1000 "divider"))))
           (sh:move strip (- (- pw m *sh-inset*) (car (cadr sbb))) (- (- ph m *sh-inset*) (cadr (cadr sbb))))))
       (setq acx (/ (+ m colL) 2.0) acy (/ ph 2.0))
       (cond
         ;; one drawing (with or without insets): it fills the frame up to the title block, the picked part in the middle
         ((and mains (null (cdr mains)) (not (sh:poly-p (car mains))))
-         (if (null insets)
-           (progn (setq bb (sh:corebox mains))
-                  (sh:movevp (car mains) (- acx (/ (+ (car (car bb)) (car (cadr bb))) 2.0))
-                                         (- acy (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))))
-         (sh:setrect (car mains) area T))
+         ;; the picked part in the middle of the space beside the title block; in corner layout the viewport then
+         ;; grows under the title block too (cut around it below). Only for a new or rescaled viewport: one that
+         ;; already fills the frame keeps its view (it may have been panned by hand).
+         (if (not (equal (sh:vprect (car mains)) area 0.01))
+           (progn
+             (if (null insets)
+               (progn (setq bb (sh:corebox mains))
+                      (sh:movevp (car mains) (- acx (/ (+ (car (car bb)) (car (cadr bb))) 2.0))
+                                             (- acy (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))))
+             (sh:setrect (car mains) carea T)))
+         (sh:setrect (car mains) area nil))
         ;; insets placed by hand: nothing moves
         (insets nil)
         ;; several drawings: keep their sizes (also when stretched by hand) and center them; edges close to the
@@ -623,12 +648,13 @@
         (setq x (sh:clamp (sh:grow (sh:vprect e) *sh-inset-gap*) area))
         (sh:tag (sh:rect (nth 0 x) (nth 1 x) (nth 2 x) (nth 3 x) lay (sh:layer *sh-frame-layer*))
                 (list (cons 1000 "insetframe"))))
-      (if insets
+      (if (or insets sbox)
         (foreach e (vl-remove-if 'sh:poly-p (vl-remove-if 'sh:inset-p (sh:items lay '("vp"))))
           (setq R (sh:vprect e) Ks nil)
           (foreach i insets
             (setq x (sh:grow (sh:vprect i) *sh-inset-gap*))
             (if (sh:overlap x R) (setq Ks (cons (sh:cutbox x R) Ks))))
+          (if (and sbox (sh:overlap sbox R)) (setq Ks (cons (sh:cutbox sbox R) Ks)))
           (if Ks (sh:setclip e (sh:subtract R Ks) lay))))
       (setq vps (sh:items lay '("vp")))
       (if (not (sh:fits (car paper) pw ph gw gh sw shh))
@@ -957,9 +983,23 @@
           (setq *sh-last-layout* name)))))
   (sh:end))
 
+;; title block layout of the current sheet: column <-> corner (the drawing also under the title block)
+(defun c:SHEETWRAP (/ lay f r new)
+  (sh:begin)
+  (if (or (= (getvar "TILEMODE") 1) (null (setq f (car (sh:items (setq lay (getvar "CTAB")) '("frame"))))))
+    (princ "\nGo to a sheet made by SHEET first.")
+    (progn
+      (command "_.PSPACE")
+      (setq r (sh:roles f)
+            new (if (cdr (sh:items lay '("divider"))) "column" "corner"))
+      (sh:tag f (mapcar '(lambda (q) (cons 1000 (if q q ""))) (list (nth 0 r) (nth 1 r) (nth 2 r) (nth 3 r) new)))
+      (sh:fit nil nil)
+      (setq *sh-msg* (strcat (if *sh-msg* *sh-msg* "") (if (= new "corner") " - drawing under the title block too" " - title block column")))))
+  (sh:end))
+
 ;; every drawing on the sheet grows to the frame, the title block or the next drawing; the scale and what is
 ;; in the middle stay
-(defun c:SHEETFILL (/ lay area vps r rs o gap e others)
+(defun c:SHEETFILL (/ lay area vps r rs o gap e others sbox dv)
   (sh:begin)
   (if (= (getvar "TILEMODE") 1)
     (princ "\nGo to the sheet layout first.")
@@ -967,12 +1007,18 @@
       (command "_.PSPACE")
       (setq lay (getvar "CTAB") gap *sh-inset-gap*)
       (foreach e (sh:items lay '("vp")) (sh:sync e) (sh:unclip e))
-      (setq area (sh:bbox (sh:items lay '("frame"))) vps (sh:items lay '("vp")))
-      (if (setq o (sh:bbox (sh:items lay '("divider")))) (setq area (list (car area) (list (car (car o)) (cadr (cadr area))))))
+      (setq area (sh:bbox (sh:items lay '("frame"))) vps (sh:items lay '("vp")) sbox nil
+            dv (sh:items lay '("divider")) o (sh:bbox dv))
+      (cond ((null o))
+            ;; column layout: the drawings stop at the line beside the title block
+            ((null (cdr dv)) (setq area (list (car area) (list (car (car o)) (cadr (cadr area))))))
+            ;; corner layout: the title block corner is in the way, the rest of the frame is free
+            (T (setq sbox (list (car (car o)) (cadr (car o)) (car (cadr area)) (cadr (cadr area))))))
       (setq area (list (car (car area)) (cadr (car area)) (car (cadr area)) (cadr (cadr area))))
       (foreach e (vl-remove-if '(lambda (v) (or (sh:inset-p v) (sh:poly-p v))) vps)
         (setq r (sh:vprect e)
               others (mapcar '(lambda (v) (sh:grow (sh:vprect v) gap)) (vl-remove e vps)))
+        (if sbox (setq others (cons sbox others)))
         ;; right, left, top, bottom: up to the area or the nearest drawing on that side
         (setq rs (nth 2 area))
         (foreach o others (if (and (< (nth 1 o) (nth 3 r)) (> (nth 3 o) (nth 1 r)) (>= (nth 0 o) (- (nth 2 r) 1e-6)))
