@@ -622,5 +622,49 @@
     return c;
   }
 
-  root.Plan = { ITM, STATUSES, NO_STATUS, statusOf, parseFile, extract, FORMATS, world, fromWorld, upm, calibrate, itmOf, isPaper, surveyorTrees, decodeHeb, ACI, toLL, fromLL, layoutLabels, sheetXml, addSheet, centroid, inside, loadLib };
+  // קובץ DXF עם הסימונים מהשטח (עצים, מספרים, תחומים, קו כחול), לפתיחה או להכנסה (Insert/Xref) ב-BricsCAD.
+  // הקואורדינטות כמו במדידה (רשת ישראל, או השרטוט אחרי כיול). השכבות כמו בפקודת TREES
+  function markupDxf(survey) {
+    const plan = survey.plan || {};
+    const W = (x, y) => itmOf(plan, x, y) || (isPaper(plan) ? world(plan, x, y) : [x, y]);
+    const out = [];
+    const put = (...kv) => { for (let i = 0; i < kv.length; i += 2) out.push(String(kv[i]), String(kv[i + 1])); };
+    const enc = str => String(str).replace(/[^\x20-\x7e]/g, c => '\\U+' + c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0'));
+    const f = v => (Math.round(v * 1000) / 1000).toFixed(3);
+    const layers = new Map([[NO_STATUS.layer, NO_STATUS.aci], ...STATUSES.map(x => [x.layer, x.aci]), ['TREES_NUM', 7], ['TREES_BOX', 7], ['TREES_POLY', 6], ['TREES_KAV_KACHOL', 5], ['TREES_REF', 8]]);
+    put(0, 'SECTION', 2, 'HEADER', 9, '$ACADVER', 1, 'AC1009', 9, '$INSUNITS', 70, 6, 0, 'ENDSEC');
+    put(0, 'SECTION', 2, 'TABLES', 0, 'TABLE', 2, 'LAYER', 70, layers.size);
+    for (const [n, c] of layers) put(0, 'LAYER', 2, n, 70, 0, 62, c, 6, 'CONTINUOUS');
+    put(0, 'ENDTAB', 0, 'ENDSEC', 0, 'SECTION', 2, 'ENTITIES');
+    const text = (lay, x, y, h, str) => put(0, 'TEXT', 8, lay, 10, f(x), 20, f(y), 30, 0, 40, h, 1, enc(str), 72, 1, 11, f(x), 21, f(y), 31, 0);
+    const poly = (lay, pts, closed) => {
+      put(0, 'POLYLINE', 8, lay, 66, 1, 70, closed ? 1 : 0);
+      for (const q of pts) put(0, 'VERTEX', 8, lay, 10, f(q[0]), 20, f(q[1]), 30, 0);
+      put(0, 'SEQEND', 8, lay);
+    };
+    for (const t of survey.trees || []) {
+      if (t.px == null || t.polyId) continue;
+      const [x, y] = W(t.px, t.py);
+      const lay = t.ref ? 'TREES_REF' : statusOf(t.status).layer;
+      put(0, 'CIRCLE', 8, lay, 10, f(x), 20, f(y), 30, 0, 40, 0.5);
+      // עץ שנוסף במקום בלי עץ של המודד: ריבוע סביבו, כמו בפקודת TREES
+      if (!t.pref) poly('TREES_BOX', [[x - 0.8, y - 0.8], [x + 0.8, y - 0.8], [x + 0.8, y + 0.8], [x - 0.8, y + 0.8]], true);
+      if (t.num) text('TREES_NUM', x + 1.1, y + 0.6, 0.6, t.num);
+    }
+    for (const p of survey.planPolys || []) {
+      if (!p.pts || p.pts.length < 3) continue;
+      const pts = p.pts.map(q => W(q[0], q[1]));
+      poly(p.ref ? 'TREES_REF' : 'TREES_POLY', pts, true);
+      const tr = (survey.trees || []).find(t => t.polyId === p.id);
+      const c = pts.reduce((a, q) => [a[0] + q[0] / pts.length, a[1] + q[1] / pts.length], [0, 0]);
+      // בלי עברית (גופני SHX מציגים אותה הפוך): P1 (20)
+      const name = [(tr && tr.num) || (/^[\x20-\x7e]+$/.test(p.name || '') ? p.name : ''), tr && tr.qty ? '(' + tr.qty + ')' : ''].filter(Boolean).join(' ');
+      if (name) text('TREES_POLY', c[0], c[1], 0.7, name);
+    }
+    if (survey.planBound && survey.planBound.pts) poly('TREES_KAV_KACHOL', survey.planBound.pts.map(q => W(q[0], q[1])), true);
+    put(0, 'ENDSEC', 0, 'EOF');
+    return out.join('\r\n') + '\r\n';
+  }
+
+  root.Plan = { markupDxf, ITM, STATUSES, NO_STATUS, statusOf, parseFile, extract, FORMATS, world, fromWorld, upm, calibrate, itmOf, isPaper, surveyorTrees, decodeHeb, ACI, toLL, fromLL, layoutLabels, sheetXml, addSheet, centroid, inside, loadLib };
 })(typeof self !== 'undefined' ? self : globalThis);
