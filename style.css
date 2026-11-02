@@ -297,6 +297,10 @@ a.btn { text-decoration: none; color: inherit; }
 .annot-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; position: relative; }
 .annot-stage canvas { touch-action: none; display: block; transform-origin: 0 0; }
 .annot-bar button[hidden] { display: none; }
+.annot-bar .bri { align-items: center; padding: 3px 8px; gap: 6px; color: #fff; }
+.annot-bar .bri-ico { font-size: 20px; }
+.annot-bar .bri input { width: 140px; accent-color: #ffd400; }
+.annot-bar .bri-val { font-size: 14px; min-width: 56px; }
 
 /* בקרת גיבוי */
 .checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }

@@ -5,7 +5,30 @@
   const COLORS = ['#ff1f1f', '#ffd400', '#ffffff', '#1e90ff', '#000000'];
   const WIDTHS = [0.004, 0.008, 0.014]; // יחסית לצלע הארוכה של התמונה
 
+  // בהירות נשמרת ברשימת הסימונים כפריט מיוחד {t:'bri', v} (1 = בלי שינוי), כך שהמקור נשמר וגם הבהירות נשמרת בגיבוי ובסנכרון
+  const BRI_MIN = 0.5, BRI_MAX = 2;
+  const isBri = s => s && s.t === 'bri';
+  const briOf = strokes => { const b = (strokes || []).find(isBri); return b ? +b.v || 1 : 1; };
+
+  // מצייר את התמונה בבהירות v (כפל ליניארי כמו CSS brightness), בלי ctx.filter כדי שיעבוד בכל דפדפן
+  function drawImageBri(ctx, img, W, H, v) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    ctx.drawImage(img, 0, 0, W, H);
+    if (v > 1.001) { // הבהרה: מוסיפים את התמונה לעצמה בשקיפות v-1
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, v - 1);
+      ctx.drawImage(img, 0, 0, W, H);
+    } else if (v < 0.999) { // הכהיה: שכבה שחורה בשקיפות 1-v
+      ctx.globalAlpha = 1 - v;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+    }
+    ctx.restore();
+  }
+
   function drawStroke(ctx, s, W, H) {
+    if (isBri(s)) return;
     const lw = s.w * Math.max(W, H);
     ctx.strokeStyle = s.c; ctx.fillStyle = s.c; ctx.lineWidth = lw;
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -56,8 +79,8 @@
     };
   })();
 
-  function render(ctx, img, strokes, W, H) {
-    ctx.drawImage(img, 0, 0, W, H);
+  function render(ctx, img, strokes, W, H, bri) {
+    drawImageBri(ctx, img, W, H, bri == null ? briOf(strokes) : bri);
     for (const s of strokes) drawStroke(ctx, s, W, H);
   }
 
@@ -75,7 +98,8 @@
     opts = opts || {};
     return new Promise(async resolve => {
       const img = await createImageBitmap(blob);
-      let list = (strokes || []).map(s => JSON.parse(JSON.stringify(s)));
+      let list = (strokes || []).filter(s => !isBri(s)).map(s => JSON.parse(JSON.stringify(s)));
+      let bri = briOf(strokes);
       const redo = [];
       let tool = 'free', color = COLORS[0], width = WIDTHS[1], cur = null;
 
@@ -95,6 +119,11 @@
             <button data-act="redo" title="חזור">↷</button>
             <button data-act="clear" title="מחק הכל">🧽</button>
             <button data-act="fit" title="חזרה לגודל מלא" hidden>⤢</button>
+          </div>
+          <div class="grp bri" title="בהירות">
+            <span class="bri-ico">☀</span>
+            <input type="range" dir="ltr" min="${BRI_MIN}" max="${BRI_MAX}" step="0.05" value="${bri}" aria-label="בהירות">
+            <button data-act="bri0" class="bri-val" title="בהירות רגילה"></button>
           </div>
           <span class="sp"></span>
           ${opts.retakeLabel ? `<button data-act="retake" class="txt">${opts.retakeLabel}</button>` : ''}
@@ -131,8 +160,15 @@
         resize();
       }
       function draw() {
-        render(ctx, img, cur ? list.concat([cur]) : list, cv.width, cv.height);
+        render(ctx, img, cur ? list.concat([cur]) : list, cv.width, cv.height, bri);
       }
+      const briIn = ov.querySelector('.bri input'), briVal = ov.querySelector('.bri-val');
+      function syncBri() {
+        briIn.value = bri;
+        briVal.textContent = (bri >= 1 ? '+' : '') + Math.round((bri - 1) * 100) + '%';
+        briVal.classList.toggle('on', Math.abs(bri - 1) > 0.001);
+      }
+      briIn.addEventListener('input', () => { bri = +briIn.value; syncBri(); draw(); });
       function sync() {
         ov.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === tool));
         ov.querySelectorAll('[data-color]').forEach(b => b.classList.toggle('on', b.dataset.color === color));
@@ -220,15 +256,16 @@
         else if (b.dataset.act === 'cancel') return close(null);
         else if (b.dataset.act === 'retake') return close('retake');
         else if (b.dataset.act === 'fit') { zoom = 1; tx = ty = 0; applyZoom(); resize(); }
-        else if (b.dataset.act === 'save') return close(list);
+        else if (b.dataset.act === 'bri0') { bri = 1; syncBri(); }
+        else if (b.dataset.act === 'save') return close(Math.abs(bri - 1) > 0.001 ? list.concat([{ t: 'bri', v: Math.round(bri * 100) / 100 }]) : list);
         draw(); sync();
       });
       window.addEventListener('resize', layout);
-      sync();
+      sync(); syncBri();
       requestAnimationFrame(layout);
     });
   }
 
-  root.Annotate = { open, flatten };
+  root.Annotate = { open, flatten, briOf, drawImageBri };
   root.BackGuard = BackGuard;
 })(self);
