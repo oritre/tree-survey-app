@@ -460,3 +460,15 @@ textarea.doc-text.b { font-weight: 700; }
 .plan-ov .annot-bar button.loc-btn .loc-ico { display: inline-flex; }
 .plan-ov .annot-bar button.loc-btn.on { background: #fff; color: #4285f4; outline: none; }
 .plan-ov .annot-bar button.loc-btn.on.follow { background: #4285f4; color: #fff; }
+
+/* מונה עצי מודד שלא סומנו */
+.plan-miss { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 600; display: flex; align-items: stretch;
+  border-radius: 22px; overflow: hidden; box-shadow: 0 3px 12px rgba(0,0,0,.3); max-width: calc(100% - 24px); transition: bottom .15s; }
+.plan-miss[hidden] { display: none; }
+.plan-miss button { border: 0; font: inherit; font-size: 15px; font-weight: 700; padding: 8px 14px; cursor: pointer; white-space: nowrap; }
+.plan-miss .pm-main { background: #fff; color: #bf360c; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.plan-miss .pm-next { background: #ff3d00; color: #fff; }
+.plan-miss.on .pm-main { background: #ff3d00; color: #fff; }
+.plan-miss.on .pm-next { background: #bf360c; }
+.plan-miss.done .pm-main { background: #2e7d32; color: #fff; }
+@media (max-width: 600px) { .plan-miss { max-width: calc(100% - 24px); } .plan-miss button { font-size: 14px; padding: 8px 11px; } }

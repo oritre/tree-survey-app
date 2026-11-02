@@ -45,6 +45,14 @@
     const hint = h('div', { class: 'plan-hint' });
     const sheet = h('div', { class: 'plan-sheet hidden' });
     const legend = h('div', { class: 'plan-legend' });
+    // מונה עצי המודד שסומנו, והדגשה בולטת של מה שעוד לא סומן (כדי לא לפספס עץ לפני שעוזבים את השטח)
+    let missOn = await DB.getKV('planMiss', false);
+    let jumpH = null;            // עץ המודד שאליו קפצנו אחרון
+    const skipped = new Set();   // עצים שדילגו עליהם ב"הבא"
+    const missTxt = h('span', {});
+    const missChip = h('div', { class: 'plan-miss' },
+      h('button', { class: 'pm-main', title: 'הדגשת עצי המודד שעוד לא סומנו', onclick: () => { missOn = !missOn; DB.setKV('planMiss', missOn); jumpH = null; updateBar(); redraw(); } }, missTxt),
+      h('button', { class: 'pm-next', title: 'לעץ הקרוב שעוד לא סומן', onclick: nextMissing }, 'הבא ›'));
     const btn = (label, title, on, cls) => h('button', { class: 'txt ' + (cls || ''), title: title || null, 'aria-label': title || null, onclick: on }, label);
     const markBtn = btn('סימון עצים', 'נגיעה בעץ של המודד או במקום ריק', () => setMode('mark'));
     const areaBtn = btn('תחימה', 'תחימת קטע בפוליגון', () => setMode('area'));
@@ -69,8 +77,12 @@
         h('div', { class: 'grp' }, markBtn, areaBtn, xyBtn),
         undoBtn, gpsBtn, monoBtn, layersBtn,
         btn('סגור', null, () => close(), 'save')),
-      h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, hint, legend, sheet));
+      h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, hint, legend, missChip, sheet));
     document.body.append(ov);
+    // המונה עולה מעל החלון התחתון כשהוא פתוח
+    const placeMiss = () => { missChip.style.bottom = sheet.classList.contains('hidden') ? '' : (sheet.offsetHeight + 20) + 'px'; };
+    if (root.ResizeObserver) new ResizeObserver(placeMiss).observe(sheet);
+    new MutationObserver(placeMiss).observe(sheet, { attributes: true, attributeFilter: ['class'] });
     const $$ = sel => [...document.querySelectorAll(sel)];
 
     // ---------- מפה ----------
@@ -281,8 +293,17 @@
         if (used.has(t.h)) continue;
         const p = P(llOf('s', t.x, t.y));
         if (!inView(p)) continue;
+        if (missOn) {
+          // הדגשה: הילה כתומה רחבה ועיגול אדום מלא, באותו גודל בכל זום
+          const R = t.h === jumpH ? 30 : 18;
+          cx.beginPath(); cx.arc(p.x, p.y, R, 0, 7); cx.fillStyle = 'rgba(255,61,0,.28)'; cx.fill();
+          cx.lineWidth = 4; cx.strokeStyle = '#ff3d00'; cx.stroke();
+          cx.beginPath(); cx.arc(p.x, p.y, 7, 0, 7); cx.fillStyle = '#ff1744'; cx.fill(); cx.lineWidth = 2; cx.strokeStyle = '#fff'; cx.stroke();
+          if (t.h === jumpH) { cx.beginPath(); cx.arc(p.x, p.y, R + 8, 0, 7); cx.lineWidth = 3; cx.strokeStyle = '#ffea00'; cx.stroke(); }
+        }
         cx.beginPath(); cx.arc(p.x, p.y, rS, 0, 7);
-        if (hasStyle) { cx.lineWidth = 1.2; cx.strokeStyle = onDark() ? 'rgba(0,229,255,.7)' : 'rgba(0,120,160,.75)'; cx.stroke(); }
+        if (missOn) { /* כבר מודגש */ }
+        else if (hasStyle) { cx.lineWidth = 1.2; cx.strokeStyle = onDark() ? 'rgba(0,229,255,.7)' : 'rgba(0,120,160,.75)'; cx.stroke(); }
         else { cx.fillStyle = 'rgba(255,255,255,.85)'; cx.fill(); cx.lineWidth = 1.5; cx.strokeStyle = SURV; cx.stroke(); }
         hits.push({ kind: 'sv', id: t.h, x: p.x, y: p.y, r: rS });
         occ.push(box(p.x - rS, p.y - rS, rS * 2, rS * 2));
@@ -862,10 +883,37 @@
       const items = root.Plan.STATUSES.filter(x => used.has(x.key)).map(x => [x.color, x.key]);
       if (used.has('')) items.push([MY, 'עץ מסומן']);
       items.push(['#fff', 'עץ של המודד']);
+      if (missOn && missing().length) items.push(['#ff1744', 'עץ מודד שלא סומן']);
       if (myTrees().some(t => !t.pref)) items.push(['sq', 'עץ שהוספתי (בריבוע)']);
       legend.replaceChildren(...items.map(([c, t]) => h('span', {}, c === 'sq' ? h('i', { class: 'sq' }) : h('i', { style: `background:${c}` }), t)));
     }
+    function missing() { const used = linked(); return surveyor.filter(t => !used.has(t.h)); }
+    function updateMiss() {
+      missChip.hidden = !surveyor.length;
+      const n = missing().length, tot = surveyor.length;
+      missChip.classList.toggle('on', missOn); missChip.classList.toggle('done', !n);
+      missTxt.textContent = n ? `${n} עצי מודד לא סומנו (${tot - n}/${tot})` : `כל ${tot} עצי המודד סומנו ✓`;
+      missChip.querySelector('.pm-next').hidden = !n;
+    }
+    // קפיצה לעץ הקרוב שעוד לא סומן: קרוב למיקום ה-GPS אם יש, אחרת למרכז המסך
+    function nextMissing() {
+      let list = missing();
+      if (!list.length) return;
+      if (jumpH && list.some(t => t.h === jumpH)) skipped.add(jumpH);
+      let pool = list.filter(t => !skipped.has(t.h));
+      if (!pool.length) { skipped.clear(); pool = list; }
+      let ref = fromMap(map.getCenter());
+      if (gpsPos && itm) ref = root.Plan.fromLL(gpsPos.lat, gpsPos.lon);
+      const t = pool.reduce((a, b) => Math.hypot(b.x - ref[0], b.y - ref[1]) < Math.hypot(a.x - ref[0], a.y - ref[1]) ? b : a);
+      jumpH = t.h;
+      if (!missOn) { missOn = true; DB.setKV('planMiss', true); }
+      if (follow) setFollow(false);
+      map.setView(toMap(t.x, t.y), Math.max(map.getZoom(), itm ? 21 : 4));
+      flash(t.name ? `עץ המודד ${t.name}` : 'עץ מודד שלא סומן');
+      updateBar(); redraw();
+    }
     function updateBar() {
+      updateMiss();
       markBtn.classList.toggle('on', mode === 'mark'); areaBtn.classList.toggle('on', mode === 'area'); xyBtn.classList.toggle('on', mode === 'xy');
       undoBtn.disabled = !undo.length;
       legendHtml();
