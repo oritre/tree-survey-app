@@ -14,6 +14,8 @@
 ;;;   SHEETSCALE  change the scale of a drawing on the current sheet; the sheet size is fitted again.
 ;;;   SHEETFIT    fit the current sheet again: size, frame, title block, centering, inset cuts. Viewports stretched
 ;;;               by hand keep their size; edges within 5 mm of the frame or the title block go onto it.
+;;;   SHEETPAN    move what a drawing shows inside its locked viewport: click inside it, then a point and where
+;;;               it goes (again and again, Enter when done). The scale stays and SHEETFIT keeps the new view.
 ;;;   SHEETFILL   grow every drawing to the frame, the title block or the next drawing (scale and middle stay).
 ;;;   SHEETSIZE   force a sheet size on the current sheet (A4..A0, landscape/portrait, custom W x H) or back to Auto.
 ;;;   SHEETBLOCK  choose which block is the title block of each type, and save it to the title block library.
@@ -1008,6 +1010,45 @@
           (sh:fit nil nil)))))
   (sh:end))
 
+;; the drawing (viewport) under a point clicked on the sheet; the smallest one when they overlap (an inset)
+(defun sh:pickin (msg / p r best a)
+  (if (setq p (getpoint msg))
+    (foreach v (sh:items (getvar "CTAB") '("vp"))
+      (setq r (sh:vprect v))
+      (if (and (<= (nth 0 r) (car p) (nth 2 r)) (<= (nth 1 r) (cadr p) (nth 3 r))
+               (or (null best) (< (* (- (nth 2 r) (nth 0 r)) (- (nth 3 r) (nth 1 r))) a)))
+        (setq best v a (* (- (nth 2 r) (nth 0 r)) (- (nth 3 r) (nth 1 r)))))))
+  (if (and p (not best)) (princ "\nNo drawing placed by SHEET there."))
+  best)
+
+;; move what a drawing shows inside its viewport (the viewport is locked, so PAN moves the paper):
+;; point -> where it goes, again and again, Enter when done. The scale stays; SHEETFIT keeps the new view.
+(defun c:SHEETPAN (/ doc e vp x k v p1 p2 go)
+  (sh:begin)
+  (if (= (getvar "TILEMODE") 1)
+    (princ "\nGo to the sheet layout first.")
+    (progn
+      (command "_.PSPACE")
+      (if (setq e (sh:pickin "\nClick inside the drawing to move: "))
+        (progn
+          (setq doc (sh:doc) vp (vlax-ename->vla-object e) x (sh:reals e) k (sh:k (car x)) v (sh:vpview e) go T)
+          (while go
+            (vla-put-DisplayLocked vp :vlax-false)
+            (vla-put-MSpace doc :vlax-true)
+            (vla-put-ActivePViewport doc vp)
+            (if (and (setq p1 (getpoint "\nPoint in the drawing to move <done>: "))
+                     (setq p2 (getpoint p1 "\nWhere it goes: ")))
+              (progn
+                (setq v (mapcar '- v (mapcar '- (trans p2 1 0) (trans p1 1 0))))
+                (sh:setview vp (list (car v) (cadr v) 0.0) (nth 5 x) k))
+              (setq go nil)))
+          (vla-put-MSpace doc :vlax-false)
+          (vla-put-DisplayLocked vp :vlax-true)
+          (sh:tag e (append (mapcar '(lambda (r) (cons 1000 r)) (sh:roles e))
+                            (list (cons 1040 (car x)) (cons 1040 (car v)) (cons 1040 (cadr v))
+                                  (cons 1040 (nth 3 x)) (cons 1040 (nth 4 x)) (cons 1040 (nth 5 x)))))))))
+  (sh:end))
+
 (defun c:SHEETFIT ()
   (sh:begin)
   (if (= (getvar "TILEMODE") 1) (princ "\nGo to the sheet layout first.") (progn (command "_.PSPACE") (sh:fit nil nil)))
@@ -1057,5 +1098,5 @@
     (princ "\nNo such block."))
   (sh:end))
 
-(princ "\nsheets.lsp loaded: SHEET, SHEETADD, SHEETSCALE, SHEETFIT, SHEETFILL, SHEETSIZE, SHEETBLOCK")
+(princ "\nsheets.lsp loaded: SHEET, SHEETADD, SHEETSCALE, SHEETFIT, SHEETFILL, SHEETPAN, SHEETSIZE, SHEETBLOCK")
 (princ)
