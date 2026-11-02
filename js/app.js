@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.41.0';
+  const APP_VERSION = '1.42.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1499,6 +1499,19 @@
     return c.N == null ? null : h('span', { class: 'badge val-' + (c.N > 13 ? 'hi' : c.N > 6 ? 'mid' : 'lo'), title: 'סך ערך' }, c.N + '/20');
   }
 
+  // גובה וקוטר לשורת העץ: "גובה 6 מ' · קוטר 30 ס"מ", ובכמה גזעים "גזע 1: 30 · גזע 2: 20 ס"מ"
+  function treeDims(t) {
+    const v = x => (x == null || String(x).trim() === '') ? null : String(x).trim();
+    const parts = [];
+    if (v(t.height)) parts.push(`גובה ${v(t.height)} מ'`);
+    const trunks = [t.f1, t.f2, t.f3].map(v);
+    const many = trunks.filter(Boolean).length > 1 || (!trunks[0] && trunks.some(Boolean));
+    if (many) trunks.forEach((d, i) => { if (d) parts.push(`גזע ${i + 1}: ${d}`); });
+    else if (trunks[0]) parts.push(`קוטר ${trunks[0]}`);
+    if (trunks.some(Boolean)) parts[parts.length - 1] += ' ס"מ';
+    return parts.join(' · ');
+  }
+
   function treeRow(t) {
     const pineMissing = !Construction.isConstruction(cur) && Core.isPine(t.species) && (t.pines == null || t.pines === '');
     const urgCls = v => v === Core.OK ? 'ok' : v;
@@ -1506,7 +1519,7 @@
     return h('button', { class: 'tree-row' + (t.id === curTreeId ? ' on' : '') + urg, 'data-id': t.id, 'data-search': `${t.num || ''} ${t.species || ''} ${t.notes || ''}`.toLowerCase(), onclick: () => selectTree(t.id) },
       h('span', { class: 'n' }, t.num || '—'),
       h('span', { style: 'min-width:0' },
-        h('div', { class: 'sp' }, t.species || 'ללא מין'),
+        h('div', { class: 'sp' }, t.species || 'ללא מין', treeDims(t) ? h('span', { class: 'dims' }, ' · ' + treeDims(t)) : null),
         h('div', { class: 'meta' }, t.notes || '')),
       h('span', { class: 'badges' },
         Construction.isConstruction(cur) ? constructionBadge(t)
