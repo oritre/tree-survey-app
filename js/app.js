@@ -2,6 +2,7 @@
 (function () {
   'use strict';
   const APP_VERSION = '1.46.0';
+  const REF_SUFFIX = 'כולל לא להתייחסות';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -284,7 +285,7 @@
         toast('הסקר עודכן ממכשיר אחר', 2500);
       } else if (!cur && /^#\/?$/.test(location.hash || '#/')) renderHome();
     },
-    buildReport, buildPdf, planFiles, hasRef: s => hasRef(s), REF_SUFFIX: 'כולל לא להתייחסות',
+    buildReport, buildPdf, planFiles, hasRef: s => hasRef(s), REF_SUFFIX, refName,
     // שם תת-התיקייה של סקר לבנייה בתיקיית הדוחות (שם הקבצים בלי "סקר עצים לבנייה - ")
     reportDirName: s => fileBase(s).replace(/^סקר עצים לבנייה - /, ''),
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
@@ -2369,7 +2370,7 @@
             // האקסל וה-PDF מוכנים כבר עכשיו בטאבלט, בזמן שהתמונות עולות. ה-PDF נפתח מיד לצפייה ולשליחה
             btn.disabled = true;
             try {
-              const s = cur;
+              const s = refSets(cur)[0][0];
               status.textContent = 'מכין אקסל…';
               const x = await buildReport(s);
               await DB.setKV('xlsm:' + s.id, { hash: Sync.hashSurvey(s), blob: x.blob, name: x.name });
@@ -2380,7 +2381,6 @@
             finally { Sync.preparing.delete(sid); Sync.finishNow(sid); btn.disabled = false; drawSync(); }
           } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'),
           h('button', { class: 'btn big', onclick: e => busy(e.currentTarget, async () => {
-            if (!(await askRef(cur))) return;
             if (!odOn) throw new Error('גוגל דרייב לא מחובר');
             await saveNow();
             status.textContent = 'מעלה אקסל לגוגל דרייב…';
@@ -2394,17 +2394,26 @@
           : 'אין עצים בטבלה, ולכן יוצא מכתב אישור קצר, כמו "אישורי תקינות" בתוכנה במחשב.'),
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
-            if (!(await askRef(cur))) return;
             await saveNow();
             status.textContent = 'מפיק PDF…';
             const s = cur;
-            const pdf = await buildPdf(s, (i, n) => { status.textContent = `מפיק PDF… ${i}/${n}`; });
-            status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים).`;
+            // יש "לא להתייחסות": שני קבצים, הנקי (נפתח לצפייה) והמלא בשם עם " - כולל לא להתייחסות"
+            const sets = refSets(s);
+            const pdf = await buildPdf(sets[0][0], (i, n) => { status.textContent = `מפיק PDF… ${i}/${n}`; });
+            let full = null;
+            if (sets[1]) {
+              full = await buildPdf(sets[1][0], (i, n) => { status.textContent = `מפיק PDF כולל לא להתייחסות… ${i}/${n}`; });
+              full.name = refName(full.name);
+              if (!odOn) await deliver(full.blob, full.name);
+            }
+            const two = full ? ' שני קבצים: נקי, ו"כולל לא להתייחסות".' : '';
+            status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים).` + two;
             viewPdf(s, pdf);
             if (odOn) {
               status.textContent += ' מעלה לגוגל דרייב…';
               await Sync.uploadPdf(s, pdf);
-              status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים) ונשמר גם בגוגל דרייב.`;
+              if (full) await Sync.uploadPdf(s, full);
+              status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים) ונשמר גם בגוגל דרייב.` + two;
             }
           }) }, 'הפק PDF'),
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
@@ -2449,18 +2458,23 @@
     const busy = async (btn, fn, out) => { btn.disabled = true; try { await fn(); } catch (err) { console.error(err); (out || status).textContent = 'נכשל: ' + err.message; } finally { btn.disabled = false; } };
     // אפשרות 2: אקסל הטבלאות או PDF התמונות, כל אחד בנפרד, להורדה או לגוגל דרייב
     const splitAction = (e, kind, drive) => busy(e.currentTarget, async () => {
-      if (!(await askRef(cur))) return;
       if (drive && !odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
       await saveNow();
       const say = m => { splitStatus.textContent = m; };
-      const f = kind === 'xlsx' ? await buildTablesFile(cur, say) : await buildPhotosPdfFile(cur, say);
-      if (!f) { say('אין תמונות שסומנו לדוח.'); return; }
-      if (!drive) { await deliver(f.blob, f.name); say(`✓ הורד: ${f.name}`); return; }
-      say(`מעלה לגוגל דרייב: ${f.name}…`);
-      const where = await Sync.uploadFile(cur, f.name, f.blob);
+      // יש "לא להתייחסות": שני קבצים נפרדים, נקי ומלא
+      const files = [];
+      for (const [v, suf] of refSets(cur)) {
+        const f = kind === 'xlsx' ? await buildTablesFile(v, say) : await buildPhotosPdfFile(v, say);
+        if (f) files.push(suf ? { blob: f.blob, name: refName(f.name) } : f);
+      }
+      if (!files.length) { say('אין תמונות שסומנו לדוח.'); return; }
+      const names = files.map(f => f.name).join('", "');
+      if (!drive) { for (const f of files) await deliver(f.blob, f.name); say(`✓ הורד: "${names}"`); return; }
+      let where = null;
+      for (const f of files) { say(`מעלה לגוגל דרייב: ${f.name}…`); where = await Sync.uploadFile(cur, f.name, f.blob); }
       // התיקייה המדויקת ולינק אליה, כדי שלא יצטרכו לחפש
       splitStatus.replaceChildren(
-        h('div', {}, `✓ "${f.name}" נשמר בגוגל דרייב בתיקייה "${where.path}".`),
+        h('div', {}, `✓ "${names}" נשמר בגוגל דרייב בתיקייה "${where.path}".`),
         h('a', { href: 'https://drive.google.com/drive/folders/' + where.folderId, target: '_blank', rel: 'noopener', class: 'btn' }, 'פתח את התיקייה בגוגל דרייב'));
     }, splitStatus);
     const hm = t => new Date(t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -2493,13 +2507,15 @@
           h('div', { class: 'muted small' }, 'קובץ אחד: הטבלאות, ובנספח התמונות שסומנו לדוח ליד מספר העץ.'),
           h('div', { class: 'row' },
             h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
-              if (!(await askRef(cur))) return;
               await saveNow();
               status.textContent = 'מכין את האקסל…';
-              const withPhotos = Object.assign({}, cur, { cset: Object.assign({}, Construction.settingsOf(cur), { embedPhotos: true }) });
-              const r = await buildReport(withPhotos);
-              await deliver(r.blob, r.name);
-              status.textContent = '✓ האקסל עם התמונות הורד.';
+              // יש "לא להתייחסות": שני קבצים, נקי ומלא
+              for (const [v, suf] of refSets(cur)) {
+                const withPhotos = Object.assign({}, v, { cset: Object.assign({}, Construction.settingsOf(cur), { embedPhotos: true }) });
+                const r = await buildReport(withPhotos);
+                await deliver(r.blob, suf ? refName(r.name) : r.name);
+              }
+              status.textContent = hasRef(cur) ? '✓ הורדו שני קבצי אקסל עם התמונות: נקי, ו"כולל לא להתייחסות".' : '✓ האקסל עם התמונות הורד.';
               if (odOn) { status.textContent += ' מעלה לגוגל דרייב…'; await Sync.uploadReport(cur); status.textContent = '✓ האקסל עם התמונות הורד ונשמר גם בגוגל דרייב.'; }
             }) }, 'הורד אקסל עם התמונות')),
           status),
@@ -2578,29 +2594,17 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   }
 
-  // עצים ותחומים "לא להתייחסות": נשמרים בסקר לגיבוי. בהפקה שואלים אם לכלול אותם (s.inclRef)
+  // עצים ותחומים "לא להתייחסות": נשמרים בסקר לגיבוי. בהפקה יוצאות שתי גרסאות (s.inclRef רק על עותק)
   const hasRef = s => (s.trees || []).some(t => t.ref) || (s.planPolys || []).some(p => p.ref);
   function reportView(s) {
-    if (!hasRef(s) || s.inclRef) return s;
+    if (!hasRef(s) || s.inclRef === true) return s;
     return Object.assign({}, s, { trees: s.trees.filter(t => !t.ref), planPolys: (s.planPolys || []).filter(p => !p.ref) });
   }
-  // חלון לפני הפקה. מחזיר false אם בוטל
-  function askRef(s) {
-    if (!hasRef(s)) return Promise.resolve(true);
-    const nT = s.trees.filter(t => t.ref).length, nP = (s.planPolys || []).filter(p => p.ref).length;
-    const what = [nT ? `${nT} עצים` : '', nP ? `${nP} תחומים` : ''].filter(Boolean).join(' ו-');
-    return new Promise(res => {
-      const done = v => { box.remove(); if (v == null) return res(false); s.inclRef = v; saveNow().then(() => res(true)); };
-      const box = h('div', { class: 'modal', onclick: e => { if (e.target === box) done(null); } },
-        h('div', { class: 'card stack', style: 'max-width:420px;width:92%' },
-          h('h2', { style: 'margin:0;font-size:20px' }, 'לא להתייחסות'),
-          h('div', {}, `בסקר יש ${what} שסומנו "לא להתייחסות". לכלול אותם בדוח?`),
-          h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
-            h('button', { class: 'btn primary', onclick: () => done(false) }, 'בלי'),
-            h('button', { class: 'btn', onclick: () => done(true) }, 'כולל'),
-            h('button', { class: 'btn', onclick: () => done(null) }, 'ביטול'))));
-      document.body.append(box);
-    });
+  // גרסאות להפקה: תמיד הנקייה, ואם יש "לא להתייחסות" גם המלאה (קובץ נפרד עם REF_SUFFIX בשם)
+  function refName(name) { return name.replace(/(\.[^.]+)$/, ' - ' + REF_SUFFIX + '$1'); }
+  function refSets(s) {
+    const clean = [Object.assign({}, s, { inclRef: false }), ''];
+    return hasRef(s) ? [clean, [Object.assign({}, s, { inclRef: true }), ' - ' + REF_SUFFIX]] : [clean];
   }
 
   // סקר לבנייה עם מדידה: קובץ המדידה המקורי וקובץ DXF של הסימונים, לתיקיית הסקר בגוגל דרייב ב"סיום סקר"
@@ -2660,7 +2664,7 @@
     const r = await ReportPrint.toPdf(reportView(s), id => photoBlob(s, id), onProgress);
     const pdf = { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages, html: r.html };
     // ה-PDF האחרון של כל סקר נשמר בטאבלט, כדי שאפשר יהיה לפתוח ולשלוח אותו מתוך האפליקציה
-    try { await DB.setKV('pdf:' + s.id, Object.assign({ at: Date.now(), hash: Sync.hashSurvey(s) }, pdf)); pdfChanged(s.id); } catch (_) {}
+    if (!s.inclRef || !hasRef(s)) try { await DB.setKV('pdf:' + s.id, Object.assign({ at: Date.now(), hash: Sync.hashSurvey(s) }, pdf)); pdfChanged(s.id); } catch (_) {}
     return pdf;
   }
   const pdfListeners = new Set();

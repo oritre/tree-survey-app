@@ -666,6 +666,11 @@
       pdf = !twoSets && last && last.hash === hash && last.blob ? last : await root.App.buildPdf(clean);
     }
     if (pdf) await uploadPdf(s, pdf);
+    // וגם ה-PDF המלא, בקובץ נפרד
+    if (pdf && twoSets) {
+      const full = await root.App.buildPdf(Object.assign({}, s, { inclRef: true }));
+      if (full) await uploadPdf(s, Object.assign({}, full, { name: root.App.refName(full.name) }));
+    }
     await DB.putSurvey(s, false);
   }
   async function uploadPdf(s, pdf) {
