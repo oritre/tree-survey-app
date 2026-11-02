@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.40.0';
+  const APP_VERSION = '1.41.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -50,6 +50,7 @@
     trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
     next: 'M19 12H5M11 6l-6 6 6 6',
     sprout: 'M12 21v-8M12 13c0-4 3-7 8-7 0 4-3 7-8 7zM12 13c0-3-2-5-6-5 0 3 2 5 6 5z',
+    copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
     mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3',
   };
   function icon(name, cls) {
@@ -1589,6 +1590,21 @@
     await saveNow();
   }
 
+  // סקר בטיחות: "שכפל עץ" = עץ חדש במספר הבא עם אותו מין, הערות/טיפול מומלץ ודחיפות. בלי תמונות, נ"צ או שדות אחרים
+  async function duplicateTree(src) {
+    refreshSuggestions();
+    const t = makeTree();
+    t.species = src.species || '';
+    t.notes = src.notes || '';
+    t.urgency = src.urgency || '';
+    if (src.urgencyAuto) t.urgencyAuto = true; else delete t.urgencyAuto;
+    if (Core.isOk(t)) t.num = ''; // עץ תקין בלי מספר, כמו המקור
+    cur.trees.push(t);
+    selectTree(t.id);
+    await saveNow();
+    toast(t.num ? `שוכפל לעץ ${t.num}` : 'העץ שוכפל');
+  }
+
   // השלמה אוטומטית של מין העץ בסקר בטיחות: כל המינים מרשימת סקר הבנייה, רק המילה הראשונה (איקליפטוס המקור → איקליפטוס)
   let safetySpeciesCache = null;
   function safetySpecies() {
@@ -1735,6 +1751,7 @@
           photosBox),
         h('div', { class: 'editor-foot' },
           h('button', { class: 'btn danger', onclick: deleteTree }, icon('trash'), 'מחק עץ'),
+          build ? null : h('button', { class: 'btn', onclick: () => duplicateTree(t) }, icon('copy'), 'שכפל עץ'),
           h('button', { class: 'btn primary', onclick: addTree }, icon('plus'), 'עץ הבא'))));
     renderPhotos();
   }
