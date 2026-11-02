@@ -376,6 +376,13 @@ a.btn { text-decoration: none; color: inherit; }
 .combo-menu { position: absolute; inset-inline: 0; top: 100%; margin-top: 4px; z-index: 30; max-height: 320px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); }
 .combo-opt { display: block; width: 100%; text-align: start; padding: 12px 14px; border: 0; border-bottom: 1px solid var(--border); background: none; font-size: 17px; cursor: pointer; }
 .combo-opt:hover, .combo-opt:focus { background: var(--surface-2); }
+.combo-opt:last-child { border-bottom: 0; }
+/* X שמוחק את מה שכתוב בשדה */
+.clear-x { position: fixed; z-index: 96; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: var(--surface-2); color: var(--muted); cursor: pointer; }
+.clear-x.hidden { display: none; }
+.clear-x:active { background: var(--border); color: var(--text); }
+input.in.has-x { padding-inline-end: 50px; }
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
 
 /* צפייה ב-PDF */
 .pdfv { position: fixed; inset: 0; z-index: 85; background: #333; display: flex; flex-direction: column; }
