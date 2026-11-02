@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.43.0';
+  const APP_VERSION = '1.44.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1524,6 +1524,7 @@
       h('span', { class: 'badges' },
         Construction.isConstruction(cur) ? constructionBadge(t)
           : t.urgency ? h('span', { class: 'badge u-' + urgCls(t.urgency) }, t.urgency) : null,
+        t.ref ? h('span', { class: 'badge soft', title: 'לא להתייחסות: נשמר לגיבוי, ובהפקה שואלים אם לכלול' }, 'לא להתייחסות') : null,
         pineMissing ? h('span', { class: 'badge alert', title: 'חסרה כמות אורנים' }, 'אורנים?') : null,
         (t.photos || []).length ? h('span', { class: 'badge soft', title: 'תמונות' }, icon('camera'), (t.photos || []).length) : null,
         t.lat != null ? h('span', { class: 'badge soft', title: 'יש נ"צ' }, icon('pin')) : null));
@@ -1744,7 +1745,10 @@
       h('datalist', { id: 'speciesList' }, (build ? [...Construction.SPECIES.keys()] : safetySpecies()).map(s => h('option', { value: s }))),
       h('div', { class: 'card stack' },
         h('div', { class: 'grid2' },
-          h('div', {}, field('מספר העץ', numIn), splitWrap),
+          h('div', {}, field('מספר העץ', numIn), splitWrap,
+            h('label', { class: 'row', style: 'margin-top:6px;cursor:pointer', title: 'נשמר בסקר לגיבוי. בהפקת דוח שואלים אם לכלול אותו' },
+              h('input', { type: 'checkbox', checked: !!t.ref, style: 'width:24px;height:24px', onchange: e => { t.ref = e.target.checked || undefined; changed(); } }),
+              h('span', {}, 'לא להתייחסות (גיבוי בלבד)'))),
           h('div', {}, field('מין עץ', build ? speciesCombo(spIn, t) : spIn))),
         build && cur.plan && t.px != null ? h('div', { class: 'row plan-tag' },
           h('span', { class: 'muted small' }, t.pref ? `במדידה: עץ של המודד${t.pname ? ' ' + t.pname : ''}` : 'במדידה: עץ שסימנתי'),
@@ -2356,6 +2360,7 @@
             const btn = e.currentTarget;
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
             if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
+            if (!(await askRef(cur))) return;
             cur.finishPending = true; cur.finished = false;
             const sid = cur.id; Sync.preparing.add(sid);
             await saveNow(); Sync.now(); drawSync();
@@ -2373,6 +2378,7 @@
             finally { Sync.preparing.delete(sid); Sync.finishNow(sid); btn.disabled = false; drawSync(); }
           } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'),
           h('button', { class: 'btn big', onclick: e => busy(e.currentTarget, async () => {
+            if (!(await askRef(cur))) return;
             if (!odOn) throw new Error('גוגל דרייב לא מחובר');
             await saveNow();
             status.textContent = 'מעלה אקסל לגוגל דרייב…';
@@ -2386,6 +2392,7 @@
           : 'אין עצים בטבלה, ולכן יוצא מכתב אישור קצר, כמו "אישורי תקינות" בתוכנה במחשב.'),
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
+            if (!(await askRef(cur))) return;
             await saveNow();
             status.textContent = 'מפיק PDF…';
             const s = cur;
@@ -2440,6 +2447,7 @@
     const busy = async (btn, fn, out) => { btn.disabled = true; try { await fn(); } catch (err) { console.error(err); (out || status).textContent = 'נכשל: ' + err.message; } finally { btn.disabled = false; } };
     // אפשרות 2: אקסל הטבלאות או PDF התמונות, כל אחד בנפרד, להורדה או לגוגל דרייב
     const splitAction = (e, kind, drive) => busy(e.currentTarget, async () => {
+      if (!(await askRef(cur))) return;
       if (drive && !odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
       await saveNow();
       const say = m => { splitStatus.textContent = m; };
@@ -2469,6 +2477,7 @@
           h('button', { class: 'btn primary big', onclick: async () => {
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
             if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
+            if (!(await askRef(cur))) return;
             cur.finishPending = true; cur.finished = false;
             await saveNow(); Sync.finishNow(cur.id); go(`#/s/${cur.id}/export`);
             toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה לגוגל דרייב…', 3000);
@@ -2482,6 +2491,7 @@
           h('div', { class: 'muted small' }, 'קובץ אחד: הטבלאות, ובנספח התמונות שסומנו לדוח ליד מספר העץ.'),
           h('div', { class: 'row' },
             h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
+              if (!(await askRef(cur))) return;
               await saveNow();
               status.textContent = 'מכין את האקסל…';
               const withPhotos = Object.assign({}, cur, { cset: Object.assign({}, Construction.settingsOf(cur), { embedPhotos: true }) });
@@ -2566,8 +2576,34 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   }
 
+  // עצים ותחומים "לא להתייחסות": נשמרים בסקר לגיבוי. בהפקה שואלים אם לכלול אותם (s.inclRef)
+  const hasRef = s => (s.trees || []).some(t => t.ref) || (s.planPolys || []).some(p => p.ref);
+  function reportView(s) {
+    if (!hasRef(s) || s.inclRef) return s;
+    return Object.assign({}, s, { trees: s.trees.filter(t => !t.ref), planPolys: (s.planPolys || []).filter(p => !p.ref) });
+  }
+  // חלון לפני הפקה. מחזיר false אם בוטל
+  function askRef(s) {
+    if (!hasRef(s)) return Promise.resolve(true);
+    const nT = s.trees.filter(t => t.ref).length, nP = (s.planPolys || []).filter(p => p.ref).length;
+    const what = [nT ? `${nT} עצים` : '', nP ? `${nP} תחומים` : ''].filter(Boolean).join(' ו-');
+    return new Promise(res => {
+      const done = v => { box.remove(); if (v == null) return res(false); s.inclRef = v; saveNow().then(() => res(true)); };
+      const box = h('div', { class: 'modal', onclick: e => { if (e.target === box) done(null); } },
+        h('div', { class: 'card stack', style: 'max-width:420px;width:92%' },
+          h('h2', { style: 'margin:0;font-size:20px' }, 'לא להתייחסות'),
+          h('div', {}, `בסקר יש ${what} שסומנו "לא להתייחסות". לכלול אותם בדוח?`),
+          h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+            h('button', { class: 'btn primary', onclick: () => done(false) }, 'בלי'),
+            h('button', { class: 'btn', onclick: () => done(true) }, 'כולל'),
+            h('button', { class: 'btn', onclick: () => done(null) }, 'ביטול'))));
+      document.body.append(box);
+    });
+  }
+
   // בונה את קובץ האקסל של סקר (משמש גם להורדה וגם לגוגל דרייב)
   async function buildReport(s) {
+    s = reportView(s);
     if (Construction.isConstruction(s)) {
       const res = await fetch('template/construction.xltm');
       if (!res.ok) throw new Error('לא נמצאה תבנית סקר הבנייה');
@@ -2584,6 +2620,7 @@
 
   // סקר לבנייה, טבלאות ותמונות בנפרד: אקסל בלי תמונות + PDF של התמונות שסומנו לדוח (באותו סדר ובאותן תוויות כמו בנספח באקסל)
   async function buildTablesFile(s, say) {
+    s = reportView(s);
     say('מכין את האקסל בלי התמונות…');
     const res = await fetch('template/construction.xltm');
     if (!res.ok) throw new Error('לא נמצאה תבנית סקר הבנייה');
@@ -2593,6 +2630,7 @@
   }
   // PDF של התמונות שסומנו לדוח (באותו סדר ובאותן תוויות כמו בנספח באקסל). null כשאין תמונות
   async function buildPhotosPdfFile(s, say) {
+    s = reportView(s);
     const items = Construction.photoSlots(s.trees).map(sl => ({ label: sl.label, id: sl.photo.id }));
     if (!items.length) return null;
     const pdf = await ReportPrint.photosPdf(items, id => photoBlob(s, id), (i, n) => say(`מכין PDF של התמונות… ${i}/${n}`));
@@ -2603,7 +2641,7 @@
   // דוח PDF (אותו שם כמו האקסל, כדי שיופיעו אחד ליד השני בגוגל דרייב)
   async function buildPdf(s, onProgress) {
     if (Construction.isConstruction(s)) return null; // בסקר לבנייה יש רק אקסל
-    const r = await ReportPrint.toPdf(s, id => photoBlob(s, id), onProgress);
+    const r = await ReportPrint.toPdf(reportView(s), id => photoBlob(s, id), onProgress);
     const pdf = { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages, html: r.html };
     // ה-PDF האחרון של כל סקר נשמר בטאבלט, כדי שאפשר יהיה לפתוח ולשלוח אותו מתוך האפליקציה
     try { await DB.setKV('pdf:' + s.id, Object.assign({ at: Date.now(), hash: Sync.hashSurvey(s) }, pdf)); pdfChanged(s.id); } catch (_) {}

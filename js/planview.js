@@ -287,12 +287,12 @@
         if (pts.length < 3) continue;
         cx.beginPath(); pts.forEach((p, i) => i ? cx.lineTo(p.x, p.y) : cx.moveTo(p.x, p.y)); cx.closePath();
         const on = selPoly === poly.id;
-        cx.fillStyle = on ? 'rgba(156,39,176,.22)' : 'rgba(156,39,176,.10)'; cx.fill();
+        cx.fillStyle = poly.ref ? 'rgba(120,120,120,.10)' : on ? 'rgba(156,39,176,.22)' : 'rgba(156,39,176,.10)'; cx.fill();
         cx.lineWidth = on ? 3 : 2; cx.strokeStyle = '#9c27b0'; cx.setLineDash([8, 5]); cx.stroke(); cx.setLineDash([]);
         // שם התחום מעל הקודקוד העליון, כדי לא לכסות את העצים שבתוכו
         const top = pts.reduce((a, p) => p.y < a.y ? p : a, pts[0]);
         const n = myTrees().filter(t => root.Plan.inside([t.px, t.py], poly.pts)).length;
-        label(cx, top.x, top.y - 16, [poly.name || 'תחום', n + ' עצים'].join(' · '), { bg: 'rgba(255,255,255,.9)', fg: '#6a1b9a', size: 13 });
+        label(cx, top.x, top.y - 16, [poly.name || 'תחום', n + ' עצים', poly.ref ? 'לא להתייחסות' : ''].filter(Boolean).join(' · '), { bg: 'rgba(255,255,255,.9)', fg: '#6a1b9a', size: 13 });
       }
       if (drawing) {
         // נקודות ההצמדה של תחומים קיימים
@@ -348,8 +348,11 @@
         if (!inView(p)) continue;
         const st = root.Plan.statusOf(t.status);
         const col = t.status ? st.color : MY;
+        // עץ "לא להתייחסות": שקוף למחצה עם טבעת מקווקוות
+        cx.globalAlpha = t.ref ? 0.45 : 1;
         cx.beginPath(); cx.arc(p.x, p.y, rM, 0, 7); cx.fillStyle = col; cx.fill();
         cx.lineWidth = 2; cx.strokeStyle = t.pref ? '#111' : '#fff'; cx.stroke();
+        if (t.ref) { cx.globalAlpha = 1; cx.beginPath(); cx.arc(p.x, p.y, rM + 4, 0, 7); cx.setLineDash([4, 3]); cx.lineWidth = 2; cx.strokeStyle = onDark() ? '#fff' : '#555'; cx.stroke(); cx.setLineDash([]); cx.globalAlpha = 0.45; }
         if (t.pref) { cx.beginPath(); cx.arc(p.x, p.y, Math.max(1.5, rM * 0.3), 0, 7); cx.fillStyle = '#111'; cx.fill(); }
         // עץ חדש (לא של המודד): מסגרת מרובעת סביבו, כמו בפקודה ב-BricsCAD
         else {
@@ -357,6 +360,7 @@
           cx.lineWidth = 5; cx.strokeStyle = onDark() ? '#fff' : '#111'; cx.strokeRect(p.x - q, p.y - q, q * 2, q * 2);
           cx.lineWidth = 2.5; cx.strokeStyle = col; cx.strokeRect(p.x - q, p.y - q, q * 2, q * 2);
         }
+        cx.globalAlpha = 1;
         if (t.id === selId) { cx.beginPath(); cx.arc(p.x, p.y, rM + 6, 0, 7); cx.lineWidth = 3; cx.strokeStyle = '#ff1744'; cx.stroke(); }
         const rr = t.pref ? rM : rM + 9;
         hits.push({ kind: 'my', id: t.id, x: p.x, y: p.y, r: rM });
@@ -651,6 +655,9 @@
           t.pref ? null : h('button', { class: 'btn' + (moving ? ' primary' : ''), onclick: () => { moving = !moving; renderSheet(); } }, moving ? 'ביטול הזזה' : 'הזז'),
           // עץ שהוספתי ממש על עץ של המודד: מצמידים אליו (המספר והפרטים נשארים)
           (sv => sv ? h('button', { class: 'btn', onclick: () => linkSurveyor(t, sv) }, 'שייך לעץ המודד') : null)(t.pref ? null : nearSurveyor(t)),
+          h('button', { class: 'btn' + (t.ref ? ' primary' : ''), title: 'נשמר בסקר לגיבוי. בהפקת דוח שואלים אם לכלול', onclick: () => {
+            const old = t.ref; t.ref = !t.ref || undefined; undo.push({ what: 'לא להתייחסות', run: () => { t.ref = old; } }); changed(); renderSheet();
+          } }, t.ref ? '✓ לא להתייחסות' : 'לא להתייחסות'),
           h('button', { class: 'btn', onclick: () => removeTree(t) }, 'בטל סימון'),
           h('button', { class: 'btn primary', onclick: () => close(t.id) }, 'פרטי העץ')));
     }
@@ -943,6 +950,7 @@
             changed(); renderSheet();
           } }, 'מחק תחום'),
           h('button', { class: 'btn', onclick: () => setBound(poly.pts.map(q => q.slice())) }, 'זה הקו הכחול'),
+          h('button', { class: 'btn' + (poly.ref ? ' primary' : ''), onclick: () => { const old = poly.ref; poly.ref = !poly.ref || undefined; undo.push({ what: 'לא להתייחסות', run: () => { poly.ref = old; } }); changed(); renderSheet(); } }, poly.ref ? '✓ לא להתייחסות' : 'לא להתייחסות'),
           h('button', { class: 'btn primary', onclick: () => { drawing = []; selPoly = null; renderSheet(); } }, '+ תחום חדש')));
     }
     function finishPoly() {
