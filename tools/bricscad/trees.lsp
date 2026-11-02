@@ -8,22 +8,20 @@
 ;;; Commands
 ;;;   TREES       draw / update the trees from the Excel (asks for the file the first time)
 ;;;   TREESFILE   choose a different Excel file for this drawing
-;;;   TREESRESET  delete everything this command drew, so the next TREES places the numbers again
+;;;   TREESRESET  delete everything this command drew (the block insert included)
 ;;;
 ;;; Needs BricsCAD (or AutoCAD) on Windows with Microsoft Excel installed: the Excel is read through Excel itself,
 ;;; so the designations are read even while the file is open in Excel (save it first to be safe).
-;;; Re-running TREES updates colors and numbers. Numbers you moved by hand keep their place.
-;;; Moved drawing: the marks may be copied to another drawing and moved / rotated there. TREES then works out the
-;;; move from the trees already in the drawing (Excel X,Y -> where the tree is now), keeps every existing tree where
-;;; it is, and places new trees and the areas with the same move. Run TREES once in the original place first.
+;;; Re-running TREES rebuilds the block from the Excel (colors, numbers, new trees). Marks drawn loose by older
+;;; versions (or the app's older marks file) are removed and the block is placed where they were, even if moved.
 ;;; The surveyor's own tree blocks are never changed.
-;;; Each tree is an insert of the block "trees" (*ts-block*). If the drawing already has a block with that name,
-;;; it is used as is, so you can draw your own tree symbol; otherwise a ring is created. Put the symbol on layer 0
-;;; so it takes the designation color of the tree's layer.
+;;; All the trees, their numbers and squares and the areas are ONE block named "trees" (*ts-block*), inserted once.
+;;; Move, rotate or copy that one insert (also to another drawing); TREES refills the block from the Excel and the
+;;; insert stays where you put it. Do not explode it.
 ;;; With ori's TREEBLK.lsp loaded (OriTools), TREES draws ori's own tree blocks instead: tyouth (blue, not required
 ;;; in license), thaataka (orange, transplant), tshimur (red, preserve), takira (yellow, cut), t_new (green, no
 ;;; designation yet), on layer "Symbols", at the TREEBLK size; the number is centred on the tree on layer
-;;; "tree_survey" (no leader) and the square is TREEBLK's square. A designation change swaps the block in place.
+;;; "tree_survey" (no leader) and the square is TREEBLK's square.
 
 (vl-load-com)
 
@@ -113,130 +111,84 @@
   (foreach x lst (if (and (= (car x) num) (= (cadr x) role)) (setq r (caddr x))))
   r)
 
-;; ---------- drawing ----------
-; the block "trees": kept if the drawing has it, else a ring on layer 0 (color BYLAYER)
-(defun ts:block ()
-  (if (not (tblsearch "BLOCK" *ts-block*))
-    (progn
-      (entmake (list '(0 . "BLOCK") (cons 2 *ts-block*) '(70 . 0) '(10 0.0 0.0 0.0)))
-      (entmake (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") '(8 . "0") '(100 . "AcDbPolyline") '(90 . 2) '(70 . 1)
-                     (cons 43 *ts-w*)
-                     (list 10 (- *ts-r*) 0.0) '(42 . 1.0)
-                     (list 10 *ts-r* 0.0) '(42 . 1.0)))
-      (entmake '((0 . "ENDBLK")))))
-  *ts-block*)
-
-(defun ts:ring (c lay num)
-  (entmake (append
-    (list '(0 . "INSERT") '(100 . "AcDbEntity") (cons 8 lay) '(100 . "AcDbBlockReference") (cons 2 (ts:block))
-          (list 10 (car c) (cadr c) 0.0) '(41 . 1.0) '(42 . 1.0) '(43 . 1.0) '(50 . 0.0))
-    (ts:xd num "ring"))))
-
-; square frame around a tree that is not the surveyor's (added in the field)
-(defun ts:box (c lay num / q)
-  (setq q (+ *ts-r* 0.25))
-  (entmake (append
-    (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 lay) '(100 . "AcDbPolyline") '(90 . 4) '(70 . 1)
-          (cons 43 (* 0.6 *ts-w*))
-          (list 10 (- (car c) q) (- (cadr c) q)) (list 10 (+ (car c) q) (- (cadr c) q))
-          (list 10 (+ (car c) q) (+ (cadr c) q)) (list 10 (- (car c) q) (+ (cadr c) q)))
-    (ts:xd num "box"))))
-
-(defun ts:text (p s num)
-  (entmake (append
-    (list '(0 . "TEXT") '(100 . "AcDbEntity") (cons 8 (ts:layer *ts-num-layer*)) '(100 . "AcDbText")
-          (list 10 (car p) (cadr p) 0.0) (cons 40 *ts-txt*) (cons 1 s) '(72 . 1)
-          (list 11 (car p) (cadr p) 0.0) '(100 . "AcDbText") '(73 . 2))
-    (ts:xd num "num"))))
-
-(defun ts:lead (c p num / d a s e)
-  (setq d (distance c p))
-  (if (> d (+ *ts-r* (* 1.4 *ts-txt*)))
-    (progn
-      (setq a (angle c p)
-            s (polar c a *ts-r*)
-            e (polar c a (- d (* 0.6 *ts-txt*))))
-      (entmake (append
-        (list '(0 . "LINE") '(100 . "AcDbEntity") (cons 8 (ts:layer *ts-num-layer*)) '(100 . "AcDbLine")
-              (list 10 (car s) (cadr s) 0.0) (list 11 (car e) (cadr e) 0.0))
-        (ts:xd num "lead"))))))
+;; ---------- drawing: everything goes into ONE block "trees" ----------
+;; The block's own coordinates are the Excel X,Y (base point 0,0). The drawing has one insert of it: move,
+;; rotate or copy that insert (also to another drawing) and the next TREES fills it again from the Excel.
+(defun ts:pt (p) (vlax-3d-point (car p) (cadr p) 0.0))
+(defun ts:arr (pts / l)
+  (setq l (apply 'append (mapcar '(lambda (p) (list (car p) (cadr p))) pts)))
+  (vlax-make-variant (vlax-safearray-fill (vlax-make-safearray vlax-vbDouble (cons 0 (1- (length l)))) l)))
+(defun ts:on (o lay) (vla-put-Layer o lay) o)
 
 (defun ts:text-pt (e / d)
   (setq d (entget e))
   (if (and (= (cdr (assoc 72 d)) 0) (= (cdr (assoc 73 d)) 0)) (cdr (assoc 10 d)) (cdr (assoc 11 d))))
 
-(defun ts:area (name pts / l)
-  (setq l (ts:layer *ts-area-layer*))
-  (entmake (append
-    (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 l) '(100 . "AcDbPolyline") (cons 90 (length pts)) '(70 . 1))
-    (mapcar '(lambda (p) (list 10 (car p) (cadr p))) pts)
-    (ts:xd name "area")))
-  (if (/= name "")
-    (ts:text-area (ts:top pts) name)))
-
 (defun ts:top (pts / hi) (foreach p pts (if (or (null hi) (> (cadr p) (cadr hi))) (setq hi p))) (list (car hi) (+ (cadr hi) (* 1.5 *ts-txt*))))
 
-(defun ts:text-area (p s)
-  (entmake (append
-    (list '(0 . "TEXT") '(100 . "AcDbEntity") (cons 8 (car *ts-area-layer*)) '(100 . "AcDbText")
-          (list 10 (car p) (cadr p) 0.0) (cons 40 (* 1.5 *ts-txt*)) (cons 1 s) '(72 . 1)
-          (list 11 (car p) (cadr p) 0.0) '(100 . "AcDbText") '(73 . 1))
-    (ts:xd s "areaname"))))
+;; text centred on p, inside the block
+(defun ts:addtext (blk p s ht lay / o)
+  (setq o (vla-AddText blk s (ts:pt p) ht))
+  (vla-put-Alignment o 10) ; middle centre
+  (vla-put-TextAlignmentPoint o (ts:pt p))
+  (if (and tb:textstyle (tblsearch "STYLE" tb:textstyle)) (vla-put-StyleName o tb:textstyle))
+  (ts:on o lay))
+
+(defun ts:addsq (blk c h lay / o)
+  (setq o (vla-AddLightWeightPolyline blk
+            (ts:arr (list (list (- (car c) h) (- (cadr c) h)) (list (+ (car c) h) (- (cadr c) h))
+                          (list (+ (car c) h) (+ (cadr c) h)) (list (- (car c) h) (+ (cadr c) h))))))
+  (vla-put-Closed o :vlax-true)
+  (ts:on o lay))
+
+;; the block definition "trees", emptied (created if missing)
+(defun ts:emptyblock (doc / blks blk lst)
+  (setq blks (vla-get-Blocks doc))
+  (if (tblsearch "BLOCK" *ts-block*)
+    (progn
+      (setq blk (vla-Item blks *ts-block*))
+      (vlax-for o blk (setq lst (cons o lst)))
+      (foreach o lst (vla-Delete o))
+      (vla-put-Origin blk (vlax-3d-point 0 0 0)))
+    (setq blk (vla-Add blks (vlax-3d-point 0 0 0) *ts-block*)))
+  blk)
+
+;; the insert of the whole block in this drawing (not a per-tree mark of older versions)
+(defun ts:role (e / xd) (setq xd (cdr (assoc *ts-app* (cdr (assoc -3 (entget e (list *ts-app*))))))) (if xd (cdr (nth 1 xd))))
+(defun ts:wholeins (/ ss i e r)
+  (if (setq ss (ssget "_X" (list '(0 . "INSERT") (cons 2 *ts-block*))))
+    (repeat (setq i (sslength ss))
+      (setq e (ssname ss (setq i (1- i))))
+      (if (not (equal (ts:role e) "ring")) (setq r e))))
+  r)
 
 ;; ---------- ori's tree blocks (TREEBLK.lsp) ----------
 ;; block name for this code, when TREEBLK is loaded and the block is in the drawing or its library
 (defun ts:oriblock (code / bn)
-  (if (and tb:fromlib tb:size tb:treesize tb:sqr tb:layer tb:wanted)
+  (if (and tb:fromlib tb:size tb:sqr tb:wanted tb:layer)
     (progn
       (setq bn (nth code *ts-ori-blocks*))
       (if (and bn (vl-catch-all-apply 'tb:fromlib (list bn)) (tblsearch "BLOCK" bn)) bn))))
 
-;; tree block at c, at the size used for trees in this drawing (TSIZE), else 1.5 m like TREEBLK
-(defun ts:oritree (c bn num / e o sc want r)
-  (tb:layer tb:blocklayer)
-  (setq e (entmakex (append
-            (list '(0 . "INSERT") '(100 . "AcDbEntity") (cons 8 tb:blocklayer) '(100 . "AcDbBlockReference") (cons 2 bn)
-                  (list 10 (car c) (cadr c) 0.0) '(41 . 1.0) '(42 . 1.0) '(43 . 1.0) '(50 . 0.0))
-            (ts:xd num "ring"))))
-  (if e
+;; size of a TREEBLK block at scale 1 (measured once on a temporary insert)
+(defun ts:unitsize (bn / o mn mx r)
+  (if (not (assoc bn *ts-usize*))
     (progn
-      (setq o (vlax-ename->vla-object e) sc (car (tb:size)))
-      ;; no size set in this drawing yet: 1.5 m (survey drawings without units are in meters)
-      (if (null sc)
-        (progn (setq want (cond ((tb:wanted)) (1.5)) sc (/ want (tb:treesize o))) (vlax-ldata-put "ORI_TREES" "scale" sc)))
-      (if sc (progn (vla-put-XScaleFactor o sc) (vla-put-YScaleFactor o sc) (vla-put-ZScaleFactor o sc)))
-      (vl-catch-all-apply 'tb:track (list o))))
-  e)
+      (setq o (vla-InsertBlock (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object))) (vlax-3d-point 0 0 0) bn 1.0 1.0 1.0 0.0))
+      (setq r (vl-catch-all-apply 'vla-GetBoundingBox (list o 'mn 'mx)))
+      (setq *ts-usize* (cons (cons bn (if (vl-catch-all-error-p r) 1.0
+                                        (progn (setq mn (vlax-safearray->list mn) mx (vlax-safearray->list mx))
+                                               (max (- (car mx) (car mn)) (- (cadr mx) (cadr mn))))))
+                             *ts-usize*))
+      (vla-Delete o)))
+  (cdr (assoc bn *ts-usize*)))
 
-;; number centred on the tree, in front of it (like TREEBLK); an existing number is moved onto the tree
-(defun ts:orinum (tree num old / ht c d e)
-  (setq c (ts:center tree) ht (* (cadr (tb:size)) (tb:treesize tree)))
-  (tb:layer tb:textlayer)
-  (if (and old (entget old))
-    (progn
-      (setq d (entget old))
-      (foreach kv (list (cons 1 num) (cons 8 tb:textlayer) (cons 40 ht) '(72 . 1) '(73 . 2)
-                        (list 10 (car c) (cadr c) 0.0) (list 11 (car c) (cadr c) 0.0))
-        (setq d (if (assoc (car kv) d) (subst kv (assoc (car kv) d) d) (append d (list kv)))))
-      (entmod d)
-      (setq e old))
-    (setq e (entmakex (append
-              (list '(0 . "TEXT") '(100 . "AcDbEntity") (cons 8 tb:textlayer) '(100 . "AcDbText")
-                    (cons 7 (if (tblsearch "STYLE" tb:textstyle) tb:textstyle (getvar "TEXTSTYLE")))
-                    (list 10 (car c) (cadr c) 0.0) (cons 40 ht) (cons 1 num) '(50 . 0.0) '(72 . 1)
-                    (list 11 (car c) (cadr c) 0.0) '(100 . "AcDbText") '(73 . 2))
-              (ts:xd num "num")))))
-  (if e (vl-catch-all-apply 'vl-cmdf (list "_.DRAWORDER" e "" "_Front")))
-  e)
-
-;; TREEBLK's square around the tree
-(defun ts:orisq (tree num / c h)
-  (setq c (ts:center tree) h (/ (* (tb:sqr) (tb:treesize tree)) 2.0))
-  (entmake (append
-    (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 tb:textlayer) '(100 . "AcDbPolyline") '(90 . 4) '(70 . 1)
-          (list 10 (- (car c) h) (- (cadr c) h)) (list 10 (+ (car c) h) (- (cadr c) h))
-          (list 10 (+ (car c) h) (+ (cadr c) h)) (list 10 (- (car c) h) (+ (cadr c) h)))
-    (ts:xd num "box"))))
+;; block scale for the trees: TSIZE of this drawing, else 1.5 m like TREEBLK
+(defun ts:oriscale (bn / sc)
+  (setq sc (car (tb:size)))
+  (if (null sc)
+    (progn (setq sc (/ (cond ((tb:wanted)) (1.5)) (ts:unitsize bn))) (vlax-ldata-put "ORI_TREES" "scale" sc)))
+  sc)
 
 ;; ---------- moved drawing ----------
 ;; where an existing tree mark is now (block insert, or the ring of older versions)
@@ -304,12 +256,6 @@
             (- (car (cadr p1)) (- (* a (car (car p1))) (* b (cadr (car p1)))))
             (- (cadr (cadr p1)) (+ (* b (car (car p1))) (* a (cadr (car p1)))))))))
 
-(defun ts:tp (tr p)
-  (if tr
-    (list (+ (* (nth 0 tr) (car p)) (- (* (nth 1 tr) (cadr p))) (nth 2 tr))
-          (+ (* (nth 1 tr) (car p)) (* (nth 0 tr) (cadr p)) (nth 3 tr)))
-    p))
-
 ;; "X,Y;X,Y;..." -> ((x y) ...)
 (defun ts:pts (s / out part i)
   (setq s (ts:str s))
@@ -330,70 +276,78 @@
   p)
 
 ;; ---------- commands ----------
-(defun ts:run (path / doc rows old seen x y lx ly code lay num c e tp cnt areas pairs tr bn tree ce)
+(defun ts:run (path / doc rows old x y lx ly code lay num c e tp cnt areas pairs tr bn sc sz blk ins ms ce rot k pts)
   (princ (strcat "\nReading " path " ..."))
-  (setq rows (ts:read path))
-  (ts:adopt)
-  (setq old (ts:existing) cnt 0)
-  (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
+  (setq rows (ts:read path) cnt 0 areas 0 *ts-usize* nil)
+  (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)) ms (vla-get-ModelSpace doc))
   (vla-StartUndoMark doc)
   ;; TREEBLK's reactors stay quiet while TREES draws
   (setq tb:busy T ce (getvar "CMDECHO"))
   (setvar "CMDECHO" 0)
-  ;; the drawing may have been moved: compare the trees already drawn with their X,Y in the Excel
-  (foreach r rows
-    (setq num (ts:str (nth 0 r)) x (ts:num (nth 1 r)) y (ts:num (nth 2 r)))
-    (if (and (/= num "") x y (setq e (ts:find old num "ring")) (entget e))
-      (setq pairs (cons (list (list x y) (ts:center e)) pairs))))
-  (setq tr (ts:fit pairs))
-  (if (and tr (or (> (abs (nth 2 tr)) 0.01) (> (abs (nth 3 tr)) 0.01) (> (abs (nth 1 tr)) 1e-6)))
-    (princ "\nThe marks were moved in this drawing: new trees and areas are placed with the same move."))
-  ;; trees
+  (ts:adopt)
+  (setq old (ts:existing) ins (ts:wholeins))
+  ;; older versions drew every tree loose in the drawing. Where they were (maybe moved) tells where the block goes
+  (if (null ins)
+    (progn
+      (foreach r rows
+        (setq num (ts:str (nth 0 r)) x (ts:num (nth 1 r)) y (ts:num (nth 2 r)))
+        (if (and (/= num "") x y (setq e (ts:find old num "ring")) (entget e))
+          (setq pairs (cons (list (list x y) (ts:center e)) pairs))))
+      (setq tr (ts:fit pairs))))
+  (foreach o old
+    (if (and (member (cadr o) '("ring" "box" "num" "lead" "area" "areaname")) (entget (caddr o)))
+      (entdel (caddr o))))
+  ;; fill the block from the Excel, in Excel coordinates
+  (setq blk (ts:emptyblock doc))
   (foreach r rows
     (setq num (ts:str (nth 0 r)) x (ts:num (nth 1 r)) y (ts:num (nth 2 r)))
     (if (and (/= num "") x y)
       (progn
-        (setq c (ts:tp tr (list x y))
+        (setq c (list x y) cnt (1+ cnt)
               lx (ts:num (nth 3 r)) ly (ts:num (nth 4 r))
               code (fix (cond ((ts:num (nth 8 r))) (0)))
-              lay (ts:layer (cdr (cond ((assoc code *ts-layers*)) ((assoc 0 *ts-layers*))))))
-        (setq seen (cons num seen) cnt (1+ cnt))
-        ;; tree mark, by designation. An existing one stays where it is
-        (if (setq e (ts:find old num "ring")) (progn (setq c (ts:center e)) (entdel e)))
-        (setq bn (ts:oriblock code))
-        (if (and bn (setq tree (ts:oritree c bn num)))
+              bn (ts:oriblock code))
+        (if bn
+          ;; ori's tree block by designation, number centred on it, square for a tree added in the field
           (progn
-            ;; ori's blocks: square, and the number centred on the tree (no leader)
-            (if (setq e (ts:find old num "box")) (entdel e))
-            (if (= (ts:str (nth 7 r)) "") (ts:orisq tree num))
-            (ts:orinum tree num (ts:find old num "num"))
-            (if (and (setq e (ts:find old num "lead")) (entget e)) (entdel e)))
+            (tb:layer tb:blocklayer) (tb:layer tb:textlayer)
+            (setq sc (ts:oriscale bn) sz (* sc (ts:unitsize bn)))
+            (ts:on (vla-InsertBlock blk (ts:pt c) bn sc sc sc 0.0) tb:blocklayer)
+            (if (= (ts:str (nth 7 r)) "") (ts:addsq blk c (/ (* (tb:sqr) sz) 2.0) tb:textlayer))
+            (ts:addtext blk c num (* (cadr (tb:size)) sz) tb:textlayer))
+          ;; without TREEBLK: ring by designation, number next to it with a leader
           (progn
-            (ts:ring c lay num)
-            ;; square frame: a tree added in the field (no surveyor tree, column H empty)
-            (if (setq e (ts:find old num "box")) (entdel e))
-            (if (= (ts:str (nth 7 r)) "") (ts:box c lay num))
-            ;; number: keep it where it is (it may have been moved by hand), else at the place from the app
-            (if (setq e (ts:find old num "num"))
-              (progn (setq tp (ts:text-pt e)) (entmod (subst (cons 1 num) (assoc 1 (entget e)) (entget e))))
-              (progn (setq tp (if (and lx ly) (ts:tp tr (list lx ly)) (list (+ (car c) *ts-r* *ts-txt*) (cadr c)))) (ts:text tp num num)))
-            ;; leader from the ring to the number, when the number is not right next to it
-            (if (setq e (ts:find old num "lead")) (entdel e))
-            (ts:lead c tp num))))))
-  ;; trees that are no longer in the Excel
-  (foreach o old
-    (if (and (member (cadr o) '("ring" "box" "num" "lead")) (not (member (car o) seen)) (entget (caddr o)))
-      (entdel (caddr o))))
-  ;; areas: drawn again every time
-  (foreach o old (if (and (member (cadr o) '("area" "areaname")) (entget (caddr o))) (entdel (caddr o))))
-  (setq areas 0)
+            (setq lay (ts:layer (cdr (cond ((assoc code *ts-layers*)) ((assoc 0 *ts-layers*))))))
+            (ts:on (vla-AddCircle blk (ts:pt c) *ts-r*) lay)
+            (if (= (ts:str (nth 7 r)) "") (ts:addsq blk c (+ *ts-r* 0.25) lay))
+            (setq tp (if (and lx ly) (list lx ly) (list (+ x *ts-r* *ts-txt*) y)))
+            (ts:addtext blk tp num *ts-txt* (ts:layer *ts-num-layer*))
+            (if (> (distance c tp) (+ *ts-r* (* 1.4 *ts-txt*)))
+              (ts:on (vla-AddLine blk (ts:pt (polar c (angle c tp) *ts-r*)) (ts:pt (polar c (angle c tp) (- (distance c tp) (* 0.6 *ts-txt*)))))
+                     (ts:layer *ts-num-layer*))))))))
+  ;; areas
   (foreach r rows
-    (if (and (nth 10 r) (> (length (ts:pts (nth 10 r))) 2))
-      (progn (ts:area (ts:str (nth 9 r)) (mapcar '(lambda (p) (ts:tp tr p)) (ts:pts (nth 10 r)))) (setq areas (1+ areas)))))
+    (if (and (nth 10 r) (> (length (setq pts (ts:pts (nth 10 r)))) 2))
+      (progn
+        (setq lay (ts:layer *ts-area-layer*) k (vla-AddLightWeightPolyline blk (ts:arr pts)))
+        (vla-put-Closed k :vlax-true) (ts:on k lay)
+        (if (/= (ts:str (nth 9 r)) "") (ts:addtext blk (ts:top pts) (ts:str (nth 9 r)) (* 1.5 *ts-txt*) lay))
+        (setq areas (1+ areas)))))
+  ;; the one insert of the block: kept where you put it; new = where the older loose marks were, else in place
+  (if ins
+    (vla-Update (vlax-ename->vla-object ins))
+    (progn
+      (setq tr (if tr tr '(1.0 0.0 0.0 0.0))
+            sc (sqrt (+ (* (nth 0 tr) (nth 0 tr)) (* (nth 1 tr) (nth 1 tr))))
+            rot (atan (nth 1 tr) (nth 0 tr)))
+      (setq e (vlax-vla-object->ename (vla-InsertBlock ms (vlax-3d-point (nth 2 tr) (nth 3 tr) 0.0) *ts-block* sc sc sc rot)))
+      (entmod (append (entget e) (ts:xd *ts-block* "all")))))
+  (vla-Regen doc 1)
   (setq tb:busy nil tb:pending nil tb:dbpend nil)
   (setvar "CMDECHO" ce)
   (vla-EndUndoMark doc)
-  (princ (strcat "\nTREES: " (itoa cnt) " trees" (if (> areas 0) (strcat ", " (itoa areas) " areas") "") " updated."))
+  (princ (strcat "\nTREES: " (itoa cnt) " trees" (if (> areas 0) (strcat ", " (itoa areas) " areas") "")
+                 " in block \"" *ts-block* "\"" (if bn " (your tree blocks)" "") "."))
   (princ))
 
 (defun c:TREES (/ p)

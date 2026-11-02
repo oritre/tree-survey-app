@@ -637,42 +637,46 @@
     put(0, 'SECTION', 2, 'TABLES', 0, 'TABLE', 2, 'LAYER', 70, layers.size);
     for (const [n, c] of layers) put(0, 'LAYER', 2, n, 70, 0, 62, c, 6, 'CONTINUOUS');
     put(0, 'ENDTAB');
-    // זיהוי (XDATA של TREESURVEY, כמו בפקודה TREES): כך TREES מזהה את הסימונים גם אחרי שהועתקו והוזזו לשרטוט אחר
+    // זיהוי (XDATA של TREESURVEY): ההכנסה של הבלוק trees, כדי ש-TREES ימצא אותה גם אחרי העתקה לשרטוט אחר
     put(0, 'TABLE', 2, 'APPID', 70, 2, 0, 'APPID', 2, 'ACAD', 70, 0, 0, 'APPID', 2, XD_APP, 70, 0, 0, 'ENDTAB', 0, 'ENDSEC');
-    // כל עץ הוא בלוק בשם trees (ori: ב-BricsCAD אפשר לבחור את כולם או להחליף את הסמל). העיגול בשכבה 0, אז הצבע לפי שכבת העץ
-    put(0, 'SECTION', 2, 'BLOCKS', 0, 'BLOCK', 8, '0', 2, TREE_BLOCK, 70, 0, 10, 0, 20, 0, 30, 0, 3, TREE_BLOCK,
-      0, 'CIRCLE', 8, '0', 10, 0, 20, 0, 30, 0, 40, 0.5, 0, 'ENDBLK', 8, '0', 0, 'ENDSEC');
-    put(0, 'SECTION', 2, 'ENTITIES');
-    const xd = id => { if (id) put(1001, XD_APP, 1000, enc(id[0]), 1000, id[1]); };
-    const text = (lay, x, y, h, str, id) => { put(0, 'TEXT', 8, lay, 10, f(x), 20, f(y), 30, 0, 40, h, 1, enc(str), 72, 1, 11, f(x), 21, f(y), 31, 0); xd(id); };
-    const poly = (lay, pts, closed, id) => {
-      put(0, 'POLYLINE', 8, lay, 66, 1, 70, closed ? 1 : 0); xd(id);
-      for (const q of pts) put(0, 'VERTEX', 8, lay, 10, f(q[0]), 20, f(q[1]), 30, 0);
-      put(0, 'SEQEND', 8, lay);
+    // ori: כל העצים, המספרים והתחומים הם בלוק אחד בשם trees (להעתיק ולהזיז כיחידה אחת). "לא להתייחסות" והקו הכחול מחוץ לבלוק
+    const blk = [], free = [];
+    const putIn = (arr, ...kv) => { for (let i = 0; i < kv.length; i += 2) arr.push(String(kv[i]), String(kv[i + 1])); };
+    const text = (arr, lay, x, y, h, str) => putIn(arr, 0, 'TEXT', 8, lay, 10, f(x), 20, f(y), 30, 0, 40, h, 1, enc(str), 72, 1, 11, f(x), 21, f(y), 31, 0);
+    const poly = (arr, lay, pts, closed) => {
+      putIn(arr, 0, 'POLYLINE', 8, lay, 66, 1, 70, closed ? 1 : 0);
+      for (const q of pts) putIn(arr, 0, 'VERTEX', 8, lay, 10, f(q[0]), 20, f(q[1]), 30, 0);
+      putIn(arr, 0, 'SEQEND', 8, lay);
     };
     for (const t of survey.trees || []) {
       if (t.px == null || t.polyId) continue;
       const [x, y] = W(t.px, t.py);
+      const arr = t.ref ? free : blk;
       const lay = t.ref ? 'TREES_REF' : statusOf(t.status).layer;
-      // "לא להתייחסות" לא באקסל, אז בלי זיהוי (אחרת TREES ימחק אותם)
-      const num = String(t.num || '').trim(), id = r => num && !t.ref ? [num, r] : null;
-      put(0, 'INSERT', 8, lay, 2, TREE_BLOCK, 10, f(x), 20, f(y), 30, 0); xd(id('ring'));
+      const num = String(t.num || '').trim();
+      putIn(arr, 0, 'CIRCLE', 8, lay, 10, f(x), 20, f(y), 30, 0, 40, 0.5);
       // עץ שנוסף במקום בלי עץ של המודד: ריבוע סביבו, כמו בפקודת TREES
-      if (!t.pref) poly('TREES_BOX', [[x - 0.8, y - 0.8], [x + 0.8, y - 0.8], [x + 0.8, y + 0.8], [x - 0.8, y + 0.8]], true, id('box'));
-      if (num) text('TREES_NUM', x + 1.1, y + 0.6, 0.6, num, id('num'));
+      if (!t.pref) poly(arr, t.ref ? 'TREES_REF' : 'TREES_BOX', [[x - 0.8, y - 0.8], [x + 0.8, y - 0.8], [x + 0.8, y + 0.8], [x - 0.8, y + 0.8]], true);
+      if (num) text(arr, t.ref ? 'TREES_REF' : 'TREES_NUM', x + 1.1, y + 0.6, 0.6, num);
     }
     for (const p of survey.planPolys || []) {
       if (!p.pts || p.pts.length < 3) continue;
       const pts = p.pts.map(q => W(q[0], q[1]));
-      const aname = p.name || '';
-      poly(p.ref ? 'TREES_REF' : 'TREES_POLY', pts, true, p.ref ? null : [aname, 'area']);
+      const arr = p.ref ? free : blk;
+      poly(arr, p.ref ? 'TREES_REF' : 'TREES_POLY', pts, true);
       const tr = (survey.trees || []).find(t => t.polyId === p.id);
       const c = pts.reduce((a, q) => [a[0] + q[0] / pts.length, a[1] + q[1] / pts.length], [0, 0]);
       // בלי עברית (גופני SHX מציגים אותה הפוך): P1 (20)
       const name = [(tr && tr.num) || (/^[\x20-\x7e]+$/.test(p.name || '') ? p.name : ''), tr && tr.qty ? '(' + tr.qty + ')' : ''].filter(Boolean).join(' ');
-      if (name) text('TREES_POLY', c[0], c[1], 0.7, name, p.ref ? null : [name, 'areaname']);
+      if (name) text(arr, p.ref ? 'TREES_REF' : 'TREES_POLY', c[0], c[1], 0.7, name);
     }
-    if (survey.planBound && survey.planBound.pts) poly('TREES_KAV_KACHOL', survey.planBound.pts.map(q => W(q[0], q[1])), true);
+    if (survey.planBound && survey.planBound.pts) poly(free, 'TREES_KAV_KACHOL', survey.planBound.pts.map(q => W(q[0], q[1])), true);
+    // הבלוק: נקודת הבסיס 0,0, כך שהקואורדינטות בתוכו הן של המדידה, ומוכנס פעם אחת ב-0,0
+    put(0, 'SECTION', 2, 'BLOCKS', 0, 'BLOCK', 8, '0', 2, TREE_BLOCK, 70, 0, 10, 0, 20, 0, 30, 0, 3, TREE_BLOCK);
+    out.push(...blk);
+    put(0, 'ENDBLK', 8, '0', 0, 'ENDSEC', 0, 'SECTION', 2, 'ENTITIES');
+    if (blk.length) put(0, 'INSERT', 8, '0', 2, TREE_BLOCK, 10, 0, 20, 0, 30, 0, 1001, XD_APP, 1000, TREE_BLOCK, 1000, 'all');
+    out.push(...free);
     put(0, 'ENDSEC', 0, 'EOF');
     return out.join('\r\n') + '\r\n';
   }
