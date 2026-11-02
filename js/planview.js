@@ -56,6 +56,7 @@
     const missChip = h('div', { class: 'plan-miss' },
       h('button', { class: 'pm-main', title: 'הדגשת עצי המודד שעוד לא סומנו', onclick: () => { missOn = !missOn; DB.setKV('planMiss', missOn); jumpH = null; updateBar(); redraw(); } }, missTxt),
       h('button', { class: 'pm-next', title: 'לעץ הקרוב שעוד לא סומן', onclick: nextMissing }, 'הבא ›'),
+      h('button', { class: 'pm-hide', title: 'הסתרת ההדגשה', 'aria-label': 'הסתרת ההדגשה', onclick: () => { missOn = false; DB.setKV('planMiss', false); jumpH = null; updateBar(); redraw(); } }, '✕'),
       h('button', { class: 'pm-bound', title: 'קו כחול: רק עצים בתוכו ועד 4 מ\' ממנו נספרים', onclick: () => { setMode('area'); if (!s.planBound) startPick(); } }, 'קו כחול'));
     const btn = (label, title, on, cls) => h('button', { class: 'txt ' + (cls || ''), title: title || null, 'aria-label': title || null, onclick: on }, label);
     const markBtn = btn('סימון עצים', 'נגיעה בעץ של המודד או במקום ריק', () => setMode('mark'));
@@ -1055,6 +1056,7 @@
       missTxt.textContent = n ? `${n} עצי מודד${where} לא סומנו (${tot - n}/${tot})` : `כל ${tot} עצי המודד${where} סומנו ✓`;
       missChip.querySelector('.pm-next').hidden = !n;
       missChip.querySelector('.pm-bound').hidden = hasB;
+      missChip.querySelector('.pm-hide').hidden = !missOn;
     }
     // קפיצה לעץ הקרוב שעוד לא סומן: קרוב למיקום ה-GPS אם יש, אחרת למרכז המסך
     function nextMissing() {
