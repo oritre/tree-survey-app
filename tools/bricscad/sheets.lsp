@@ -274,7 +274,20 @@
                      (if (or (null best) (> s bs)) (setq best m bs s)))))))))
   best)
 
-(defun sh:plot (pw ph / lo dev l media w h)
+;; no paper of that size (roll sheets): the smallest paper that holds the sheet
+(defun sh:covermedia (lo pw ph / best ba n a b)
+  (foreach m (sh:list (vla-GetCanonicalMediaNames lo))
+    (if (wcmatch (strcase m) "*MM*")
+      (progn
+        (setq n (reverse (sh:nums m)))
+        (if (>= (length n) 2)
+          (progn (setq a (cadr n) b (car n))
+                 (if (and (or (and (>= a (- pw 0.5)) (>= b (- ph 0.5))) (and (>= a (- ph 0.5)) (>= b (- pw 0.5))))
+                          (or (null best) (< (* a b) ba)))
+                   (setq best m ba (* a b))))))))
+  best)
+
+(defun sh:plot (pw ph / lo dev l media w h exact)
   (setq lo (vla-get-ActiveLayout (sh:doc)))
   (vl-catch-all-apply 'vla-RefreshPlotDeviceInfo (list lo))
   (setq l (sh:list (vl-catch-all-apply 'vla-GetPlotDeviceNames (list lo))))
@@ -284,14 +297,19 @@
   (if dev (vl-catch-all-apply 'vla-put-ConfigName (list lo dev)))
   (vl-catch-all-apply 'vla-RefreshPlotDeviceInfo (list lo))
   (vl-catch-all-apply 'vla-put-PaperUnits (list lo acMillimeters))
-  (setq media (vl-catch-all-apply 'sh:findmedia (list lo pw ph)))
-  (if (and media (= (type media) 'STR))
+  (setq media (vl-catch-all-apply 'sh:findmedia (list lo pw ph)) exact T)
+  (if (/= (type media) 'STR) (setq media (vl-catch-all-apply 'sh:covermedia (list lo pw ph)) exact nil))
+  (if (= (type media) 'STR)
     (progn
       (vla-put-CanonicalMediaName lo media)
       (vla-GetPaperSize lo 'w 'h)
-      (vl-catch-all-apply 'vla-put-PlotRotation (list lo (if (equal w pw 1.0) ac0degrees ac90degrees))))
+      ;; landscape paper for a landscape sheet: no rotation
+      (vl-catch-all-apply 'vla-put-PlotRotation (list lo (if (= (> w h) (> pw ph)) ac0degrees ac90degrees)))
+      (if (not exact)
+        (princ (strcat "\nThe plotter has no paper of " (rtos pw 2 0) " x " (rtos ph 2 0) " mm; using "
+                       (vla-GetLocaleMediaName lo media) ". Add an exact custom paper size to trim it."))))
     (princ (strcat "\nThe plotter " (if dev dev "(none)") " has no paper of " (rtos pw 2 0) " x " (rtos ph 2 0)
-                   " mm. Add a custom paper size in the plotter configuration and choose it in Page Setup.")))
+                   " mm or larger. Add a custom paper size in the plotter configuration and choose it in Page Setup.")))
   (vl-catch-all-apply 'vla-put-PlotType (list lo acLayout))
   (vl-catch-all-apply 'vla-put-StandardScale (list lo ac1_1))
   (vl-catch-all-apply 'vla-put-CenterPlot (list lo :vlax-false))
@@ -493,6 +511,8 @@
 
 ;; pick the drawing -> (sel scale forced) ; sel = (cW wU hU ang pline), cW = center in WCS
 (defun sh:pick (typ scale allowframe / p1 p2 r e pts mn mx)
+  ;; window corners are free points: running object snaps off while picking (back in sh:end / sh:error)
+  (setvar "OSMODE" (logior *sh-oldosmode* 16384))
   (while (not r)
     (initget (if allowframe "Polyline Frame Rotate" "Polyline Rotate"))
     (setq p1 (getpoint (if allowframe "\nFirst corner of the drawing or [Polyline/Frame/Rotate]: "
@@ -519,6 +539,7 @@
              (setq r (list (list (list (/ (+ (car p1) (car p2)) 2.0) (/ (+ (cadr p1) (cadr p2)) 2.0) 0.0)
                                  (abs (- (car p2) (car p1))) (abs (- (cadr p2) (cadr p1))) (sh:ucsang) nil)
                            scale ""))))))
+  (setvar "OSMODE" *sh-oldosmode*)
   ;; center to WCS now, while the model UCS is current (the layout has its own UCS)
   (if (listp r) (setq r (cons (cons (trans (car (car r)) 1 0) (cdr (car r))) (cdr r))))
   (if (= r 'cancel) nil r))
@@ -526,7 +547,7 @@
 ;; ---------- commands ----------
 
 (defun sh:begin ()
-  (setq *sh-olderr* *error* *sh-oldecho* (getvar "CMDECHO"))
+  (setq *sh-olderr* *error* *sh-oldecho* (getvar "CMDECHO") *sh-oldosmode* (getvar "OSMODE"))
   (setq *error* sh:error)
   (setvar "CMDECHO" 0)
   (vla-StartUndoMark (sh:doc)))
@@ -534,6 +555,7 @@
 (defun sh:end ()
   (vla-EndUndoMark (sh:doc))
   (setvar "CMDECHO" *sh-oldecho*)
+  (setvar "OSMODE" *sh-oldosmode*)
   (setq *error* *sh-olderr*)
   (princ))
 
@@ -543,6 +565,7 @@
   (if (not (wcmatch (strcase msg) "*CANCEL*,*QUIT*,*EXIT*,*BREAK*")) (princ (strcat "\nError: " msg)))
   (vl-catch-all-apply 'vla-EndUndoMark (list (sh:doc)))
   (if *sh-oldecho* (setvar "CMDECHO" *sh-oldecho*))
+  (if *sh-oldosmode* (setvar "OSMODE" *sh-oldosmode*))
   (setq *error* *sh-olderr*)
   (princ))
 
