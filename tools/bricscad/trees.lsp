@@ -20,6 +20,10 @@
 ;;; Each tree is an insert of the block "trees" (*ts-block*). If the drawing already has a block with that name,
 ;;; it is used as is, so you can draw your own tree symbol; otherwise a ring is created. Put the symbol on layer 0
 ;;; so it takes the designation color of the tree's layer.
+;;; With ori's TREEBLK.lsp loaded (OriTools), TREES draws ori's own tree blocks instead: tyouth (blue, not required
+;;; in license), thaataka (orange, transplant), tshimur (red, preserve), takira (yellow, cut), t_new (green, no
+;;; designation yet), on layer "Symbols", at the TREEBLK size; the number is centred on the tree on layer
+;;; "tree_survey" (no leader) and the square is TREEBLK's square. A designation change swaps the block in place.
 
 (vl-load-com)
 
@@ -28,6 +32,8 @@
 (setq *ts-r* 0.45)    ; ring radius (m)
 (setq *ts-w* 0.12)    ; ring width (m)
 (setq *ts-block* "trees") ; block inserted at every tree
+;; designation code -> ori's TREEBLK block (0 none, 1 not required, 2 transplant, 3 preserve, 4 cut)
+(setq *ts-ori-blocks* '("t_new" "tyouth" "thaataka" "tshimur" "takira"))
 
 ;; code -> (layer color)   colors as in the Excel template's conditional formatting
 (setq *ts-layers*
@@ -177,6 +183,61 @@
           (list 11 (car p) (cadr p) 0.0) '(100 . "AcDbText") '(73 . 1))
     (ts:xd s "areaname"))))
 
+;; ---------- ori's tree blocks (TREEBLK.lsp) ----------
+;; block name for this code, when TREEBLK is loaded and the block is in the drawing or its library
+(defun ts:oriblock (code / bn)
+  (if (and tb:fromlib tb:size tb:treesize tb:sqr tb:layer tb:wanted)
+    (progn
+      (setq bn (nth code *ts-ori-blocks*))
+      (if (and bn (vl-catch-all-apply 'tb:fromlib (list bn)) (tblsearch "BLOCK" bn)) bn))))
+
+;; tree block at c, at the size used for trees in this drawing (TSIZE), else 1.5 m like TREEBLK
+(defun ts:oritree (c bn num / e o sc want r)
+  (tb:layer tb:blocklayer)
+  (setq e (entmakex (append
+            (list '(0 . "INSERT") '(100 . "AcDbEntity") (cons 8 tb:blocklayer) '(100 . "AcDbBlockReference") (cons 2 bn)
+                  (list 10 (car c) (cadr c) 0.0) '(41 . 1.0) '(42 . 1.0) '(43 . 1.0) '(50 . 0.0))
+            (ts:xd num "ring"))))
+  (if e
+    (progn
+      (setq o (vlax-ename->vla-object e) sc (car (tb:size)))
+      ;; no size set in this drawing yet: 1.5 m (survey drawings without units are in meters)
+      (if (null sc)
+        (progn (setq want (cond ((tb:wanted)) (1.5)) sc (/ want (tb:treesize o))) (vlax-ldata-put "ORI_TREES" "scale" sc)))
+      (if sc (progn (vla-put-XScaleFactor o sc) (vla-put-YScaleFactor o sc) (vla-put-ZScaleFactor o sc)))
+      (vl-catch-all-apply 'tb:track (list o))))
+  e)
+
+;; number centred on the tree, in front of it (like TREEBLK); an existing number is moved onto the tree
+(defun ts:orinum (tree num old / ht c d e)
+  (setq c (ts:center tree) ht (* (cadr (tb:size)) (tb:treesize tree)))
+  (tb:layer tb:textlayer)
+  (if (and old (entget old))
+    (progn
+      (setq d (entget old))
+      (foreach kv (list (cons 1 num) (cons 8 tb:textlayer) (cons 40 ht) '(72 . 1) '(73 . 2)
+                        (list 10 (car c) (cadr c) 0.0) (list 11 (car c) (cadr c) 0.0))
+        (setq d (if (assoc (car kv) d) (subst kv (assoc (car kv) d) d) (append d (list kv)))))
+      (entmod d)
+      (setq e old))
+    (setq e (entmakex (append
+              (list '(0 . "TEXT") '(100 . "AcDbEntity") (cons 8 tb:textlayer) '(100 . "AcDbText")
+                    (cons 7 (if (tblsearch "STYLE" tb:textstyle) tb:textstyle (getvar "TEXTSTYLE")))
+                    (list 10 (car c) (cadr c) 0.0) (cons 40 ht) (cons 1 num) '(50 . 0.0) '(72 . 1)
+                    (list 11 (car c) (cadr c) 0.0) '(100 . "AcDbText") '(73 . 2))
+              (ts:xd num "num")))))
+  (if e (vl-catch-all-apply 'vl-cmdf (list "_.DRAWORDER" e "" "_Front")))
+  e)
+
+;; TREEBLK's square around the tree
+(defun ts:orisq (tree num / c h)
+  (setq c (ts:center tree) h (/ (* (tb:sqr) (tb:treesize tree)) 2.0))
+  (entmake (append
+    (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") (cons 8 tb:textlayer) '(100 . "AcDbPolyline") '(90 . 4) '(70 . 1)
+          (list 10 (- (car c) h) (- (cadr c) h)) (list 10 (+ (car c) h) (- (cadr c) h))
+          (list 10 (+ (car c) h) (+ (cadr c) h)) (list 10 (- (car c) h) (+ (cadr c) h)))
+    (ts:xd num "box"))))
+
 ;; ---------- moved drawing ----------
 ;; where an existing tree mark is now (block insert, or the ring of older versions)
 (defun ts:center (e / d pts v)
@@ -269,13 +330,16 @@
   p)
 
 ;; ---------- commands ----------
-(defun ts:run (path / doc rows old seen x y lx ly code lay num c e tp cnt areas pairs tr)
+(defun ts:run (path / doc rows old seen x y lx ly code lay num c e tp cnt areas pairs tr bn tree ce)
   (princ (strcat "\nReading " path " ..."))
   (setq rows (ts:read path))
   (ts:adopt)
   (setq old (ts:existing) cnt 0)
   (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
   (vla-StartUndoMark doc)
+  ;; TREEBLK's reactors stay quiet while TREES draws
+  (setq tb:busy T ce (getvar "CMDECHO"))
+  (setvar "CMDECHO" 0)
   ;; the drawing may have been moved: compare the trees already drawn with their X,Y in the Excel
   (foreach r rows
     (setq num (ts:str (nth 0 r)) x (ts:num (nth 1 r)) y (ts:num (nth 2 r)))
@@ -294,19 +358,28 @@
               code (fix (cond ((ts:num (nth 8 r))) (0)))
               lay (ts:layer (cdr (cond ((assoc code *ts-layers*)) ((assoc 0 *ts-layers*))))))
         (setq seen (cons num seen) cnt (1+ cnt))
-        ;; tree mark (block "trees"), color by designation. An existing one stays where it is
+        ;; tree mark, by designation. An existing one stays where it is
         (if (setq e (ts:find old num "ring")) (progn (setq c (ts:center e)) (entdel e)))
-        (ts:ring c lay num)
-        ;; square frame: a tree added in the field (no surveyor tree, column H empty)
-        (if (setq e (ts:find old num "box")) (entdel e))
-        (if (= (ts:str (nth 7 r)) "") (ts:box c lay num))
-        ;; number: keep it where it is (it may have been moved by hand), else at the place from the app
-        (if (setq e (ts:find old num "num"))
-          (progn (setq tp (ts:text-pt e)) (entmod (subst (cons 1 num) (assoc 1 (entget e)) (entget e))))
-          (progn (setq tp (if (and lx ly) (ts:tp tr (list lx ly)) (list (+ (car c) *ts-r* *ts-txt*) (cadr c)))) (ts:text tp num num)))
-        ;; leader from the ring to the number, when the number is not right next to it
-        (if (setq e (ts:find old num "lead")) (entdel e))
-        (ts:lead c tp num))))
+        (setq bn (ts:oriblock code))
+        (if (and bn (setq tree (ts:oritree c bn num)))
+          (progn
+            ;; ori's blocks: square, and the number centred on the tree (no leader)
+            (if (setq e (ts:find old num "box")) (entdel e))
+            (if (= (ts:str (nth 7 r)) "") (ts:orisq tree num))
+            (ts:orinum tree num (ts:find old num "num"))
+            (if (and (setq e (ts:find old num "lead")) (entget e)) (entdel e)))
+          (progn
+            (ts:ring c lay num)
+            ;; square frame: a tree added in the field (no surveyor tree, column H empty)
+            (if (setq e (ts:find old num "box")) (entdel e))
+            (if (= (ts:str (nth 7 r)) "") (ts:box c lay num))
+            ;; number: keep it where it is (it may have been moved by hand), else at the place from the app
+            (if (setq e (ts:find old num "num"))
+              (progn (setq tp (ts:text-pt e)) (entmod (subst (cons 1 num) (assoc 1 (entget e)) (entget e))))
+              (progn (setq tp (if (and lx ly) (ts:tp tr (list lx ly)) (list (+ (car c) *ts-r* *ts-txt*) (cadr c)))) (ts:text tp num num)))
+            ;; leader from the ring to the number, when the number is not right next to it
+            (if (setq e (ts:find old num "lead")) (entdel e))
+            (ts:lead c tp num))))))
   ;; trees that are no longer in the Excel
   (foreach o old
     (if (and (member (cadr o) '("ring" "box" "num" "lead")) (not (member (car o) seen)) (entget (caddr o)))
@@ -317,6 +390,8 @@
   (foreach r rows
     (if (and (nth 10 r) (> (length (ts:pts (nth 10 r))) 2))
       (progn (ts:area (ts:str (nth 9 r)) (mapcar '(lambda (p) (ts:tp tr p)) (ts:pts (nth 10 r)))) (setq areas (1+ areas)))))
+  (setq tb:busy nil tb:pending nil tb:dbpend nil)
+  (setvar "CMDECHO" ce)
   (vla-EndUndoMark doc)
   (princ (strcat "\nTREES: " (itoa cnt) " trees" (if (> areas 0) (strcat ", " (itoa areas) " areas") "") " updated."))
   (princ))
