@@ -643,7 +643,7 @@
     }
     const fmt = v => v.toFixed(2);
     function xyRow(title, X, Y) {
-      const txt = `${fmt(X)}, ${fmt(Y)}`;
+      const txt = `${fmt(X)},${fmt(Y)}`; // בלי רווח: אפשר להדביק ישר בשורת הפקודה של BricsCAD
       return h('div', { class: 'stack', style: 'gap:4px' },
         h('div', { class: 'muted small' }, title),
         h('div', { class: 'row', style: 'gap:10px;align-items:center;flex-wrap:wrap' },
