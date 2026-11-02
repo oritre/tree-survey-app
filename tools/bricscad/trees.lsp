@@ -179,13 +179,52 @@
 
 ;; ---------- moved drawing ----------
 ;; where an existing tree mark is now (block insert, or the ring of older versions)
-(defun ts:center (e / d pts)
+(defun ts:center (e / d pts v)
   (setq d (entget e))
-  (if (= (cdr (assoc 0 d)) "INSERT")
-    (list (car (cdr (assoc 10 d))) (cadr (cdr (assoc 10 d))))
-    (progn
-      (setq pts (mapcar 'cdr (vl-remove-if-not '(lambda (x) (= (car x) 10)) d)))
-      (list (/ (apply '+ (mapcar 'car pts)) (length pts)) (/ (apply '+ (mapcar 'cadr pts)) (length pts))))))
+  (cond
+    ((member (cdr (assoc 0 d)) '("INSERT" "CIRCLE"))
+     (list (car (cdr (assoc 10 d))) (cadr (cdr (assoc 10 d)))))
+    (T
+     (if (= (cdr (assoc 0 d)) "POLYLINE")
+       (progn (setq v (entnext e))
+              (while (and v (= (cdr (assoc 0 (entget v))) "VERTEX"))
+                (setq pts (cons (cdr (assoc 10 (entget v))) pts) v (entnext v))))
+       (setq pts (mapcar 'cdr (vl-remove-if-not '(lambda (x) (= (car x) 10)) d))))
+     (list (/ (apply '+ (mapcar 'car pts)) (length pts)) (/ (apply '+ (mapcar 'cadr pts)) (length pts))))))
+
+;; ---------- marks file from older app versions ----------
+;; The app's markup DXF before version 1.48 has no TREESURVEY data. Its marks are found by layer
+;; (TREES_NUM numbers, the tree circle next to each number, TREES_BOX squares, TREES_POLY areas) and tagged,
+;; so TREES updates them instead of drawing a second set.
+(defun ts:tagged (e) (assoc -3 (entget e (list *ts-app*))))
+(defun ts:tag (e num role) (entmod (append (entget e) (ts:xd num role))))
+(defun ts:untagged (flt / ss i e out)
+  (if (setq ss (ssget "_X" flt))
+    (repeat (setq i (sslength ss))
+      (setq e (ssname ss (setq i (1- i))))
+      (if (not (ts:tagged e)) (setq out (cons e out)))))
+  out)
+(defun ts:adopt (/ marks boxes e num p q best bd d n)
+  (setq n 0
+        marks (vl-remove-if '(lambda (m) (wcmatch (strcase (cdr (assoc 8 (entget m)))) "TREES_NUM,TREES_BOX,TREES_POLY,TREES_KAV_KACHOL,TREES_REF"))
+                (ts:untagged '((0 . "CIRCLE,INSERT") (8 . "TREES_*"))))
+        boxes (ts:untagged '((0 . "POLYLINE,LWPOLYLINE") (8 . "TREES_BOX"))))
+  (foreach e (ts:untagged '((0 . "TEXT") (8 . "TREES_NUM")))
+    (setq num (ts:str (cdr (assoc 1 (entget e)))) p (ts:text-pt e)
+          q (list (- (car p) 1.1) (- (cadr p) 0.6)) best nil bd 0.6)
+    ;; the number is 1.1 m right and 0.6 m above its tree; if the drawing was rotated, the nearest tree to it
+    (foreach m marks (if (< (setq d (distance q (ts:center m))) bd) (setq best m bd d)))
+    (if (null best) (progn (setq bd 1.6) (foreach m marks (if (< (setq d (distance p (ts:center m))) bd) (setq best m bd d)))))
+    (if (and best (/= num ""))
+      (progn
+        (setq q (ts:center best) marks (vl-remove best marks) n (1+ n))
+        (ts:tag best num "ring")
+        (ts:tag e num "num")
+        (foreach b boxes (if (< (distance q (ts:center b)) 0.3) (ts:tag b num "box"))))))
+  (foreach e (ts:untagged '((0 . "POLYLINE,LWPOLYLINE") (8 . "TREES_POLY"))) (ts:tag e "" "area"))
+  (foreach e (ts:untagged '((0 . "TEXT") (8 . "TREES_POLY"))) (ts:tag e "" "areaname"))
+  (if (> n 0) (princ (strcat "\nFound " (itoa n) " trees from the app's marks file.")))
+  n)
 
 ;; move + rotation from pairs ((excel-pt drawing-pt) ...): (a b tx ty), X = a x - b y + tx, Y = b x + a y + ty
 ;; one pair = move only; two or more = the two pairs farthest apart give the rotation too
@@ -233,6 +272,7 @@
 (defun ts:run (path / doc rows old seen x y lx ly code lay num c e tp cnt areas pairs tr)
   (princ (strcat "\nReading " path " ..."))
   (setq rows (ts:read path))
+  (ts:adopt)
   (setq old (ts:existing) cnt 0)
   (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
   (vla-StartUndoMark doc)
@@ -263,7 +303,7 @@
         ;; number: keep it where it is (it may have been moved by hand), else at the place from the app
         (if (setq e (ts:find old num "num"))
           (progn (setq tp (ts:text-pt e)) (entmod (subst (cons 1 num) (assoc 1 (entget e)) (entget e))))
-          (progn (setq tp (if (and lx ly) (ts:tp tr (list lx ly)) (list (+ (car c) *ts-r* *ts-txt*) (cadr c)))) (ts:text tp num)))
+          (progn (setq tp (if (and lx ly) (ts:tp tr (list lx ly)) (list (+ (car c) *ts-r* *ts-txt*) (cadr c)))) (ts:text tp num num)))
         ;; leader from the ring to the number, when the number is not right next to it
         (if (setq e (ts:find old num "lead")) (entdel e))
         (ts:lead c tp num))))
