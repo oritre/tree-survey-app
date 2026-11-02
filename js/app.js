@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.45.0';
+  const APP_VERSION = '1.46.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -284,7 +284,7 @@
         toast('הסקר עודכן ממכשיר אחר', 2500);
       } else if (!cur && /^#\/?$/.test(location.hash || '#/')) renderHome();
     },
-    buildReport, buildPdf,
+    buildReport, buildPdf, planFiles,
     // שם תת-התיקייה של סקר לבנייה בתיקיית הדוחות (שם הקבצים בלי "סקר עצים לבנייה - ")
     reportDirName: s => fileBase(s).replace(/^סקר עצים לבנייה - /, ''),
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
@@ -2601,6 +2601,18 @@
             h('button', { class: 'btn', onclick: () => done(null) }, 'ביטול'))));
       document.body.append(box);
     });
+  }
+
+  // סקר לבנייה עם מדידה: קובץ המדידה המקורי וקובץ DXF של הסימונים, לתיקיית הסקר בגוגל דרייב ב"סיום סקר"
+  async function planFiles(s) {
+    if (!s || !s.plan || !Construction.isConstruction(s)) return [];
+    const out = [];
+    const o = await DB.getPhoto('plandwg:' + s.plan.id).catch(() => null);
+    if (o && o.blob) out.push({ name: s.plan.file || o.name || 'מדידה.dwg', blob: o.blob });
+    const v = reportView(s);
+    if (v.trees.some(t => t.px != null) || (v.planPolys || []).length || v.planBound)
+      out.push({ name: fileBase(s) + ' - סימונים במדידה.dxf', blob: new Blob([Plan.markupDxf(v)], { type: 'application/dxf' }) });
+    return out;
   }
 
   // בונה את קובץ האקסל של סקר (משמש גם להורדה וגם לגוגל דרייב)

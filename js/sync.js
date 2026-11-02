@@ -649,6 +649,10 @@
     DB.delKV('xlsm:' + s.id).catch(() => {});
     s.odReportHash = hashSurvey(s); s.odReportAt = Date.now();
     log('ok', 'האקסל נשמר בגוגל דרייב', s);
+    // סקר לבנייה: גם קובץ המדידה והסימונים עליה, כדי להמשיך לעבוד במחשב
+    try {
+      for (const f of await root.App.planFiles(s)) await putReportFile(s, f.name, f.blob);
+    } catch (e) { log('error', 'קובץ המדידה לא עלה: ' + e.message, s); }
     let pdf = null;
     if (opts && opts.pdf) {
       const last = await DB.getKV('pdf:' + s.id, null);
