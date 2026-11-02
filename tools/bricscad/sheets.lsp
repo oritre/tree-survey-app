@@ -5,11 +5,18 @@
 ;;;               (window / closed polyline / moving frame of a paper size). The sheet size is chosen by itself:
 ;;;               the smallest of A4..A0 (landscape or portrait) that holds the drawing and the title block,
 ;;;               otherwise a roll sheet ("gramoshka") of free size, up to 900 x 5000 mm.
-;;;   SHEETADD    add another drawing (own scale) to an existing sheet; the sheet grows to hold all drawings.
+;;;               With one drawing the viewport fills the frame up to the title block; the paper is still chosen by
+;;;               the picked part, which stays in the middle. The layout is named by paper and scale ("A3 1-250").
+;;;   SHEETADD    add another drawing (own scale) to an existing sheet:
+;;;               Inside - click where it goes (flush with the frame / title block when close); the paper stays and
+;;;                        the other drawings are cut around it, with a thin frame around the new one (an inset);
+;;;               Beside - left / right / above / below / click; the sheet grows to hold all drawings.
 ;;;   SHEETSCALE  change the scale of a drawing on the current sheet; the sheet size is fitted again.
-;;;   SHEETFIT    fit the current sheet again (after moving viewports by hand): size, frame, title block, centering.
+;;;   SHEETFIT    fit the current sheet again: size, frame, title block, centering, inset cuts. Viewports stretched
+;;;               by hand keep their size; edges within 5 mm of the frame or the title block go onto it.
+;;;   SHEETFILL   grow every drawing to the frame, the title block or the next drawing (scale and middle stay).
 ;;;   SHEETSIZE   force a sheet size on the current sheet (A4..A0, landscape/portrait, custom W x H) or back to Auto.
-;;;   SHEETBLOCK  choose which block is the title block of each type, and save it to the OriTools library.
+;;;   SHEETBLOCK  choose which block is the title block of each type, and save it to the title block library.
 ;;;
 ;;; While picking a frame (SHEET -> Frame): the frame follows the cursor. Type a scale and Enter (e.g. 500),
 ;;; + / - next / previous common scale, S next paper size, O landscape/portrait, R align to a line, click to place.
@@ -318,11 +325,155 @@
 
 ;; ---------- fit the current sheet ----------
 
-;; sheet info from its frame: (type forced)
-(defun sh:info (lay / f r)
+;; sheet info from its frame: (type forced current-paper)
+(defun sh:info (lay / f r bb)
   (if (setq f (car (sh:items lay '("frame"))))
-    (progn (setq r (sh:roles f)) (list (cadr r) (caddr r)))
-    (list "None" "")))
+    (progn (setq r (sh:roles f) bb (sh:bbox (list f)))
+           (list (cadr r) (caddr r)
+                 (if (and (cadddr r) (/= (cadddr r) ""))
+                   (cadddr r)
+                   ;; sheets made before the paper was kept: the frame is centered on the paper
+                   (sh:papercode (+ (car (car bb)) (car (cadr bb))) (+ (cadr (car bb)) (cadr (cadr bb)))))))
+    (list "None" "" "")))
+
+;; paper as a SHEETSIZE string: "A3L", "A3P" or "W,H"
+(defun sh:papercode (pw ph / r)
+  (foreach s *sh-papers*
+    (cond (r)
+          ((and (equal pw (cadr s) 1.0) (equal ph (caddr s) 1.0)) (setq r (strcat (car s) "L")))
+          ((and (equal pw (caddr s) 1.0) (equal ph (cadr s) 1.0)) (setq r (strcat (car s) "P")))))
+  (if r r (strcat (rtos pw 2 0) "," (rtos ph 2 0))))
+
+(defun sh:inset-p (e) (member "inset" (sh:roles e)))
+(defun sh:poly-p (e) (member "poly" (sh:roles e)))
+
+;; ---------- insets: a small drawing inside the sheet, the other drawings cut around it ----------
+
+(setq *sh-inset-gap* 2.0)   ; white space between an inset and the drawing around it (mm)
+(setq *sh-snap* 6.0)        ; an inset this close to the frame or the title block sits flush against it (mm)
+
+;; viewport rectangle on the paper: (x0 y0 x1 y1)
+(defun sh:vprect (e / ed c w h)
+  (setq ed (entget e) c (cdr (assoc 10 ed)) w (* 0.5 (cdr (assoc 40 ed))) h (* 0.5 (cdr (assoc 41 ed))))
+  (list (- (car c) w) (- (cadr c) h) (+ (car c) w) (+ (cadr c) h)))
+
+(defun sh:grow (r d) (list (- (nth 0 r) d) (- (nth 1 r) d) (+ (nth 2 r) d) (+ (nth 3 r) d)))
+
+(defun sh:overlap (a b)
+  (and (< (nth 0 a) (nth 2 b)) (< (nth 0 b) (nth 2 a)) (< (nth 1 a) (nth 3 b)) (< (nth 1 b) (nth 3 a))))
+
+;; the part to cut out of rectangle R for inset box K: K carried past every side of R it touches,
+;; or past the nearest side when it touches none (a viewport boundary can not have a hole)
+(defun sh:cutbox (K R / tol x0 y0 x1 y1 d)
+  (setq tol 0.5 x0 (nth 0 K) y0 (nth 1 K) x1 (nth 2 K) y1 (nth 3 K))
+  (if (<= x0 (+ (nth 0 R) tol)) (setq x0 (- (nth 0 R) 1.0)))
+  (if (<= y0 (+ (nth 1 R) tol)) (setq y0 (- (nth 1 R) 1.0)))
+  (if (>= x1 (- (nth 2 R) tol)) (setq x1 (+ (nth 2 R) 1.0)))
+  (if (>= y1 (- (nth 3 R) tol)) (setq y1 (+ (nth 3 R) 1.0)))
+  (if (equal (list x0 y0 x1 y1) K 1e-9)
+    (progn
+      (setq d (list (- x0 (nth 0 R)) (- y0 (nth 1 R)) (- (nth 2 R) x1) (- (nth 3 R) y1)))
+      (cond ((= (apply 'min d) (nth 0 d)) (setq x0 (- (nth 0 R) 1.0)))
+            ((= (apply 'min d) (nth 1 d)) (setq y0 (- (nth 1 R) 1.0)))
+            ((= (apply 'min d) (nth 2 d)) (setq x1 (+ (nth 2 R) 1.0)))
+            (T (setq y1 (+ (nth 3 R) 1.0))))))
+  (list x0 y0 x1 y1))
+
+(defun sh:objarr (l)
+  (vlax-make-variant (vlax-safearray-fill (vlax-make-safearray vlax-vbObject (cons 0 (1- (length l)))) l)))
+
+(defun sh:region (r / pl reg)
+  (setq pl (vlax-ename->vla-object (sh:rect (nth 0 r) (nth 1 r) (nth 2 r) (nth 3 r) (getvar "CTAB") "0")))
+  (setq reg (car (sh:list (vla-AddRegion (vla-get-PaperSpace (sh:doc)) (sh:objarr (list pl))))))
+  (vla-Delete pl)
+  reg)
+
+;; rectangle R minus the boxes Ks -> outline points, through regions
+(defun sh:subtract (R Ks / ra rk objs segs)
+  (setq ra (sh:region R))
+  (foreach K Ks (setq rk (sh:region K)) (vla-Boolean ra acSubtraction rk))
+  (setq objs (sh:list (vla-Explode ra)))
+  (vla-Delete ra)
+  (foreach o objs
+    (if (= (vla-get-ObjectName o) "AcDbLine")
+      (setq segs (cons (list (sh:list (vla-get-StartPoint o)) (sh:list (vla-get-EndPoint o))) segs)))
+    (vla-Delete o))
+  (sh:chain segs))
+
+;; line segments -> one closed outline, without points in the middle of straight edges
+(defun sh:chain (segs / pts s tip go r n a b c)
+  (setq s (car segs) segs (cdr segs) pts (list (car s)) tip (cadr s) go T)
+  (while go
+    (setq pts (cons tip pts) go nil)
+    (foreach q segs
+      (if (not go)
+        (cond ((equal (car q) tip 1e-6) (setq tip (cadr q) segs (vl-remove q segs) go T))
+              ((equal (cadr q) tip 1e-6) (setq tip (car q) segs (vl-remove q segs) go T))))))
+  (setq pts (reverse pts))
+  (if (equal (car pts) (last pts) 1e-6) (setq pts (reverse (cdr (reverse pts)))))
+  (setq n (length pts))
+  (foreach i (sh:range n)
+    (setq a (nth (rem (+ i n -1) n) pts) b (nth i pts) c (nth (rem (1+ i) n) pts))
+    (if (not (equal 0.0 (- (* (- (car b) (car a)) (- (cadr c) (cadr a))) (* (- (cadr b) (cadr a)) (- (car c) (car a)))) 1e-6))
+      (setq r (cons b r))))
+  (reverse r))
+
+(defun sh:range (n / r) (repeat n (setq r (cons (length r) r))) (reverse r))
+
+;; clip viewport e with the outline pts (paper points); keeps its xdata. Returns the viewport.
+(defun sh:setclip (e pts lay / xd old pl)
+  (setq xd (sh:xd e) old (sh:clip e))
+  (entmake (append (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity") '(67 . 1) (cons 410 lay)
+                         (cons 8 (sh:layer *sh-vp-layer*)) '(100 . "AcDbPolyline") (cons 90 (length pts)) '(70 . 1))
+                   (mapcar '(lambda (q) (list 10 (car q) (cadr q))) pts)))
+  (setq pl (entlast))
+  (vla-put-DisplayLocked (vlax-ename->vla-object e) :vlax-false)
+  (command "_.VPCLIP" e pl)
+  (if (not (entget e)) (setq e (car (vl-remove-if-not '(lambda (v) (= (cdr (assoc 0 (entget v))) "VIEWPORT"))
+                                                       (list (entlast))))))
+  (if (and old (entget old) (not (equal old (sh:clip e)))) (entdel old))
+  (sh:tag e xd)
+  (vla-put-DisplayLocked (vlax-ename->vla-object e) :vlax-true)
+  e)
+
+;; remove a clip made by an inset (not a polyline the drawing was picked with)
+(defun sh:unclip (e / xd old)
+  (if (and (sh:clip e) (not (sh:poly-p e)))
+    (progn
+      (setq xd (sh:xd e) old (sh:clip e))
+      (vla-put-DisplayLocked (vlax-ename->vla-object e) :vlax-false)
+      (command "_.VPCLIP" e "_D")
+      (if (and old (entget old)) (entdel old))
+      (sh:tag e xd)))
+  e)
+
+;; center u of a box of half sizes hw hh, moved flush onto the sides of fr it is within tol of
+(defun sh:snapc (u hw hh fr tol)
+  (cond ((< (abs (- (car u) hw (nth 0 fr))) tol) (setq u (list (+ (nth 0 fr) hw) (cadr u))))
+        ((< (abs (- (+ (car u) hw) (nth 2 fr))) tol) (setq u (list (- (nth 2 fr) hw) (cadr u)))))
+  (cond ((< (abs (- (cadr u) hh (nth 1 fr))) tol) (setq u (list (car u) (+ (nth 1 fr) hh))))
+        ((< (abs (- (+ (cadr u) hh) (nth 3 fr))) tol) (setq u (list (car u) (- (nth 3 fr) hh)))))
+  u)
+
+;; moving rectangle w x h on the sheet -> its center, or nil on Enter. snap: flush to the frame / title block.
+(defun sh:place (w h snap prompt / fr dv go g c v u r hw hh tol)
+  (setq fr (sh:bbox (sh:items (getvar "CTAB") '("frame"))) dv (sh:bbox (sh:items (getvar "CTAB") '("divider")))
+        hw (+ (/ w 2.0) *sh-inset-gap*) hh (+ (/ h 2.0) *sh-inset-gap*) tol *sh-snap* go T)
+  (if fr (setq fr (list (car (car fr)) (cadr (car fr)) (if dv (car (car dv)) (car (cadr fr))) (cadr (cadr fr)))))
+  (princ prompt)
+  (while go
+    (setq g (grread T 15 0) c (car g) v (cadr g))
+    (cond ((member c '(3 5))
+           (setq u (list (car v) (cadr v)))
+           (if (and snap fr) (setq u (sh:snapc u hw hh fr tol)))
+           (redraw)
+           (setq r (list (- (car u) (/ w 2.0)) (- (cadr u) (/ h 2.0)) (+ (car u) (/ w 2.0)) (+ (cadr u) (/ h 2.0))))
+           (grvecs (list 3 (list (nth 0 r) (nth 1 r)) (list (nth 2 r) (nth 1 r)) 3 (list (nth 2 r) (nth 1 r)) (list (nth 2 r) (nth 3 r))
+                         3 (list (nth 2 r) (nth 3 r)) (list (nth 0 r) (nth 3 r)) 3 (list (nth 0 r) (nth 3 r)) (list (nth 0 r) (nth 1 r))))
+           (if (= c 3) (setq go nil r u)))
+          ((and (= c 2) (member v '(13 32))) (setq go nil r nil))))
+  (redraw)
+  r)
 
 ;; the picked part of a drawing on the paper (from its xdata), around the viewport center: (min max)
 (defun sh:core (e / x k c w h)
@@ -346,11 +497,52 @@
       (vla-put-Height vp h)
       (sh:setview vp (list (nth 1 x) (nth 2 x) 0.0) (nth 5 x) (sh:k (car x))))))
 
-(defun sh:fit (typ forced / lay vps strip sbb sw shh bb gw gh paper pw ph m p colL acx acy dx dy f scs main a big x)
-  (setq lay (getvar "CTAB"))
-  (if (null typ) (setq typ (car (sh:info lay))))
-  (if (null forced) (setq forced (cadr (sh:info lay))))
-  (setq vps (sh:items lay '("vp")))
+;; model point (WCS) at the center of a viewport
+(defun sh:vpview (e / ed c t0 a)
+  (setq ed (entget e) c (cdr (assoc 12 ed)) t0 (cdr (assoc 17 ed)) a (- (cdr (assoc 51 ed))))
+  (list (+ (car t0) (- (* (cos a) (car c)) (* (sin a) (cadr c))))
+        (+ (cadr t0) (+ (* (sin a) (car c)) (* (cos a) (cadr c))))
+        0.0))
+
+;; give an unclipped viewport the paper rectangle r. pick = T: the picked part in the middle,
+;; otherwise the drawing stays where it is on the paper (only the boundary moves).
+(defun sh:setrect (e r pick / vp ed x k c0 c1 w h v a d)
+  (setq vp (vlax-ename->vla-object e) ed (entget e) x (sh:reals e) k (sh:k (car x))
+        c0 (cdr (assoc 10 ed)) c1 (list (/ (+ (nth 0 r) (nth 2 r)) 2.0) (/ (+ (nth 1 r) (nth 3 r)) 2.0) 0.0)
+        w (- (nth 2 r) (nth 0 r)) h (- (nth 3 r) (nth 1 r)))
+  (if (not (and (equal c0 c1 1e-6) (equal (cdr (assoc 40 ed)) w 1e-6) (equal (cdr (assoc 41 ed)) h 1e-6)))
+    (progn
+      (setq a (- (cdr (assoc 51 ed))) d (list (/ (- (car c1) (car c0)) k) (/ (- (cadr c1) (cadr c0)) k)) v (sh:vpview e))
+      (setq v (if pick
+                (list (nth 1 x) (nth 2 x) 0.0)
+                (list (+ (car v) (- (* (cos a) (car d)) (* (sin a) (cadr d))))
+                      (+ (cadr v) (+ (* (sin a) (car d)) (* (cos a) (cadr d)))) 0.0)))
+      (vla-put-DisplayLocked vp :vlax-false)
+      (vla-put-Center vp (vlax-3d-point c1))
+      (vla-put-Width vp w)
+      (vla-put-Height vp h)
+      (sh:setview vp v (nth 5 x) k))))
+
+;; sides of r within tol of the area go onto it
+(defun sh:snaprect (r area tol)
+  (list (if (< (abs (- (nth 0 r) (nth 0 area))) tol) (nth 0 area) (nth 0 r))
+        (if (< (abs (- (nth 1 r) (nth 1 area))) tol) (nth 1 area) (nth 1 r))
+        (if (< (abs (- (nth 2 r) (nth 2 area))) tol) (nth 2 area) (nth 2 r))
+        (if (< (abs (- (nth 3 r) (nth 3 area))) tol) (nth 3 area) (nth 3 r))))
+
+(defun sh:clamp (r area)
+  (list (max (nth 0 r) (nth 0 area)) (max (nth 1 r) (nth 1 area)) (min (nth 2 r) (nth 2 area)) (min (nth 3 r) (nth 3 area))))
+
+(defun sh:fit (typ forced / lay info vps insets mains strip sbb sw shh bb ab gw gh paper pw ph m p colL acx acy dx dy f
+                scs main a big x area R Ks)
+  (setq lay (getvar "CTAB") info (sh:info lay))
+  (if (null typ) (setq typ (car info)))
+  (if (null forced) (setq forced (cadr info)))
+  ;; cuts made for insets are made again below
+  (foreach e (sh:items lay '("vp")) (sh:unclip e))
+  (setq vps (sh:items lay '("vp"))
+        insets (vl-remove-if-not 'sh:inset-p vps)
+        mains (vl-remove-if 'sh:inset-p vps))
   (if (null vps)
     (princ "\nNo drawing on this sheet. Use SHEET or SHEETADD.")
     (progn
@@ -360,34 +552,62 @@
               sw (- (car (cadr sbb)) (car (car sbb)))
               shh (- (cadr (cadr sbb)) (cadr (car sbb))))
         (setq sw 0.0 shh 0.0))
-      ;; several drawings (or a polyline clip): each viewport shows just the picked part
-      (foreach e vps
-        (if (not (sh:clip e))
-          (progn (setq x (sh:reals e)) (sh:sizevp e (* (sh:k (car x)) (nth 3 x)) (* (sh:k (car x)) (nth 4 x))))))
-      ;; the paper is chosen by the picked parts, not by the viewports (they may have grown to the frame)
+      ;; the paper is chosen by the picked parts, not by the viewports (they may have grown to the frame);
+      ;; a sheet with insets keeps its paper
       (setq bb (sh:corebox vps)
             gw (- (car (cadr bb)) (car (car bb)))
             gh (- (cadr (cadr bb)) (cadr (car bb))))
-      (setq paper (cond ((sh:forced forced)) ((sh:choose gw gh sw shh))))
+      (setq paper (cond ((sh:forced forced))
+                        ((if insets (sh:forced (caddr info))))
+                        ((sh:choose gw gh sw shh))))
       (setq pw (cadr paper) ph (caddr paper))
       (setq m (sh:margin (car paper) pw ph) p (sh:pad (car paper) pw ph))
       ;; frame and divider
-      (foreach e (sh:items lay '("frame" "divider")) (entdel e))
+      (foreach e (sh:items lay '("frame" "divider" "insetframe")) (entdel e))
       (setq f (sh:rect m m (- pw m) (- ph m) lay (sh:layer *sh-frame-layer*)))
-      (sh:tag f (list (cons 1000 "frame") (cons 1000 typ) (cons 1000 (if forced forced ""))))
-      (setq colL (- pw m (sh:col sw)))
+      (sh:tag f (list (cons 1000 "frame") (cons 1000 typ) (cons 1000 (if forced forced ""))
+                      (cons 1000 (sh:papercode pw ph))))
+      (setq colL (- pw m (sh:col sw)) area (list m m colL (- ph m)))
       (if strip
         (progn
           (sh:tag (sh:line colL m colL (- ph m) lay (sh:layer *sh-frame-layer*)) (list (cons 1000 "divider")))
           (sh:move strip (- (- pw m *sh-inset*) (car (cadr sbb))) (- (- ph m *sh-inset*) (cadr (cadr sbb))))))
-      ;; center the drawings in the free area
-      (setq acx (/ (+ m p (- colL p)) 2.0) acy (/ ph 2.0))
-      (setq dx (- acx (/ (+ (car (car bb)) (car (cadr bb))) 2.0))
-            dy (- acy (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))
-      (foreach e vps (sh:movevp e dx dy))
-      ;; one drawing: the viewport fills the frame up to the title block, the picked part stays in the middle
-      (if (and (null (cdr vps)) (not (sh:clip (car vps))))
-        (sh:sizevp (car vps) (- colL m) (- ph m m)))
+      (setq acx (/ (+ m colL) 2.0) acy (/ ph 2.0))
+      (cond
+        ;; one drawing (with or without insets): it fills the frame up to the title block, the picked part in the middle
+        ((and mains (null (cdr mains)) (not (sh:poly-p (car mains))))
+         (if (null insets)
+           (progn (setq bb (sh:corebox mains))
+                  (sh:movevp (car mains) (- acx (/ (+ (car (car bb)) (car (cadr bb))) 2.0))
+                                         (- acy (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))))
+         (sh:setrect (car mains) area T))
+        ;; insets placed by hand: nothing moves
+        (insets nil)
+        ;; several drawings: keep their sizes (also when stretched by hand) and center them; edges close to the
+        ;; frame or the title block go onto it
+        (T
+         (setq ab (sh:bbox vps))
+         (if (and (<= (- (car (cadr ab)) (car (car ab))) (+ (- colL m) 0.5))
+                  (<= (- (cadr (cadr ab)) (cadr (car ab))) (+ (- ph m m) 0.5)))
+           (setq bb ab))
+         (setq dx (- acx (/ (+ (car (car bb)) (car (cadr bb))) 2.0))
+               dy (- acy (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))
+         (foreach e vps (sh:movevp e dx dy))
+         (foreach e (sh:items lay '("vp"))
+           (if (not (sh:clip e)) (sh:setrect e (sh:snaprect (sh:vprect e) area 5.0) nil)))))
+      ;; insets: a thin frame around each, the other drawings cut around them
+      (foreach e insets
+        (setq x (sh:clamp (sh:grow (sh:vprect e) *sh-inset-gap*) area))
+        (sh:tag (sh:rect (nth 0 x) (nth 1 x) (nth 2 x) (nth 3 x) lay (sh:layer *sh-frame-layer*))
+                (list (cons 1000 "insetframe"))))
+      (if insets
+        (foreach e (vl-remove-if 'sh:poly-p (vl-remove-if 'sh:inset-p (sh:items lay '("vp"))))
+          (setq R (sh:vprect e) Ks nil)
+          (foreach i insets
+            (setq x (sh:grow (sh:vprect i) *sh-inset-gap*))
+            (if (sh:overlap x R) (setq Ks (cons (sh:cutbox x R) Ks))))
+          (if Ks (sh:setclip e (sh:subtract R Ks) lay))))
+      (setq vps (sh:items lay '("vp")))
       (if (not (sh:fits (car paper) pw ph gw gh sw shh))
         (princ (strcat "\nThe drawings do not fit on " (sh:papername paper) ". Use SHEETSIZE Auto or a smaller scale.")))
       (if (and (= (car paper) "ROLL") (or (> (min pw ph) *sh-roll-max-short*) (> (max pw ph) *sh-roll-max-long*)))
@@ -470,9 +690,15 @@
       (setq pl (entlast))
       (command "_.VPCLIP" e pl)
       (if (not (entget e)) (setq e (entlast)))))
-  (sh:tag e (list (cons 1000 "vp") (cons 1040 (float scale)) (cons 1040 (car cW)) (cons 1040 (cadr cW))
-                  (cons 1040 (cadr sel)) (cons 1040 (caddr sel)) (cons 1040 ang)))
+  (sh:tag e (append (list (cons 1000 "vp")) (if (nth 4 sel) (list (cons 1000 "poly")))
+                    (list (cons 1040 (float scale)) (cons 1040 (car cW)) (cons 1040 (cadr cW))
+                          (cons 1040 (cadr sel)) (cons 1040 (caddr sel)) (cons 1040 ang))))
   e)
+
+;; add a role (e.g. "inset") to a tagged entity, keeping the rest of its xdata
+(defun sh:addrole (e role / xd)
+  (setq xd (sh:xd e))
+  (sh:tag e (cons (car xd) (cons (cons 1000 role) (cdr xd)))))
 
 ;; ---------- picking in model space ----------
 
@@ -666,7 +892,7 @@
 (defun sh:subst-name (s old new / i)
   (if (setq i (vl-string-search old s)) (strcat (substr s 1 i) new (substr s (+ i 1 (strlen old)))) s))
 
-(defun c:SHEETADD (/ lays name scale pick bb wP pc vps)
+(defun c:SHEETADD (/ lays name scale pick bb wP hP pc vps mode side e cx cy)
   (sh:begin)
   (setq lays (layoutlist))
   (if (and (/= (getvar "CTAB") "Model") (member (getvar "CTAB") lays)) (setq *sh-last-layout* (getvar "CTAB")))
@@ -682,14 +908,64 @@
         (progn
           (setvar "CTAB" name)
           (command "_.PSPACE")
-          ;; new drawing to the left of the drawings already there
-          (setq vps (sh:items name '("vp")) bb (sh:corebox vps) wP (* (sh:k scale) (cadr (car pick))))
-          (setq pc (if bb
-                     (list (- (car (car bb)) *sh-gap* (/ wP 2.0)) (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0))
-                     '(0.0 0.0)))
-          (sh:addvp (car pick) (cadr pick) pc name)
-          (sh:fit nil nil)
+          (setq vps (sh:items name '("vp")) bb (sh:bbox vps)
+                wP (* (sh:k scale) (cadr (car pick))) hP (* (sh:k scale) (caddr (car pick))))
+          (initget "Inside Beside")
+          (setq mode (getkword "\nPlace [Inside the sheet, same paper/Beside, the sheet grows] <Inside>: "))
+          (if (/= mode "Beside")
+            ;; inside: placed by hand, the paper stays, the other drawings are cut around it
+            (if (setq pc (sh:place wP hP T "\nClick where the new drawing goes (it sits flush near the frame), Enter = beside: "))
+              (progn (setq e (sh:addvp (car pick) (cadr pick) pc name))
+                     (sh:addrole e "inset"))
+              (setq mode "Beside")))
+          (if (= mode "Beside")
+            (progn
+              (initget "Left Right Above Below Click")
+              (setq side (getkword "\nSide [Left/Right/Above/Below/Click] <Left>: "))
+              (if bb (setq cx (/ (+ (car (car bb)) (car (cadr bb))) 2.0) cy (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))
+              (setq pc (cond ((null bb) '(0.0 0.0))
+                             ((= side "Right") (list (+ (car (cadr bb)) *sh-gap* (/ wP 2.0)) cy))
+                             ((= side "Above") (list cx (+ (cadr (cadr bb)) *sh-gap* (/ hP 2.0))))
+                             ((= side "Below") (list cx (- (cadr (car bb)) *sh-gap* (/ hP 2.0))))
+                             ((= side "Click") (sh:place wP hP nil "\nClick where the new drawing goes: "))
+                             (T (list (- (car (car bb)) *sh-gap* (/ wP 2.0)) cy))))
+              (if pc (sh:addvp (car pick) (cadr pick) pc name))))
+          (if pc (sh:fit nil nil))
           (setq *sh-last-layout* name)))))
+  (sh:end))
+
+;; every drawing on the sheet grows to the frame, the title block or the next drawing; the scale and what is
+;; in the middle stay
+(defun c:SHEETFILL (/ lay area vps r rs o gap e others)
+  (sh:begin)
+  (if (= (getvar "TILEMODE") 1)
+    (princ "\nGo to the sheet layout first.")
+    (progn
+      (command "_.PSPACE")
+      (setq lay (getvar "CTAB") gap *sh-inset-gap*)
+      (foreach e (sh:items lay '("vp")) (sh:unclip e))
+      (setq area (sh:bbox (sh:items lay '("frame"))) vps (sh:items lay '("vp")))
+      (if (setq o (sh:bbox (sh:items lay '("divider")))) (setq area (list (car area) (list (car (car o)) (cadr (cadr area))))))
+      (setq area (list (car (car area)) (cadr (car area)) (car (cadr area)) (cadr (cadr area))))
+      (foreach e (vl-remove-if '(lambda (v) (or (sh:inset-p v) (sh:poly-p v))) vps)
+        (setq r (sh:vprect e)
+              others (mapcar '(lambda (v) (sh:grow (sh:vprect v) gap)) (vl-remove e vps)))
+        ;; right, left, top, bottom: up to the area or the nearest drawing on that side
+        (setq rs (nth 2 area))
+        (foreach o others (if (and (< (nth 1 o) (nth 3 r)) (> (nth 3 o) (nth 1 r)) (>= (nth 0 o) (- (nth 2 r) 1e-6)))
+                            (setq rs (min rs (nth 0 o)))))
+        (setq r (list (nth 0 r) (nth 1 r) rs (nth 3 r)) rs (nth 0 area))
+        (foreach o others (if (and (< (nth 1 o) (nth 3 r)) (> (nth 3 o) (nth 1 r)) (<= (nth 2 o) (+ (nth 0 r) 1e-6)))
+                            (setq rs (max rs (nth 2 o)))))
+        (setq r (list rs (nth 1 r) (nth 2 r) (nth 3 r)) rs (nth 3 area))
+        (foreach o others (if (and (< (nth 0 o) (nth 2 r)) (> (nth 2 o) (nth 0 r)) (>= (nth 1 o) (- (nth 3 r) 1e-6)))
+                            (setq rs (min rs (nth 1 o)))))
+        (setq r (list (nth 0 r) (nth 1 r) (nth 2 r) rs) rs (nth 1 area))
+        (foreach o others (if (and (< (nth 0 o) (nth 2 r)) (> (nth 2 o) (nth 0 r)) (<= (nth 3 o) (+ (nth 1 r) 1e-6)))
+                            (setq rs (max rs (nth 3 o)))))
+        (setq r (list (nth 0 r) rs (nth 2 r) (nth 3 r)))
+        (sh:setrect e r nil))
+      (sh:fit nil nil)))
   (sh:end))
 
 (defun sh:pickvp (/ es e r bb)
@@ -726,8 +1002,9 @@
             (vla-ScaleEntity (vlax-ename->vla-object cl) (vlax-3d-point (sh:vpcenter e)) (/ k2 k1))
             (progn (vla-put-Width vp (* k2 (nth 3 x))) (vla-put-Height vp (* k2 (nth 4 x)))))
           (sh:setview vp cW (nth 5 x) k2)
-          (sh:tag e (list (cons 1000 "vp") (cons 1040 (float new)) (cons 1040 (nth 1 x)) (cons 1040 (nth 2 x))
-                          (cons 1040 (nth 3 x)) (cons 1040 (nth 4 x)) (cons 1040 (nth 5 x))))
+          (sh:tag e (append (mapcar '(lambda (r) (cons 1000 r)) (sh:roles e))
+                            (list (cons 1040 (float new)) (cons 1040 (nth 1 x)) (cons 1040 (nth 2 x))
+                                  (cons 1040 (nth 3 x)) (cons 1040 (nth 4 x)) (cons 1040 (nth 5 x)))))
           (sh:fit nil nil)))))
   (sh:end))
 
@@ -780,5 +1057,5 @@
     (princ "\nNo such block."))
   (sh:end))
 
-(princ "\nsheets.lsp loaded: SHEET, SHEETADD, SHEETSCALE, SHEETFIT, SHEETSIZE, SHEETBLOCK")
+(princ "\nsheets.lsp loaded: SHEET, SHEETADD, SHEETSCALE, SHEETFIT, SHEETFILL, SHEETSIZE, SHEETBLOCK")
 (princ)
