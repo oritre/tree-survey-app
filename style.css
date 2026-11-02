@@ -472,3 +472,4 @@ textarea.doc-text.b { font-weight: 700; }
 .plan-miss.on .pm-next { background: #bf360c; }
 .plan-miss.done .pm-main { background: #2e7d32; color: #fff; }
 @media (max-width: 600px) { .plan-miss { max-width: calc(100% - 24px); } .plan-miss button { font-size: 14px; padding: 8px 11px; } }
+.plan-miss .pm-bound { background: #1976d2; color: #fff; }

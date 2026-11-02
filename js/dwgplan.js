@@ -22,6 +22,7 @@
 
   // בלוק של עץ אצל המודד: קוד מפ"י 1502 (M1502), או שם עם "tree"/"עץ"
   // בלוקים של עץ אצל המודד: נקודת עץ (M1502) ועץ עם צמרת (M2801), או שם עם "tree"/"עץ"
+  const BOUND_LAYER_RE = /^(m?1602|.*גבול.*|.*קו.?כחול.*|.*kav.?kachol.*|.*blue.?line.*|.*bound.*|.*plot.*)$/i;
   const TREE_BLOCK_RE = /^(m?1502|m?2801|.*tree.*|.*עץ.*)$/i;
   const LABEL_TAGS = ['NAME', 'NUM', 'NO', 'NUMBER', 'ID', 'MARK', 'PNT', 'POINT'];
 
@@ -320,7 +321,7 @@
       return { layer: layName, col, lt, lts: e.lineTypeScale > 0 ? e.lineTypeScale : 1 };
     }
 
-    const paths = [], texts = [], fills = [], inserts = {};
+    const paths = [], texts = [], fills = [], inserts = {}, bounds = [];
     let budget = 400000;
     const add = (pts, R, closed) => {
       if (pts.length > 1) paths.push({ pts, closed: !!closed, s: styleOf(R.col, dashOf(R.lt, LTS * R.lts)) });
@@ -364,7 +365,10 @@
                 const q = v[i + 1] || (closed ? v[0] : null);
                 if (q && v[i].bulge) for (const b of bulgePts(p, [q.x, q.y], v[i].bulge)) pts.push(ap(M, b[0], b[1]));
               }
-              add(closed && pts.length ? pts.concat([pts[0]]) : pts, R); break;
+              add(closed && pts.length ? pts.concat([pts[0]]) : pts, R);
+              // קו סגור בשכבת גבול (גבול חלקה 1602 בקודי המדידה, קו כחול, גבול): מוצע כקו הכחול
+              if (closed && pts.length >= 3 && BOUND_LAYER_RE.test(R.layer || '')) bounds.push({ layer: R.layer, pts });
+              break;
             }
             case 'CIRCLE': add(arcPts(e.center.x, e.center.y, e.radius, 0, Math.PI * 2).map(p => ap(M, p[0], p[1])), R); break;
             case 'ARC': add(arcPts(e.center.x, e.center.y, e.radius, e.startAngle, e.endAngle).map(p => ap(M, p[0], p[1])), R); break;
@@ -459,7 +463,8 @@
     const ins = {};
     for (const [n, list] of Object.entries(inserts)) ins[n] = list.filter(r => !far(r[1], r[2])).map(r => [r[0], r2(r[1] - ox), r2(r[2] - oy), r[3]]);
     const itm = ox > 100000 && ox < 300000 && oy > 350000 && oy < 820000;
-    return { v: 2, crs: itm ? 'itm' : 'local', ox, oy, view: view.map((v, i) => r2(v - (i % 2 ? oy : ox))), paths: P, ps: PS, st: styles, dash: dashes, texts: TX, fills: FL, inserts: ins, treeBlock };
+    const BD = bounds.map(b => ({ layer: b.layer, pts: b.pts.map(q => [r2(q[0] - ox), r2(q[1] - oy)]) }));
+    return { v: 2, bounds: BD, crs: itm ? 'itm' : 'local', ox, oy, view: view.map((v, i) => r2(v - (i % 2 ? oy : ox))), paths: P, ps: PS, st: styles, dash: dashes, texts: TX, fills: FL, inserts: ins, treeBlock };
   }
 
   // עצי המודד: [{h, x, y, name}] בקואורדינטות המקוריות
