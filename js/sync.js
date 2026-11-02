@@ -507,7 +507,9 @@
     const n = s.trees.filter(Core.hasContent).length;
     return { id: s.id, project: s.project || '', siteName: s.siteName || '', street: s.street || '', city: s.city || '', site: s.site || '',
       code: s.code || '', manager: s.manager || '', date: s.date || '', trees: n, photos: s.trees.reduce((a, t) => a + (t.photos || []).length, 0),
-      folderId: s.odFolderId, dataId: s.odDataId || null, finished: !!s.finished, upd: dayKey(s.updated || s.created), deleted: s.deleted ? true : undefined };
+      folderId: s.odFolderId, dataId: s.odDataId || null, finished: !!s.finished, upd: dayKey(s.updated || s.created), deleted: s.deleted ? true : undefined,
+      // לתוכנת מעקב ביקורות (בפאי): סקר חדש פותח שם כרטיס עבודה מתוכננת, וסקר שנמחק מוחק אותו
+      type: Construction.typeOf(s), created: s.created || undefined, jobId: s.jobId || undefined };
   }
 
   const BACKUP_ROOT = 'גיבוי אפליקציית סקרי עצים';
