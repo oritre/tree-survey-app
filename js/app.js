@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.39.2';
+  const APP_VERSION = '1.40.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -109,6 +109,81 @@
     thumbUrls.set(photoId, u);
     return u;
   }
+
+  // X שמוחק את מה שכתוב בשדה טקסט: כפתור אחד שצף בקצה השדה שבפוקוס, רק כשיש בו טקסט
+  (function clearX() {
+    const TYPES = new Set(['', 'text', 'search', 'email', 'tel', 'url']);
+    const btn = h('button', { type: 'button', class: 'clear-x hidden', 'aria-label': 'מחק את מה שכתוב', tabindex: '-1' });
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    let el = null, hideT = 0;
+    const ok = t => t && t.tagName === 'INPUT' && TYPES.has((t.getAttribute('type') || '').toLowerCase()) && !t.readOnly && !t.disabled && !t.hasAttribute('data-noclear');
+    const off = () => { btn.classList.add('hidden'); if (el) el.classList.remove('has-x'); };
+    const place = () => {
+      if (!el || !el.isConnected || !el.value || document.activeElement !== el) return off();
+      const r = el.getBoundingClientRect();
+      if (!r.width || r.bottom < 0 || r.top > innerHeight) return off();
+      const size = Math.max(28, Math.min(38, r.height - 10));
+      const rtl = getComputedStyle(el).direction === 'rtl';
+      Object.assign(btn.style, { width: size + 'px', height: size + 'px', top: (r.top + (r.height - size) / 2) + 'px', left: (rtl ? r.left + 6 : r.right - size - 6) + 'px' });
+      el.classList.add('has-x');
+      btn.classList.remove('hidden');
+    };
+    document.addEventListener('focusin', e => { clearTimeout(hideT); off(); el = ok(e.target) ? e.target : null; place(); });
+    // בטאבלט הלחיצה על ה-X יכולה להוציא את הפוקוס לרגע, אז מסתירים רק אחרי השהיה קצרה
+    document.addEventListener('focusout', () => { clearTimeout(hideT); hideT = setTimeout(place, 250); });
+    document.addEventListener('input', e => { if (e.target === el) place(); }, true);
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    btn.addEventListener('pointerdown', e => e.preventDefault());
+    btn.addEventListener('mousedown', e => e.preventDefault());
+    btn.addEventListener('click', () => {
+      if (!el || !el.isConnected) return off();
+      el.value = '';
+      el.focus();
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      place();
+    });
+    document.body.append(btn);
+  })();
+
+  // רשימה שנפתחת מתחת לשדה עם ערכים שכבר נכתבו בעבר (עיר, רחוב, פרויקט), מסוננת לפי מה שמקלידים
+  function suggestCombo(input, values) {
+    input.removeAttribute('list');
+    input.setAttribute('autocomplete', 'off');
+    const menu = h('div', { class: 'combo-menu hidden', role: 'listbox' });
+    const norm = v => (v || '').replace(/[\u00a0\s]+/g, ' ').trim().toLowerCase();
+    const hide = () => menu.classList.add('hidden');
+    const show = () => {
+      if (document.activeElement !== input) return;
+      const q = norm(input.value);
+      const all = values();
+      const list = (q ? all.filter(v => norm(v) !== q && norm(v).includes(q))
+        .sort((a, b) => norm(b).startsWith(q) - norm(a).startsWith(q)) : all).slice(0, 8);
+      if (!list.length) return hide();
+      menu.replaceChildren(...list.map(v => h('button', { type: 'button', class: 'combo-opt', role: 'option',
+        onpointerdown: e => e.preventDefault(), onmousedown: e => e.preventDefault(),
+        onclick: () => { input.value = v; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); hide(); } }, v)));
+      menu.classList.remove('hidden');
+    };
+    input.addEventListener('input', show);
+    input.addEventListener('focus', show);
+    input.addEventListener('blur', () => setTimeout(hide, 200));
+    input.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+    return h('div', { class: 'combo' }, input, menu);
+  }
+  // ערכים מכל הסקרים, הנפוץ ביותר ראשון (ובשוויון, האחרון שעודכן)
+  const usedValues = (all, k) => {
+    const m = new Map();
+    for (const x of all) {
+      const v = (x[k] || '').trim();
+      if (!v) continue;
+      const e = m.get(v) || { n: 0, t: 0 };
+      e.n++; e.t = Math.max(e.t, x.updated || x.created || 0);
+      m.set(v, e);
+    }
+    return [...m].sort((a, b) => b[1].n - a[1].n || b[1].t - a[1].t).map(([v]) => v);
+  };
 
   // ---------- ניווט ----------
   window.addEventListener('hashchange', route);
@@ -1251,7 +1326,7 @@
     const type = await chooseType();
     if (!type) return;
     const project = preset && preset.project ? preset.project : (projectFilter != null ? projectFilter : await DB.getKV('lastProject', ''));
-    const s = { id: uid(), type, project, site: '', siteName: '', street: '', city: await DB.getKV('lastCity', ''), code: '', manager: '', date: today(), trees: [], created: Date.now() };
+    const s = { id: uid(), type, project, site: '', siteName: '', street: '', city: '', code: '', manager: '', date: today(), trees: [], created: Date.now() };
     if (preset) {
       for (const k of ['siteName', 'street', 'city', 'manager']) if (preset[k]) s[k] = preset[k];
       if (preset.date) s.date = preset.date;
@@ -1316,29 +1391,22 @@
         if (key === 'siteName' || key === 'street' || key === 'city') {
           cur.site = composeSite(cur);
           $('.bar h1').textContent = cur.site || 'סקר חדש';
-          if (key === 'city') DB.setKV('lastCity', cur.city.trim());
         }
         if (key === 'project') DB.setKV('lastProject', cur.project.trim());
       },
     }, attrs));
-    const projList = h('datalist', { id: 'projectList' });
-    const cityList = h('datalist', { id: 'cityList' });
-    const streetList = h('datalist', { id: 'streetList' });
-    const opts = (all, k) => [...new Set(all.map(x => (x[k] || '').trim()).filter(Boolean))].map(v => h('option', { value: v }));
-    DB.allSurveys().then(all => {
-      projList.replaceChildren(...opts(all, 'project'));
-      cityList.replaceChildren(...opts(all, 'city'));
-      streetList.replaceChildren(...opts(all, 'street'));
-    });
+    // הצעות מסקרים קודמים (בלי הסקר הנוכחי, כדי שמה שמקלידים עכשיו לא יופיע כהצעה)
+    const used = { project: [], city: [], street: [] };
+    DB.allSurveys().then(all => { all = all.filter(x => x.id !== cur.id); for (const k in used) used[k] = usedValues(all, k); });
+    const sugg = (key, attrs) => suggestCombo(inp(key, attrs), () => used[key]);
     body.append(h('div', { class: 'card stack', style: 'max-width:720px;margin:0 auto' },
-      projList, cityList, streetList,
       field('סוג הסקר', h('select', { class: 'in', onchange: e => { cur.type = e.target.value; cur.site = composeSite(cur); saveSoon(); renderSurvey(); } },
         Object.entries(Construction.TYPES).map(([k, v]) => h('option', { value: k, selected: Construction.typeOf(cur) === k ? '' : null }, v)))),
-      field('פרויקט (למשל: ירושלים)', inp('project', { list: 'projectList', placeholder: 'לניהול וסינון הסקרים, לא מופיע בדוח' })),
+      field('פרויקט (למשל: ירושלים)', sugg('project', { placeholder: 'לניהול וסינון הסקרים, לא מופיע בדוח' })),
       build ? null : field('שם המוסד / האתר', inp('siteName', { placeholder: 'למשל: גן חצב' })),
       h('div', { class: 'row', style: 'align-items:stretch' },
-        h('div', { style: 'flex:2;min-width:200px' }, field('רחוב ומספר', inp('street', { list: 'streetList', placeholder: 'למשל: הנרקיס 5' }))),
-        h('div', { style: 'flex:1;min-width:160px' }, field('עיר', inp('city', { list: 'cityList', placeholder: 'למשל: ירושלים' })))),
+        h('div', { style: 'flex:2;min-width:200px' }, field('רחוב ומספר', sugg('street', { placeholder: 'למשל: הנרקיס 5' }))),
+        h('div', { style: 'flex:1;min-width:160px' }, field('עיר', sugg('city', { placeholder: 'למשל: ירושלים' })))),
       h('div', { class: 'muted small' }, build ? 'בכותרת האקסל (B7): רחוב ועיר.' : 'בכותרת הדוח: שם המוסד בשורה הראשונה, ומתחתיו רחוב ועיר.'),
       h('div', { class: 'row', style: 'align-items:stretch' },
         build ? null : h('div', { style: 'flex:1;min-width:200px' }, field('סמל מוסד (אם יש)', inp('code', { inputmode: 'numeric' }))),
@@ -1675,6 +1743,7 @@
   function speciesCombo(input, t) {
     input.removeAttribute('list');
     input.setAttribute('autocomplete', 'off');
+    input.setAttribute('data-noclear', ''); // יש לו X משלו
     // Unknown ראשון, כמו ברשימה בתבנית
     const names = [...Construction.SPECIES.keys()].filter(n => n.trim());
     const menu = h('div', { class: 'combo-menu hidden', role: 'listbox' });
