@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.49.1';
+  const APP_VERSION = '1.50.0';
   const REF_SUFFIX = 'כולל לא להתייחסות';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
@@ -2448,6 +2448,14 @@
               status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים) ונשמר גם בגוגל דרייב.` + two;
             }
           }) }, 'הפק PDF'),
+          // לפי ori: דוח בלי עמודת ההערות, בלי למחוק אותן מהסקר. לא נשמר בטאבלט ולא עולה לגוגל דרייב,
+          // כדי שבשנה הבאה אפשר יהיה לעבור על העצים מול ההערות של השנה הזו
+          cur.trees.some(t => (t.notes || '').trim()) ? h('button', { class: 'btn big', title: 'PDF בלי ההערות. ההערות נשארות בסקר, והקובץ לא נשמר באפליקציה ולא בגוגל דרייב', onclick: e => busy(e.currentTarget, async () => {
+            status.textContent = 'מפיק דוח נקי ללא הערות…';
+            const pdf = await buildCleanPdf(cur, (i, n) => { status.textContent = `מפיק דוח נקי ללא הערות… ${i}/${n}`; });
+            status.textContent = `✓ דוח נקי ללא הערות מוכן (${pdf.pages} עמודים). לא נשמר באפליקציה, ההערות נשארו בסקר.`;
+            viewPdf(cur, pdf);
+          }) }, 'הפק דוח נקי ללא הערות') : null,
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
         pdfBox(cur),
         status),
@@ -2699,6 +2707,14 @@
     // ה-PDF האחרון של כל סקר נשמר בטאבלט, כדי שאפשר יהיה לפתוח ולשלוח אותו מתוך האפליקציה
     if (!s.inclRef || !hasRef(s)) try { await DB.setKV('pdf:' + s.id, Object.assign({ at: Date.now(), hash: Sync.hashSurvey(s) }, pdf)); pdfChanged(s.id); } catch (_) {}
     return pdf;
+  }
+  // דוח נקי ללא הערות: עותק של הסקר עם עמודת הערות ריקה (עץ תקין עדיין מקבל "תקין"), בלי "לא להתייחסות".
+  // לא נשמר ב-'pdf:' ולא עולה לענן, והסקר עצמו לא משתנה
+  async function buildCleanPdf(s, onProgress) {
+    const v = reportView(Object.assign({}, s, { inclRef: false }));
+    const clean = Object.assign({}, v, { trees: v.trees.map(t => Object.assign({}, t, { notes: '' })) });
+    const r = await ReportPrint.toPdf(clean, id => photoBlob(s, id), onProgress);
+    return { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages, html: r.html };
   }
   const pdfListeners = new Set();
   function pdfChanged(id) { for (const f of [...pdfListeners]) f(id); }
