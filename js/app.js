@@ -742,8 +742,8 @@
   async function planGeom(p) {
     let d = await DB.getPhoto(planKey(p)), g = d && d.geom;
     // מדידה שנקראה בגרסה קודמת: קוראים שוב מהקובץ המקורי ששמור במכשיר, כדי שתיראה כמו ב-BricsCAD
-    // גם מדידת DWG שנקראה לפני שנשמרו קווי הגבול שבה (גבול חלקה)
-    const old = g && ((g.v || 1) < GEOM_V || (!g.bounds && /\.dwg$/i.test(p.file || '')));
+    // גם מדידת DWG/DXF שנקראה לפני שנשמרו בה קווי הגבול (גבול חלקה) והשכבות
+    const old = g && ((g.v || 1) < GEOM_V || ((!g.bounds || !g.layers) && /\.(dwg|dxf)$/i.test(p.file || '')));
     if (old && !Plan.isPaper(p)) {
       const o = await DB.getPhoto('plandwg:' + p.id);
       if (o && o.blob) {
