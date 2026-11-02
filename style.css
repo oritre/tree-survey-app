@@ -483,3 +483,10 @@ textarea.doc-text.b { font-weight: 700; }
 @media (max-width: 600px) { .plan-miss { max-width: calc(100% - 24px); } .plan-miss button { font-size: 14px; padding: 8px 11px; } }
 .plan-miss .pm-bound { background: #1976d2; color: #fff; }
 .plan-miss .pm-hide { background: #37474f; color: #fff; padding: 8px 12px; }
+
+/* v1.47: עצים בלי תמונה ליד "סיום סקר", וכפתור צילום מודגש בעץ בלי תמונה */
+.nophoto-box { padding: 12px 14px; border-radius: 10px; background: var(--danger-soft); border: 2px solid var(--danger); display: flex; flex-direction: column; gap: 8px; }
+.nophoto-title { display: flex; align-items: center; gap: 8px; color: var(--danger); font-weight: 700; font-size: 18px; }
+.nophoto-chip { border-color: var(--danger); color: var(--danger); font-weight: 700; }
+.btn.needs-photo { animation: shootpulse 1.4s infinite; }
+@keyframes shootpulse { 50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 30%, transparent); } }
