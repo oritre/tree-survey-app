@@ -324,9 +324,12 @@
     }
 
     const paths = [], texts = [], fills = [], inserts = {}, bounds = [];
+    // שכבות: אינדקס לכל שם, כדי שאפשר יהיה להדליק ולכבות אותן באפליקציה
+    const layNames = [], layIdx = new Map();
+    const LI = n => { n = String(n || '0'); let i = layIdx.get(n); if (i == null) { i = layNames.length; layNames.push(n); layIdx.set(n, i); } return i; };
     let budget = 400000;
     const add = (pts, R, closed) => {
-      if (pts.length > 1) paths.push({ pts, closed: !!closed, s: styleOf(R.col, dashOf(R.lt, LTS * R.lts)) });
+      if (pts.length > 1) paths.push({ pts, closed: !!closed, s: styleOf(R.col, dashOf(R.lt, LTS * R.lts)), l: LI(R.layer) });
     };
     const scaleOf = M => Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2])) || 1;
     // טקסט: נקודה, גובה, זווית, יישור (0 שמאל 1 מרכז 2 ימין; 0 קו בסיס 1 תחתית 2 אמצע 3 עליון), רוחב
@@ -337,7 +340,7 @@
       const p = ap(M, x, y), sc = scaleOf(M), r = rot + Math.atan2(M[1], M[0]);
       // גופן SHX מצייר את התווים כמו שהם שמורים (סדר חזותי). גופן TrueType: טקסט רגיל (סדר לוגי)
       const logical = /\.(ttf|otf|ttc)$/i.test(font) || /^(arial|david|miriam|narkisim|tahoma|calibri|segoe|times|gisha|levenim|frank|rod|aharoni)/i.test(font);
-      texts.push({ x: p[0], y: p[1], h: h * sc, r, t, s: styleOf(R.col, -1), ha, va, wf: wf && wf > 0 && wf !== 1 ? wf : 1, lg: logical ? 1 : 0 });
+      texts.push({ x: p[0], y: p[1], h: h * sc, r, t, s: styleOf(R.col, -1), ha, va, wf: wf && wf > 0 && wf !== 1 ? wf : 1, lg: logical ? 1 : 0, l: LI(R.layer) });
     }
     function textEnt(M, R, e, T) {
       // TEXT / ATTRIB: נקודת היישור (endPoint) כשיש יישור, אחרת נקודת ההתחלה
@@ -388,18 +391,19 @@
             case 'POINT': if (e.position) { const p = ap(M, e.position.x, e.position.y); add([p, p], R); } break;
             case 'SOLID': case 'TRACE': {
               const c = e.corner1 && [e.corner1, e.corner2, e.corner4 || e.corner3, e.corner3].filter(Boolean);
-              if (c && c.length >= 3) fills.push({ s: styleOf(R.col, -1), loops: [c.map(p => ap(M, p.x, p.y))] });
+              if (c && c.length >= 3) fills.push({ s: styleOf(R.col, -1), loops: [c.map(p => ap(M, p.x, p.y))], l: LI(R.layer) });
               break;
             }
             case 'HATCH': {
               const loops = hatchLoops(e);
               if (!loops.length) break;
               const s = styleOf(R.col, -1);
-              if (e.solidFill === 1 || /^SOLID$/i.test(e.patternName || '')) { fills.push({ s, loops: loops.map(L => L.map(p => ap(M, p[0], p[1]))) }); break; }
+              if (e.solidFill === 1 || /^SOLID$/i.test(e.patternName || '')) { fills.push({ s, loops: loops.map(L => L.map(p => ap(M, p[0], p[1]))), l: LI(R.layer) }); break; }
               if (budget <= 0) break;
               const segs = hatchLines(e, loops, Math.min(budget, 60000));
               budget -= segs.length;
-              for (const g of segs) paths.push({ pts: [ap(M, g[0], g[1]), ap(M, g[2], g[3])], s });
+              const hl = LI(R.layer);
+              for (const g of segs) paths.push({ pts: [ap(M, g[0], g[1]), ap(M, g[2], g[3])], s, l: hl });
               break;
             }
             case 'TEXT': textEnt(M, R, e); break;
@@ -452,21 +456,24 @@
     const span = Math.max(view[2] - view[0], view[3] - view[1], 50);
     const far = (x, y) => Math.abs(x - ox) > span * 20 || Math.abs(y - oy) > span * 20;
     const r2 = v => Math.round(v * 100) / 100, r3 = v => Math.round(v * 1000) / 1000;
-    const P = [], PS = [];
+    const P = [], PS = [], PL = [];
     for (const p of paths) {
       if (p.pts.every(q => far(q[0], q[1]))) continue;
       const flat = [];
       for (const q of p.pts) flat.push(r3(q[0] - ox), r3(q[1] - oy));
-      P.push(flat); PS.push(p.s);
+      P.push(flat); PS.push(p.s); PL.push(p.l || 0);
     }
-    const TX = texts.filter(t => !far(t.x, t.y)).map(t => [r3(t.x - ox), r3(t.y - oy), r3(t.h), Math.round(t.r * 1e4) / 1e4, t.t, t.s, t.ha, t.va, Math.round(t.wf * 100) / 100, t.lg]);
-    const FL = fills.filter(f => !f.loops.every(L => L.every(q => far(q[0], q[1]))))
-      .map(f => [f.s, ...f.loops.map(L => { const o = []; for (const q of L) o.push(r3(q[0] - ox), r3(q[1] - oy)); return o; })]);
+    const TX = texts.filter(t => !far(t.x, t.y)).map(t => [r3(t.x - ox), r3(t.y - oy), r3(t.h), Math.round(t.r * 1e4) / 1e4, t.t, t.s, t.ha, t.va, Math.round(t.wf * 100) / 100, t.lg, t.l || 0]);
+    const FL0 = fills.filter(f => !f.loops.every(L => L.every(q => far(q[0], q[1]))));
+    const FLL = FL0.map(f => f.l || 0);
+    const FL = FL0.map(f => [f.s, ...f.loops.map(L => { const o = []; for (const q of L) o.push(r3(q[0] - ox), r3(q[1] - oy)); return o; })]);
     const ins = {};
     for (const [n, list] of Object.entries(inserts)) ins[n] = list.filter(r => !far(r[1], r[2])).map(r => [r[0], r2(r[1] - ox), r2(r[2] - oy), r[3]]);
     const itm = ox > 100000 && ox < 300000 && oy > 350000 && oy < 820000;
     const BD = bounds.map(b => ({ layer: b.layer, pts: b.pts.map(q => [r2(q[0] - ox), r2(q[1] - oy)]) }));
-    return { v: 2, bounds: BD, crs: itm ? 'itm' : 'local', ox, oy, view: view.map((v, i) => r2(v - (i % 2 ? oy : ox))), paths: P, ps: PS, st: styles, dash: dashes, texts: TX, fills: FL, inserts: ins, treeBlock };
+    // רשימת השכבות: שם וצבע השכבה (לחלון השכבות)
+    const LY = layNames.map(n => { const L = layers.get(n); return [n, L ? (L.color != null && L.colorIndex === 257 ? L.color : aci(Math.abs(L.colorIndex == null ? 7 : L.colorIndex))) : -1]; });
+    return { v: 2, layers: LY, pl: PL, fll: FLL, bounds: BD, crs: itm ? 'itm' : 'local', ox, oy, view: view.map((v, i) => r2(v - (i % 2 ? oy : ox))), paths: P, ps: PS, st: styles, dash: dashes, texts: TX, fills: FL, inserts: ins, treeBlock };
   }
 
   // עצי המודד: [{h, x, y, name}] בקואורדינטות המקוריות

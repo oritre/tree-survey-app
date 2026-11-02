@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.42.0';
+  const APP_VERSION = '1.43.0';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -742,8 +742,8 @@
   async function planGeom(p) {
     let d = await DB.getPhoto(planKey(p)), g = d && d.geom;
     // מדידה שנקראה בגרסה קודמת: קוראים שוב מהקובץ המקורי ששמור במכשיר, כדי שתיראה כמו ב-BricsCAD
-    // גם מדידת DWG שנקראה לפני שנשמרו קווי הגבול שבה (גבול חלקה)
-    const old = g && ((g.v || 1) < GEOM_V || (!g.bounds && /\.dwg$/i.test(p.file || '')));
+    // גם מדידת DWG/DXF שנקראה לפני שנשמרו בה קווי הגבול (גבול חלקה) והשכבות
+    const old = g && ((g.v || 1) < GEOM_V || ((!g.bounds || !g.layers) && /\.(dwg|dxf)$/i.test(p.file || '')));
     if (old && !Plan.isPaper(p)) {
       const o = await DB.getPhoto('plandwg:' + p.id);
       if (o && o.blob) {

@@ -63,6 +63,15 @@
     const areaBtn = btn('תחימה', 'תחימת קטע בפוליגון', () => setMode('area'));
     const xyBtn = btn('נ.צ', 'נגיעה בנקודה מראה את הקואורדינטות שלה ברשת ישראל החדשה', () => setMode(mode === 'xy' ? 'mark' : 'xy'));
     let xyPt = null; // הנקודה האחרונה במצב נ.צ
+    const distBtn = btn('מרחק', 'מדידת מרחק בין שתי נקודות', () => setMode(mode === 'dist' ? 'mark' : 'dist'));
+    let measA = null, measB = null; // נקודות מדידת המרחק
+    // שכבות שכובו (לפי שם), לכל מדידה
+    const LAYERS = g.layers || [];
+    let hiddenL = new Set(await DB.getKV('planLayers:' + s.plan.id, []));
+    let hidIdx = new Uint8Array(LAYERS.length);
+    const syncHid = () => { hidIdx = new Uint8Array(LAYERS.length); LAYERS.forEach((L, i) => { if (hiddenL.has(L[0])) hidIdx[i] = 1; }); };
+    syncHid();
+    const pathOn = i => !(g.pl && hidIdx[g.pl[i]]);
     const undoBtn = btn('↶', 'בטל פעולה אחרונה', doUndo);
     // GPS: במדידה ברשת ישראל, או בשרטוט על דף אחרי כיול
     const canGps = () => itm || !!(root.proj4 && root.Plan.isPaper(s.plan) && s.plan.cal);
@@ -72,6 +81,8 @@
     const gpsBtn = btn(locIcon(), 'המיקום שלי על השרטוט (GPS)', toggleGps, 'loc-btn');
     gpsBtn.hidden = !canGps();
     const layersBtn = btn('⋯', 'תצוגה', showLayers);
+    const layBtn = btn('שכבות', 'הדלקה וכיבוי של שכבות השרטוט', () => showLayerList());
+    layBtn.hidden = !(g.layers && g.layers.length);
     const monoBtn = btn('צבע אחד', 'שרטוט בצבעים המקוריים / בצבע אחד', () => setMono(!mono));
     monoBtn.hidden = !hasStyle;
     function setMono(v) { mono = v; DB.setKV('planMono', v); monoBtn.textContent = mono ? 'צבעים' : 'צבע אחד'; monoBtn.classList.toggle('on', mono); redraw(); }
@@ -79,8 +90,8 @@
     const ov = h('div', { class: 'annot map-ov plan-ov' },
       h('div', { class: 'annot-bar' },
         h('span', { class: 'sp', style: 'font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, s.plan.name || 'מדידה'),
-        h('div', { class: 'grp' }, markBtn, areaBtn, xyBtn),
-        undoBtn, gpsBtn, monoBtn, layersBtn,
+        h('div', { class: 'grp' }, markBtn, areaBtn, xyBtn, distBtn),
+        undoBtn, gpsBtn, monoBtn, layBtn, layersBtn,
         btn('סגור', null, () => close(), 'save')),
       h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, hint, legend, missChip, sheet));
     document.body.append(ov);
@@ -188,11 +199,12 @@
       const vis = i => !(cad.bb[i * 4 + 2] < vx0 || cad.bb[i * 4] > vx1 || cad.bb[i * 4 + 3] < vy0 || cad.bb[i * 4 + 1] > vy1);
       cx.save();
       // מילויים
-      for (const fl of g.fills || []) {
+      (g.fills || []).forEach((fl, fi) => {
+        if (g.fll && hidIdx[g.fll[fi]]) return;
         cx.beginPath(); W();
         for (let k = 1; k < fl.length; k++) { const L2 = fl[k]; for (let i = 0; i < L2.length; i += 2) i ? cx.lineTo(L2[i], L2[i + 1]) : cx.moveTo(L2[i], L2[i + 1]); cx.closePath(); }
         S(); cx.fillStyle = css(g.st[fl[0]][0]); cx.fill('evenodd');
-      }
+      });
       // קווים, לפי סגנון (צבע וקווקוו)
       cx.lineWidth = 1; cx.lineCap = 'round'; cx.lineJoin = 'round';
       if (!hasStyle) { cx.globalAlpha = g.image ? 0.45 : 0.9; }
@@ -201,7 +213,7 @@
         cx.beginPath(); W();
         let any = false;
         for (const i of list) {
-          if (!vis(i)) continue;
+          if (!vis(i) || !pathOn(i)) continue;
           const p = g.paths[i];
           cx.moveTo(p[0], p[1]);
           if (p.length === 4 && p[0] === p[2] && p[1] === p[3]) { cx.lineTo(p[0] + 0.5 / sc, p[1]); any = true; continue; }
@@ -223,7 +235,8 @@
       // טקסטים: גובה הטקסט בקובץ הוא גובה האותיות, ובקנבס גודל הגופן גדול בערך פי 1.4
       cx.textAlign = 'left'; cx.textBaseline = 'alphabetic';
       for (const t of g.texts || []) {
-        const [x, y, hh, r, str, si, ha, va, wf, lg] = t;
+        const [x, y, hh, r, str, si, ha, va, wf, lg, tl] = t;
+        if (tl != null && hidIdx[tl]) continue;
         const hp = hh * sc;
         if (hp < 2.2) continue;
         if (x + hh * str.length < vx0 - hh * 2 || x - hh * str.length > vx1 + hh * 2 || y + hh * 4 < vy0 || y - hh * 4 > vy1) continue;
@@ -390,6 +403,16 @@
           cx.fillText(t.name, spot.b.x + w / 2, spot.b.y + hh / 2 + 1);
         }
       }
+      // מדידת מרחק
+      if (measA) {
+        const A = P(toMap(measA[0], measA[1])), B = measB ? P(toMap(measB[0], measB[1])) : null;
+        if (B) {
+          cx.lineWidth = 6; cx.strokeStyle = '#fff'; cx.beginPath(); cx.moveTo(A.x, A.y); cx.lineTo(B.x, B.y); cx.stroke();
+          cx.lineWidth = 3; cx.strokeStyle = '#ff6d00'; cx.setLineDash([10, 6]); cx.beginPath(); cx.moveTo(A.x, A.y); cx.lineTo(B.x, B.y); cx.stroke(); cx.setLineDash([]);
+        }
+        for (const q of B ? [A, B] : [A]) { cx.beginPath(); cx.arc(q.x, q.y, 7, 0, 7); cx.fillStyle = '#ff6d00'; cx.fill(); cx.lineWidth = 2.5; cx.strokeStyle = '#fff'; cx.stroke(); }
+        if (B) label(cx, (A.x + B.x) / 2, (A.y + B.y) / 2 - 18, distM().toFixed(2) + " מ'", { bg: '#ff6d00', fg: '#fff', size: 16 });
+      }
       // נקודה במצב נ.צ
       if (xyPt) {
         const p = P(toMap(xyPt[0], xyPt[1]));
@@ -513,6 +536,7 @@
       if (calStep) return calTap(xy);
       if (mode === 'area') return areaTap(pt, xy);
       if (mode === 'xy') { xyPt = xy; renderSheet(); redraw(); return; }
+      if (mode === 'dist') return distTap(pt, xy);
       if (moving) return moveTo(xy);
       const hit = hitAt(pt);
       if (hit && hit.kind === 'my') return select(hit.id);
@@ -607,6 +631,7 @@
       updateBar();
       if (mode === 'area') return renderAreaSheet();
       if (mode === 'xy') return renderXySheet();
+      if (mode === 'dist') return renderDistSheet();
       const t = selId && s.trees.find(x => x.id === selId);
       if (!t) { sheet.classList.add('hidden'); hint.textContent = moving ? '' : 'נגיעה בעץ של המודד מסמנת אותו. נגיעה במקום ריק מוסיפה עץ. עץ שהוספת אפשר לגרור.'; hint.classList.toggle('hidden', false); return; }
       hint.textContent = moving ? 'גע במיקום החדש של העץ' : '';
@@ -642,8 +667,8 @@
 
     // ---------- תחומים ----------
     function setMode(m) {
-      mode = m; moving = false; drawing = null; selPoly = null; xyPt = null; pickBound = false; boundCand = null; drawKind = 'poly';
-      if (m === 'area' || m === 'xy') selId = null;
+      mode = m; moving = false; drawing = null; selPoly = null; xyPt = null; pickBound = false; boundCand = null; drawKind = 'poly'; measA = measB = null;
+      if (m === 'area' || m === 'xy' || m === 'dist') selId = null;
       renderSheet(); redraw();
     }
     function areaTap(pt, xy) {
@@ -687,7 +712,7 @@
     function cadVertsNear(xy, tol) {
       const x = xy[0] - g.ox, y = xy[1] - g.oy, out = [];
       for (let i = 0; i < cadPaths.length; i++) {
-        if (cad.bb[i * 4] > x + tol || cad.bb[i * 4 + 2] < x - tol || cad.bb[i * 4 + 1] > y + tol || cad.bb[i * 4 + 3] < y - tol) continue;
+        if (cad.bb[i * 4] > x + tol || cad.bb[i * 4 + 2] < x - tol || cad.bb[i * 4 + 1] > y + tol || cad.bb[i * 4 + 3] < y - tol || !pathOn(i)) continue;
         const p = cadPaths[i];
         for (let k = 0; k < p.length; k += 2) if (Math.abs(p[k] - x) <= tol && Math.abs(p[k + 1] - y) <= tol) out.push([Math.round((p[k] + g.ox) * 100) / 100, Math.round((p[k + 1] + g.oy) * 100) / 100]);
         if (out.length > 200) break;
@@ -699,7 +724,7 @@
       const tol = 16 / ppm() * root.Plan.upm(s.plan), x = xy[0] - g.ox, y = xy[1] - g.oy;
       const cand = [];
       for (let i = 0; i < cadPaths.length; i++) {
-        if (cad.bb[i * 4] > x + tol || cad.bb[i * 4 + 2] < x - tol || cad.bb[i * 4 + 1] > y + tol || cad.bb[i * 4 + 3] < y - tol) continue;
+        if (cad.bb[i * 4] > x + tol || cad.bb[i * 4 + 2] < x - tol || cad.bb[i * 4 + 1] > y + tol || cad.bb[i * 4 + 3] < y - tol || !pathOn(i)) continue;
         const p = cadPaths[i];
         if (p.length < 4) continue;
         let d = Infinity;
@@ -760,6 +785,64 @@
       undo.push({ what: 'קו כחול', run: () => { s.planBound = old; } });
       changed(); renderSheet();
       flash(`קו כחול נקבע: ${missing().length} עצי מודד בתחום עוד לא סומנו`);
+    }
+    // ---------- מדידת מרחק ----------
+    const distM = () => Math.hypot(measB[0] - measA[0], measB[1] - measA[1]) / root.Plan.upm(s.plan);
+    // הצמדה: עץ (של המודד או שלי) או פינה של קו בשרטוט, עד 22 פיקסלים מהנגיעה
+    function snapPoint(pt, xy) {
+      let best = null, bd = 22;
+      const test = q => { const p = map.latLngToContainerPoint(toMap(q[0], q[1])), d = Math.hypot(p.x - pt.x, p.y - pt.y); if (d < bd) { bd = d; best = q; } };
+      for (const t of surveyor) test([t.x, t.y]);
+      for (const t of myTrees()) test([t.px, t.py]);
+      for (const q of cadVertsNear(xy, 22 / ppm() * root.Plan.upm(s.plan))) test(q);
+      return best ? [best[0], best[1]] : xy;
+    }
+    function distTap(pt, xy) {
+      const q = snapPoint(pt, xy);
+      if (!measA || measB) { measA = q; measB = null; } else measB = q;
+      renderSheet(); redraw();
+    }
+    function renderDistSheet() {
+      if (!measA) { sheet.classList.add('hidden'); hint.textContent = 'גע בנקודה הראשונה ואז בשנייה. הנגיעה נצמדת לעצים ולפינות של קווים'; hint.classList.remove('hidden'); return; }
+      hint.classList.add('hidden'); sheet.classList.remove('hidden');
+      const rows = [];
+      if (measB) {
+        const d = distM(), dx = Math.abs(measB[0] - measA[0]) / root.Plan.upm(s.plan), dy = Math.abs(measB[1] - measA[1]) / root.Plan.upm(s.plan);
+        rows.push(h('div', { class: 'row', style: 'gap:12px;align-items:baseline;flex-wrap:wrap' },
+          h('b', { style: 'font-size:26px;direction:ltr;unicode-bidi:isolate' }, d.toFixed(2) + " מ'"),
+          h('span', { class: 'muted small', style: 'direction:ltr;unicode-bidi:isolate' }, `ΔX ${dx.toFixed(2)}  ΔY ${dy.toFixed(2)}`)),
+          h('div', { class: 'muted small' }, 'נגיעה נוספת מתחילה מדידה חדשה'));
+      } else rows.push(h('div', { class: 'muted' }, 'גע בנקודה השנייה'));
+      sheet.replaceChildren(h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' }, h('b', {}, 'מרחק'),
+        h('button', { class: 'icon-btn plan-x', 'aria-label': 'סגור', onclick: () => setMode('mark') }, '✕')), ...rows);
+    }
+    // ---------- שכבות ----------
+    function showLayerList() {
+      const counts = new Array(LAYERS.length).fill(0);
+      for (const l of g.pl || []) counts[l]++;
+      (g.texts || []).forEach(t => { if (t[10] != null) counts[t[10]]++; });
+      (g.fll || []).forEach(l => counts[l]++);
+      const order = LAYERS.map((L, i) => i).filter(i => counts[i]).sort((a, b) => LAYERS[a][0].localeCompare(LAYERS[b][0], 'he', { numeric: true }));
+      const save = () => { DB.setKV('planLayers:' + s.plan.id, [...hiddenL]); syncHid(); redraw(); };
+      const boxes = [];
+      const list = h('div', { class: 'stack', style: 'gap:2px;max-height:55vh;overflow:auto' }, ...order.map(i => {
+        const [n, c] = LAYERS[i];
+        const cb = h('input', { type: 'checkbox', checked: !hiddenL.has(n), style: 'width:22px;height:22px', onchange: e => { e.target.checked ? hiddenL.delete(n) : hiddenL.add(n); save(); } });
+        boxes.push([cb, n]);
+        const col = c < 0 ? (onDark() ? '#fff' : '#000') : '#' + c.toString(16).padStart(6, '0');
+        return h('label', { class: 'row', style: 'gap:10px;align-items:center;font-size:16px;padding:4px 0' }, cb,
+          h('i', { style: `width:14px;height:14px;border-radius:3px;border:1px solid #888;background:${col};flex:none` }),
+          h('span', { style: 'direction:ltr;unicode-bidi:isolate' }, n), h('span', { class: 'muted small' }, String(counts[i])));
+      }));
+      const all = on => { for (const [cb, n] of boxes) { cb.checked = on; on ? hiddenL.delete(n) : hiddenL.add(n); } save(); };
+      const box = h('div', { class: 'modal', onclick: e => { if (e.target === box) box.remove(); } },
+        h('div', { class: 'card stack', style: 'max-width:420px;width:92%' },
+          h('h2', { style: 'margin:0;font-size:20px' }, `שכבות (${order.length})`),
+          h('div', { class: 'row', style: 'gap:8px' }, h('button', { class: 'btn', onclick: () => all(true) }, 'הכל'), h('button', { class: 'btn', onclick: () => all(false) }, 'כלום')),
+          list,
+          h('div', { class: 'muted small' }, 'שכבות שכבויות בקובץ עצמו לא מוצגות כאן'),
+          h('button', { class: 'btn primary', onclick: () => box.remove() }, 'סגור')));
+      document.body.append(box);
     }
     // ---------- נ.צ ברשת ישראל החדשה ----------
     // מחזיר [X, Y] ברשת ישראל, או null בשרטוט על דף שלא כויל
@@ -885,6 +968,7 @@
           hasStyle ? row('שרטוט בצבע אחד (שחור או לבן לפי הרקע)', mono, v => setMono(v)) : null,
           surveyor.length ? row('מספרי המודד (בזום קרוב)', showSurv, v => { showSurv = v; DB.setKV('planShowSurv', v); redraw(); }) : null,
           root.Plan.isPaper(s.plan) ? paperBox(() => box) : null,
+          LAYERS.length ? h('button', { class: 'btn', onclick: () => { box.remove(); showLayerList(); } }, `שכבות${hiddenL.size ? ` (${hiddenL.size} כבויות)` : ''}`) : null,
           h('button', { class: 'btn', onclick: () => { map.fitBounds(fit, { padding: [20, 20] }); box.remove(); } }, 'כל המדידה'),
           h('div', { class: 'muted small' }, `${surveyor.length} עצים של המודד, ${myTrees().length} מסומנים`),
           h('button', { class: 'btn primary', onclick: () => box.remove() }, 'סגור')));
@@ -1077,7 +1161,7 @@
     }
     function updateBar() {
       updateMiss();
-      markBtn.classList.toggle('on', mode === 'mark'); areaBtn.classList.toggle('on', mode === 'area'); xyBtn.classList.toggle('on', mode === 'xy');
+      markBtn.classList.toggle('on', mode === 'mark'); areaBtn.classList.toggle('on', mode === 'area'); xyBtn.classList.toggle('on', mode === 'xy'); distBtn.classList.toggle('on', mode === 'dist');
       undoBtn.disabled = !undo.length;
       legendHtml();
     }
