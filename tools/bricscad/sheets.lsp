@@ -722,9 +722,11 @@
   (setq vps (sh:items lay '("vp"))
         insets (vl-remove-if-not 'sh:inset-p vps)
         mains (vl-remove-if 'sh:inset-p vps))
-  (if (null vps)
-    (princ "\nNo drawing on this sheet. Use SHEET or SHEETADD.")
-    (progn
+  (cond
+    ((null vps) (princ "\nNo drawing on this sheet. Use SHEET or SHEETADD."))
+    ;; several drawings with their own title blocks on one paper
+    ((cdr (sh:unitkeys mains)) (sh:fitmulti lay typ forced info))
+    (T
       (setq strip (sh:migrate lay typ (sh:items lay '("strip"))))
       (if strip
         (setq sbb (sh:stripbb strip)
@@ -825,19 +827,160 @@
           (apply 'strcat (cons (strcat "1:" (itoa main))
                                (mapcar '(lambda (s) (strcat ", 1:" (itoa s))) (vl-remove main scs))))
           (strcat "1:" (itoa main))))
-      (sh:plot pw ph)
-      (command "_.ZOOM" "_E")
-      (setq *sh-paper* (sh:papername paper) *sh-main-scale* main)
-      ;; shown by sh:end, after the command echo
-      (setq *sh-msg* (strcat "\nSheet " lay ": " (sh:papername paper)
-                             (if (= (car paper) "ROLL") " mm (roll)" (if (> pw ph) " landscape" " portrait"))
-                             ", 1:" (itoa main)))
-      ;; a layout named by paper and scale ("A3 1-250") follows the sheet when the scale or the paper changes
-      (if (and (wcmatch lay "A# 1-#*,#*x#* 1-#*")
-               (not (wcmatch lay (strcat (sh:papername paper) " 1-" (itoa main) ","
-                                         (sh:papername paper) " 1-" (itoa main) " (#*)"))))
-        (setq *sh-last-layout* (sh:rename lay (sh:autoname (sh:papername paper) main))))))
+      (sh:finish lay paper main)))
   (princ))
+
+;; plot settings, message and layout name of a fitted sheet
+(defun sh:finish (lay paper main / pw ph)
+  (setq pw (cadr paper) ph (caddr paper))
+  (sh:plot pw ph)
+  (command "_.ZOOM" "_E")
+  (setq *sh-paper* (sh:papername paper) *sh-main-scale* main)
+  ;; shown by sh:end, after the command echo
+  (setq *sh-msg* (strcat "\nSheet " lay ": " (sh:papername paper)
+                         (if (= (car paper) "ROLL") " mm (roll)" (if (> pw ph) " landscape" " portrait"))
+                         ", 1:" (itoa main)))
+  ;; a layout named by paper and scale ("A3 1-250") follows the sheet when the scale or the paper changes
+  (if (and (wcmatch lay "A# 1-#*,#*x#* 1-#*")
+           (not (wcmatch lay (strcat (sh:papername paper) " 1-" (itoa main) ","
+                                     (sh:papername paper) " 1-" (itoa main) " (#*)"))))
+    (setq *sh-last-layout* (sh:rename lay (sh:autoname (sh:papername paper) main)))))
+
+;; ---------- several drawings with their own title blocks (units) on one paper ----------
+
+;; unit of a sheet item: "" for the first drawing, "u:2", "u:3".. for drawings added with their own title block
+(defun sh:unit (e / r)
+  (setq r (car (vl-remove-if-not '(lambda (q) (wcmatch q "u:*")) (sh:roles e))))
+  (if r r ""))
+
+(defun sh:unitkeys (ents / r)
+  (foreach e ents (if (not (member (sh:unit e) r)) (setq r (append r (list (sh:unit e))))))
+  r)
+
+(defun sh:nextunit (lay / n)
+  (setq n 1)
+  (foreach e (append (sh:items lay '("vp")) (sh:items lay '("strip")))
+    (if (wcmatch (sh:unit e) "u:*") (setq n (max n (atoi (substr (sh:unit e) 3))))))
+  (strcat "u:" (itoa (1+ n))))
+
+;; each unit: its drawing fills its own part of the paper beside its own title block; the units side by side
+;; (in the order they are on the sheet), a line between them, one frame around all.
+(defun sh:fitmulti (lay typ forced info / vps insets strips units us paper pw ph m W H extra x x0 x1 colL wrap yb
+                    carea area sbox st sbb sw shh mains bb cx f R Ks i main big a scs rec allscale)
+  (setq vps (sh:items lay '("vp"))
+        insets (vl-remove-if-not 'sh:inset-p vps)
+        strips (sh:items lay '("strip"))
+        units (sh:unitkeys (vl-remove-if 'sh:inset-p vps)))
+  ;; the first drawing's title block may still be exploded (older sheets)
+  (setq st (sh:migrate lay typ (vl-remove-if-not '(lambda (s) (= (sh:unit s) "")) strips))
+        strips (append st (vl-remove-if '(lambda (s) (= (sh:unit s) "")) strips)))
+  ;; per unit: (key mains strip sbb sw shh corebox needed-width order-x)
+  (foreach u units
+    (setq mains (vl-remove-if '(lambda (v) (or (sh:inset-p v) (/= (sh:unit v) u))) vps)
+          st (vl-remove-if '(lambda (s) (/= (sh:unit s) u)) strips)
+          sbb (if st (sh:stripbb st))
+          sw (if sbb (- (car (cadr sbb)) (car (car sbb))) 0.0)
+          shh (if sbb (- (cadr (cadr sbb)) (cadr (car sbb))) 0.0)
+          bb (sh:corebox mains)
+          cx (/ (+ (car (car (sh:bbox mains))) (car (cadr (sh:bbox mains)))) 2.0))
+    (setq us (cons (list u mains st sbb sw shh bb (+ (- (car (cadr bb)) (car (car bb))) (sh:col sw)) cx) us)))
+  (setq us (vl-sort us '(lambda (a b) (< (nth 8 a) (nth 8 b))))
+        W (apply '+ (mapcar '(lambda (q) (nth 7 q)) us))
+        H (apply 'max (mapcar '(lambda (q) (max (- (cadr (cadr (nth 6 q))) (cadr (car (nth 6 q)))) (+ (nth 5 q) (* 2 *sh-inset*)))) us)))
+  ;; the paper stays (the units share it); the first drawing gets the width the others leave
+  (setq paper (cond ((sh:forced forced))
+                    ((sh:forced (caddr info)))
+                    ((sh:choosew W H))))
+  (setq pw (cadr paper) ph (caddr paper) m (sh:margin (car paper) pw ph)
+        extra (- pw m m W))
+  (if (< extra 0.0)
+    (princ (strcat "\nThe drawings need " (rtos (+ W m m) 2 0) " mm, the paper is " (rtos pw 2 0)
+                   " mm wide: the first drawing is narrower than its picked part. Use a smaller scale for the added one.")))
+  (setq us (mapcar '(lambda (q) (if (= (car q) "")
+                                  (list (nth 0 q) (nth 1 q) (nth 2 q) (nth 3 q) (nth 4 q) (nth 5 q) (nth 6 q)
+                                        (+ (nth 7 q) extra) (nth 8 q))
+                                  q))
+                   us))
+  (setq wrap (cond ((= (cadddr info) "column") nil)
+                   ((= (cadddr info) "corner") T)
+                   (T (or (= (car paper) "ROLL") (>= (min pw ph) 400.0)))))
+  (foreach e (sh:items lay '("frame" "divider" "insetframe")) (entdel e))
+  (setq f (sh:rect m m (- pw m) (- ph m) lay (sh:layer *sh-frame-layer*)))
+  (sh:tag f (list (cons 1000 "frame") (cons 1000 typ) (cons 1000 (if forced forced ""))
+                  (cons 1000 (sh:papercode pw ph)) (cons 1000 (cadddr info))))
+  (setq x m i 0 big 0.0)
+  (foreach q us
+    (setq i (1+ i) mains (nth 1 q) st (nth 2 q) sbb (nth 3 q) sw (nth 4 q) shh (nth 5 q)
+          x0 x x1 (if (= i (length us)) (- pw m) (+ x0 (nth 7 q))) colL (- x1 (sh:col sw)) x x1)
+    ;; line between units
+    (if (< i (length us))
+      (sh:tag (sh:line x1 m x1 (- ph m) lay (sh:layer *sh-frame-layer*)) (list (cons 1000 "divider"))))
+    (setq carea (list x0 m colL (- ph m)) area carea sbox nil)
+    (if st
+      (progn
+        (if (and wrap (> (- (- ph m m) (+ shh (* 2.0 *sh-inset*))) 20.0))
+          (progn
+            (setq yb (- ph m (* 2.0 *sh-inset*) shh) sbox (list colL yb x1 (- ph m)) area (list x0 m x1 (- ph m)))
+            (sh:tag (sh:line colL yb colL (- ph m) lay (sh:layer *sh-frame-layer*)) (list (cons 1000 "divider")))
+            (sh:tag (sh:line colL yb x1 yb lay (sh:layer *sh-frame-layer*)) (list (cons 1000 "divider"))))
+          (sh:tag (sh:line colL m colL (- ph m) lay (sh:layer *sh-frame-layer*)) (list (cons 1000 "divider"))))
+        (sh:move st (- (- x1 *sh-inset*) (car (cadr sbb))) (- (- ph m *sh-inset*) (cadr (cadr sbb))))))
+    ;; the unit's drawing: one fills its area (picked part in the middle), several are centered in it
+    (if (and mains (null (cdr mains)) (not (sh:poly-p (car mains))))
+      (progn
+        (if (not (equal (sh:vprect (car mains)) area 0.01))
+          (progn
+            (setq bb (sh:corebox mains))
+            (sh:movevp (car mains) (- (/ (+ x0 colL) 2.0) (/ (+ (car (car bb)) (car (cadr bb))) 2.0))
+                                   (- (/ ph 2.0) (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))
+            (sh:setrect (car mains) carea T)))
+        (sh:setrect (car mains) area nil))
+      (progn
+        (setq bb (sh:bbox mains))
+        (foreach e mains (sh:movevp e (- (/ (+ x0 colL) 2.0) (/ (+ (car (car bb)) (car (cadr bb))) 2.0))
+                                      (- (/ ph 2.0) (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0))))))
+    ;; insets inside this unit, and the cut around them and the title block corner
+    (setq rec nil)
+    (foreach e insets
+      (setq R (sh:vprect e))
+      (if (< x0 (/ (+ (nth 0 R) (nth 2 R)) 2.0) x1)
+        (progn (setq rec (cons e rec) R (sh:clamp (sh:grow R *sh-inset-gap*) area))
+               (sh:tag (sh:rect (nth 0 R) (nth 1 R) (nth 2 R) (nth 3 R) lay (sh:layer *sh-frame-layer*))
+                       (list (cons 1000 "insetframe"))))))
+    (foreach e (vl-remove-if '(lambda (v) (or (sh:poly-p v) (sh:inset-p v) (/= (sh:unit v) (car q)))) (sh:items lay '("vp")))
+      (setq R (sh:vprect e) Ks nil)
+      (foreach v rec
+        (setq a (sh:grow (sh:vprect v) *sh-inset-gap*))
+        (if (sh:overlap a R) (setq Ks (cons (sh:cutbox a R) Ks))))
+      (if (and sbox (sh:overlap sbox R)) (setq Ks (cons (sh:cutbox sbox R) Ks)))
+      (if Ks (sh:setclip e (sh:subtract R Ks) lay)))
+    ;; this unit's title block: its own scale(s), the paper size
+    (setq scs nil main nil a 0.0)
+    (foreach e (append (vl-remove-if '(lambda (v) (/= (sh:unit v) (car q))) (sh:items lay '("vp"))) rec)
+      (if (not (member (fix (car (sh:reals e))) scs)) (setq scs (append scs (list (fix (car (sh:reals e)))))))
+      (if (> (* (cdr (assoc 40 (entget e))) (cdr (assoc 41 (entget e)))) a)
+        (setq a (* (cdr (assoc 40 (entget e))) (cdr (assoc 41 (entget e)))) main (fix (car (sh:reals e))))))
+    (if (> a big) (setq big a allscale main))
+    (foreach s st
+      (if (= (cdr (assoc 0 (entget s))) "INSERT")
+        (progn (sh:attset s "SIZE" (sh:papername paper))
+               (sh:attset s "SCALE" (apply 'strcat (cons (strcat "1:" (itoa main))
+                                                         (mapcar '(lambda (s) (strcat ", 1:" (itoa s))) (vl-remove main scs)))))))))
+  (if (and (= (car paper) "ROLL") (or (> (min pw ph) *sh-roll-max-short*) (> (max pw ph) *sh-roll-max-long*)))
+    (princ (strcat "\nRoll sheet " (sh:papername paper) " is larger than 900 x 5000 mm. Choose a smaller scale.")))
+  (sh:finish lay paper allscale))
+
+;; smallest paper whose drawing area (inside the frame) holds W x H, 3% allowed over; else a roll
+(defun sh:choosew (W H / r m)
+  (foreach s *sh-papers*
+    (if (not r)
+      (foreach o (list (list (cadr s) (caddr s)) (list (caddr s) (cadr s)))
+        (setq m (sh:margin (car s) (car o) (cadr o)))
+        (if (and (not r) (<= W (* 1.03 (- (car o) m m))) (<= H (* 1.03 (- (cadr o) m m))))
+          (setq r (list (car s) (car o) (cadr o)))))))
+  (if r r
+    (progn (setq m (sh:margin "ROLL" 0 0))
+           (list "ROLL" (sh:up10 (max *sh-roll-min* (+ W m m))) (sh:up10 (max *sh-roll-min* (+ H m m)))))))
 
 ;; ---------- viewports ----------
 
@@ -1095,7 +1238,7 @@
 (defun sh:subst-name (s old new / i)
   (if (setq i (vl-string-search old s)) (strcat (substr s 1 i) new (substr s (+ i 1 (strlen old)))) s))
 
-(defun c:SHEETADD (/ lays name scale pick bb wP hP pc vps mode side e cx cy)
+(defun c:SHEETADD (/ lays name scale pick bb wP hP pc vps mode side e cx cy tb u blk s fb need)
   (sh:begin)
   (setq lays (layoutlist))
   (if (and (/= (getvar "CTAB") "Model") (member (getvar "CTAB") lays)) (setq *sh-last-layout* (getvar "CTAB")))
@@ -1115,9 +1258,37 @@
           (command "_.PSPACE")
           (setq vps (sh:items name '("vp")) bb (sh:bbox vps)
                 wP (* (sh:k scale) (cadr (car pick))) hP (* (sh:k scale) (caddr (car pick))))
-          (initget "Inside Beside")
-          (setq mode (getkword "\nPlace [Inside the sheet, same paper/Beside, the sheet grows] <Inside>: "))
-          (if (/= mode "Beside")
+          (initget "Yes No")
+          (setq tb (getkword "\nIts own title block, a second sheet on the same paper [Yes/No] <No>: "))
+          (if (= tb "Yes")
+            (setq mode "Unit")
+            (progn (initget "Inside Beside")
+                   (setq mode (getkword "\nPlace [Inside the sheet, same paper/Beside, the sheet grows] <Inside>: "))))
+          (if (= mode "Unit")
+            ;; a unit: the drawing with its own title block, beside the others (the paper grows)
+            (progn
+              (setq fb (sh:bbox (sh:items name '("frame")))
+                    need (+ wP (sh:col (car (sh:stripsize (sh:blockfor (car (sh:info name))))))))
+              (if (and fb (> need (* 0.7 (- (car (cadr fb)) (car (car fb))))))
+                (progn (princ (strcat "\nAt 1:" (itoa scale) " it needs " (rtos need 2 0) " mm of the "
+                                      (rtos (- (car (cadr fb)) (car (car fb))) 2 0)
+                                      " mm sheet width (the paper stays). Choose a smaller scale."))
+                       (exit)))
+              ;; where it goes: a rectangle of its size (drawing + title block column) follows the cursor;
+              ;; Enter = on the left. The units are columns side by side, so only the left-right place counts.
+              (setq u (sh:nextunit name)
+                    pc (if fb (sh:place need (- (cadr (cadr fb)) (cadr (car fb)) (* 2 *sh-inset-gap*)) T
+                                        "\nClick where the drawing with its title block goes, Enter = left side: ")))
+              (setq pc (cond ((null bb) '(0.0 0.0))
+                             (pc (list (- (car pc) (/ (- need wP) 2.0)) (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))
+                             (T (list (- (car (car bb)) *sh-gap* (/ wP 2.0)) (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))))
+              (setq e (sh:addvp (car pick) (cadr pick) pc name))
+              (sh:addrole e u)
+              (if (and (/= (setq blk (sh:blockfor (car (sh:info name)))) "") (setq s (sh:addstrip blk name)))
+                (progn (sh:addrole s u)
+                       ;; next to its drawing until the sheet is fitted
+                       (sh:move (list s) (- (car pc) (car (car (sh:stripbb (list s))))) (- (cadr pc) (cadr (car (sh:stripbb (list s))))))))))
+          (if (not (member mode '("Beside" "Unit")))
             ;; inside: placed by hand, the paper stays, the other drawings are cut around it
             (if (setq pc (sh:place wP hP T "\nClick where the new drawing goes (it sits flush near the frame), Enter = beside: "))
               (progn (setq e (sh:addvp (car pick) (cadr pick) pc name))
@@ -1147,7 +1318,11 @@
     (progn
       (command "_.PSPACE")
       (setq r (sh:roles f)
-            new (if (cdr (sh:items lay '("divider"))) "column" "corner"))
+            new (cond ((= (nth 4 r) "corner") "column")
+                      ((= (nth 4 r) "column") "corner")
+                      ;; by the paper: corner from A2 up (the frame is the paper less the margins)
+                      ((>= (apply 'min (mapcar '- (cadr (sh:bbox (list f))) (car (sh:bbox (list f))))) 380.0) "column")
+                      (T "corner")))
       (sh:tag f (mapcar '(lambda (q) (cons 1000 (if q q ""))) (list (nth 0 r) (nth 1 r) (nth 2 r) (nth 3 r) new)))
       (sh:fit nil nil)
       (setq *sh-msg* (strcat (if *sh-msg* *sh-msg* "") (if (= new "corner") " - drawing under the title block too" " - title block column")))))
@@ -1162,6 +1337,9 @@
     (progn
       (command "_.PSPACE")
       (setq lay (getvar "CTAB") gap *sh-inset-gap*)
+      ;; units with their own title blocks: each drawing fills its own part already
+      (if (cdr (sh:unitkeys (vl-remove-if 'sh:inset-p (sh:items lay '("vp"))))) (setq lay nil))
+      (if lay (progn
       (foreach e (sh:items lay '("vp")) (sh:sync e) (sh:unclip e))
       (setq area (sh:bbox (sh:items lay '("frame"))) vps (sh:items lay '("vp")) sbox nil
             dv (sh:items lay '("divider")) o (sh:bbox dv))
@@ -1189,7 +1367,7 @@
         (foreach o others (if (and (< (nth 0 o) (nth 2 r)) (> (nth 2 o) (nth 0 r)) (<= (nth 3 o) (+ (nth 1 r) 1e-6)))
                             (setq rs (max rs (nth 3 o)))))
         (setq r (list (nth 0 r) rs (nth 2 r) (nth 3 r)))
-        (sh:setrect e r nil))
+        (sh:setrect e r nil))))
       (sh:fit nil nil)))
   (sh:end))
 
