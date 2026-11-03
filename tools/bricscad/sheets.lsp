@@ -424,8 +424,19 @@
                    (if (and (= (cdr (assoc 410 td)) (cdr (assoc 410 ed))) (null (sh:xd t1))
                             (<= (nth 0 bb) (car p) (nth 2 bb)) (<= (nth 1 bb) (cadr p) (nth 3 bb)))
                      (setq r (cons (list (mapcar '- p ip) td ip) r))))))))
+         ;; none in this drawing: the sheet number where it is in ori's title blocks
+         (if (and (null r) (setq b (assoc blk *sh-sheetno-default*)))
+           (setq r (list (list (cadr b) (list '(0 . "TEXT") '(100 . "AcDbEntity") (cons 8 (if (tblsearch "LAYER" (nth 5 b)) (nth 5 b) "0"))
+                                               '(100 . "AcDbText") (cons 10 (cadr b)) (cons 40 (caddr b)) '(1 . "1")
+                                               (cons 7 (if (tblsearch "STYLE" (nth 4 b)) (nth 4 b) "Standard")) '(100 . "AcDbText"))
+                               '(0.0 0.0 0.0)))))
          (setq *sh-loose* (cons (cons blk r) *sh-loose*))
          r)))
+
+;; sheet number text of the title blocks: (block offset-from-insertion height - style layer)
+(setq *sh-sheetno-default*
+      '(("shoval" (-26.0354 -12.6208 0.0) 2.12698 nil "NewStyle3" "0")
+        ("shoval_mavat" (-34.5230 -29.1909 0.0) 2.0 nil "Standard" "tree_survey")))
 
 ;; the next sheet number in this drawing (after the sheet numbers already placed)
 (defun sh:nextsheetno (/ ss i e n)
