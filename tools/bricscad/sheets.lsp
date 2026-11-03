@@ -1676,12 +1676,11 @@
   (if e
     (progn
       (setq n (if (= (cdr (assoc 0 (entget e))) "INSERT") (vla-get-EffectiveName (vlax-ename->vla-object e)) ""))
-      (sssetfirst nil ss)
-      (vla-SendCommand (sh:doc)
-        (if (or (member "strip" (sh:roles e)) (member (strcase n) '("SHOVAL" "SHOVAL_MAVAT"))
-                (member n (list (sh:blockfor "Construction") (sh:blockfor "Tabaa"))))
-          "_BEDIT "
-          "_EATTEDIT "))))
+      (if (or (member "strip" (sh:roles e)) (member (strcase n) '("SHOVAL" "SHOVAL_MAVAT"))
+              (member n (list (sh:blockfor "Construction") (sh:blockfor "Tabaa"))))
+        ;; BEDIT takes the selected insert (by name it would open the block dialog)
+        (progn (sssetfirst nil (ssadd e)) (command "_.BEDIT"))
+        (command "_.EATTEDIT" e))))
   (princ))
 
 (defun c:SHEETBLOCK (/ typ e blk d f)
