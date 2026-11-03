@@ -852,6 +852,22 @@
     (if (and o p) (setq r (cons (list (car o) (cadr o) (+ (car o) (cadr p)) (+ (cadr o) (caddr p))) r))))
   r)
 
+;; a complete sheet (frame, paper, viewport, title block, sheet number) for pick, beside the sheets of the layout
+(defun sh:sheetbeside (name pick typ / k wP hP blk u s paper o e)
+  (setq k (sh:k (cadr pick)) wP (* k (cadr (car pick))) hP (* k (caddr (car pick)))
+        blk (sh:blockfor typ) u (sh:nextsheet name) s (sh:stripsize blk)
+        paper (sh:choose wP hP (car s) (cadr s))
+        o (sh:placesheet name (cadr paper) (caddr paper)))
+  (vlax-ldata-put (sh:layobj name) u o)
+  (setq e (sh:addvp (car pick) (cadr pick) (list (+ (car o) (/ (cadr paper) 2.0)) (+ (cadr o) (/ (caddr paper) 2.0))) name))
+  (sh:addrole e u)
+  (if (and (/= blk "") (setq s (sh:addstrip blk name)))
+    (progn (sh:addrole s u)
+           (sh:move (list s) (car o) (cadr o))
+           (sh:addloose s name u)))
+  (sh:fitsheet u typ nil)
+  u)
+
 ;; place a new paper w x h beside the papers already there: it follows the cursor and goes flush (gap) next to
 ;; them when close; Enter = on the left, bottoms aligned. -> paper origin (x y)
 (defun sh:placesheet (lay w h / ps P gap go g c v u r tol cand d best bd)
@@ -1368,7 +1384,7 @@
   (if (and s (> s 0)) (setq *sh-last-scale* s))
   *sh-last-scale*)
 
-(defun c:SHEET (/ typ scale pick name doc lay ss i e blk auto s)
+(defun c:SHEET (/ typ scale pick name doc lay ss i e blk auto s n k)
   (sh:begin)
   (sh:gotomodel)
   (initget "Construction Tabaa None")
@@ -1398,7 +1414,24 @@
           (sh:addvp (car pick) (cadr pick) '(0.0 0.0) name)
           (sh:fit typ (caddr pick))
           (if (and auto *sh-paper*) (setq name (sh:rename name (sh:autoname *sh-paper* *sh-main-scale*))))
-          (setq *sh-last-layout* name)))))
+          (setq *sh-last-layout* name)
+          ;; more sheets on this layout, each a complete sheet beside the previous ones
+          (setq n (getint "\nHow many sheets on this layout <1>: ") i 1 scale (cadr pick))
+          (while (and n (< i n))
+            (setq i (1+ i))
+            (princ (strcat "\nSheet " (itoa i) " of " (itoa n) ":"))
+            (initget "Construction Tabaa None")
+            (setq k (getkword (strcat "\nTitle block [Construction/Tabaa/None] <" typ ">: ")))
+            (if k (setq typ k))
+            (setq *sh-last-scale* scale scale (sh:askscale))
+            (sh:gotomodel)
+            (if (and (setq pick (sh:pick typ scale nil)) (setq pick (sh:checkpick pick)))
+              (progn (setvar "CTAB" name) (command "_.PSPACE")
+                     (setq scale (cadr pick))
+                     (sh:sheetbeside name pick typ))
+              ;; Enter / Esc at the drawing: stop, the sheets made so far stay
+              (setq n i)))
+          (if (/= (getvar "CTAB") name) (setvar "CTAB" name))))))
   (sh:end))
 
 ;; "A3 1-250", or "A3 1-250 (2)" when taken
@@ -1447,19 +1480,8 @@
           (if (= mode "Sheet")
             ;; a complete sheet of its own (frame, paper, title block) beside the existing one, which stays as it is
             (progn
-              (setq *sh-cur* "" typ (car (sh:info name)) blk (sh:blockfor typ) *sh-cur* nil
-                    u (sh:nextsheet name)
-                    s (sh:stripsize blk)
-                    paper (sh:choose wP hP (car s) (cadr s))
-                    o (sh:placesheet name (cadr paper) (caddr paper)))
-              (vlax-ldata-put (sh:layobj name) u o)
-              (setq e (sh:addvp (car pick) (cadr pick) (list (+ (car o) (/ (cadr paper) 2.0)) (+ (cadr o) (/ (caddr paper) 2.0))) name))
-              (sh:addrole e u)
-              (if (and (/= blk "") (setq s (sh:addstrip blk name)))
-                (progn (sh:addrole s u)
-                       (sh:move (list s) (car o) (cadr o))
-                       (sh:addloose s name u)))
-              (sh:fitsheet u typ nil)
+              (setq *sh-cur* "" typ (car (sh:info name)) *sh-cur* nil)
+              (sh:sheetbeside name pick typ)
               (setq pc nil mode "Done")))
           (if (= mode "Unit")
             ;; a unit: the drawing with its own title block, beside the others (the paper grows)
