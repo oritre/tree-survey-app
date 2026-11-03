@@ -76,11 +76,36 @@
                    (cons 290 (if (caddr spec) 1 0)))))
   (car spec))
 
-;; millimeters on paper per model unit. Survey drawings are in meters even when INSUNITS says centimeters (5),
-;; so only millimeters (4) and inches (1) are taken from INSUNITS.
+;; millimeters on paper per model unit. INSUNITS 4 = mm, 1 = inch, other than 5 = meters. INSUNITS 5 (cm) is
+;; doubtful: survey drawings in Israeli grid coordinates are in meters even when it says cm, an architect's
+;; drawing in local coordinates is really in cm. Decided once per drawing (kept in the drawing): by the first
+;; drawing picked, or by the sheets already made.
 (defun sh:upm (/ u)
   (setq u (getvar "INSUNITS"))
-  (cond ((= u 4) 1.0) ((= u 1) 25.4) (T 1000.0)))
+  (cond ((= u 4) 1.0) ((= u 1) 25.4) ((/= u 5) 1000.0)
+        (*sh-upm*)
+        ((setq *sh-upm* (vlax-ldata-get "ORISHEET" "upm")))
+        ((setq *sh-upm* (sh:upm-from-sheets)))
+        ;; nothing picked yet: by where the model view is
+        ((and (= (getvar "TILEMODE") 1) (sh:itm-p (trans (getvar "VIEWCTR") 1 0))) 1000.0)
+        (T 10.0)))
+
+;; Israeli grid (ITM) coordinates in meters
+(defun sh:itm-p (p) (and (< 100000.0 (car p) 300000.0) (< 350000.0 (cadr p) 850000.0)))
+
+(defun sh:upm-from-sheets (/ ss x)
+  (if (and (setq ss (ssget "_X" (list '(0 . "VIEWPORT") (list -3 (list *sh-app*)))))
+           (setq x (sh:reals (ssname ss 0))))
+    (if (sh:itm-p (list (nth 1 x) (nth 2 x))) 1000.0 10.0)))
+
+;; at the first pick in a drawing with INSUNITS 5: meters for grid coordinates, otherwise centimeters
+(defun sh:setunits (cW)
+  (if (and (= (getvar "INSUNITS") 5) (null (vlax-ldata-get "ORISHEET" "upm")))
+    (progn
+      (setq *sh-upm* (if (sh:itm-p cW) 1000.0 10.0))
+      (vlax-ldata-put "ORISHEET" "upm" *sh-upm*)
+      (princ (strcat "\nModel units: " (if (= *sh-upm* 1000.0) "meters (grid coordinates)" "centimeters")
+                     " - (vlax-ldata-put \"ORISHEET\" \"upm\" 1000.0) for meters, 10.0 for cm")))))
 
 (defun sh:k (scale) (/ (sh:upm) (float scale)))
 
@@ -223,13 +248,33 @@
 
 ;; ---------- title block ----------
 
-(defun sh:stripsize (blk / c ref bb)
+;; the title block parts that belong together: a part far from the rest (a stray symbol in the block) is left
+;; out -> (kept dropped)
+(defun sh:cluster (ents / cs mx my keep drop bb c n)
+  (foreach e ents
+    (if (setq bb (sh:bbox (list e)))
+      (setq cs (cons (list e (/ (+ (car (car bb)) (car (cadr bb))) 2.0) (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)) cs))
+      (setq keep (cons e keep))))
+  (if cs
+    (progn
+      (setq n (/ (length cs) 2)
+            mx (nth n (vl-sort (mapcar 'cadr cs) '<))
+            my (nth n (vl-sort (mapcar 'caddr cs) '<)))
+      (foreach c cs
+        (if (and (< (abs (- (cadr c) mx)) 500.0) (< (abs (- (caddr c) my)) 500.0))
+          (setq keep (cons (car c) keep))
+          (setq drop (cons (car c) drop))))))
+  (list keep drop))
+
+(defun sh:stripsize (blk / c ref bb objs)
   (cond ((or (null blk) (= blk "")) '(0.0 0.0))
         ((setq c (assoc blk *sh-stripsize*)) (cdr c))
         ((sh:ensureblock blk)
          (setq ref (vla-InsertBlock (vla-get-ModelSpace (sh:doc)) (vlax-3d-point 0 0 0) blk 1.0 1.0 1.0 0.0))
-         (setq bb (sh:bbox (list (vlax-vla-object->ename ref))))
+         (setq objs (mapcar 'vlax-vla-object->ename (sh:list (vla-Explode ref))))
          (vla-Delete ref)
+         (setq bb (sh:bbox (car (sh:cluster objs))))
+         (foreach e objs (entdel e))
          (setq c (list (- (car (cadr bb)) (car (car bb))) (- (cadr (cadr bb)) (cadr (car bb)))))
          (setq *sh-stripsize* (cons (cons blk c) *sh-stripsize*))
          c)
@@ -242,6 +287,11 @@
       (setq ref (vla-InsertBlock (vla-get-PaperSpace (sh:doc)) (vlax-3d-point 0 0 0) blk 1.0 1.0 1.0 0.0))
       (setq objs (sh:list (vla-Explode ref)))
       (vla-Delete ref)
+      ;; parts far away from the title block are dropped
+      (setq objs (sh:cluster (mapcar 'vlax-vla-object->ename objs)))
+      (foreach e (cadr objs) (entdel e))
+      (if (cadr objs) (princ (strcat "\n" (itoa (length (cadr objs))) " part(s) of the title block far from the rest were left out.")))
+      (setq objs (mapcar 'vlax-ename->vla-object (car objs)))
       (foreach o objs
         (setq e (vlax-vla-object->ename o) ed (entget e) sub nil)
         (if (= (cdr (assoc 0 ed)) "TEXT")
@@ -575,7 +625,9 @@
     (progn
       (setq strip (sh:items lay '("strip")))
       (if strip
-        (setq sbb (sh:bbox strip)
+        (setq x (sh:cluster strip)
+              strip (progn (foreach e (cadr x) (entdel e)) (car x))
+              sbb (sh:bbox strip)
               sw (- (car (cadr sbb)) (car (car sbb)))
               shh (- (cadr (cadr sbb)) (cadr (car sbb))))
         (setq sw 0.0 shh 0.0))
@@ -905,6 +957,7 @@
   (setq scale (sh:askscale))
   (if (setq pick (sh:pick typ scale T))
     (progn
+      (sh:setunits (car (car pick)))
       (setq name (getstring T "\nLayout name <paper and scale, e.g. A3 1-250>: "))
       (if (= name "") (setq name (sh:newname) auto T))
       (if (member (strcase name) (mapcar 'strcase (layoutlist)))
@@ -955,6 +1008,7 @@
       (setq scale (sh:askscale))
       (if (setq pick (sh:pick nil scale nil))
         (progn
+          (sh:setunits (car (car pick)))
           (setvar "CTAB" name)
           (command "_.PSPACE")
           (setq vps (sh:items name '("vp")) bb (sh:bbox vps)
