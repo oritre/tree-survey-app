@@ -964,16 +964,28 @@
                       (sh:movevp (car mains) (- acx (/ (+ (car (car bb)) (car (cadr bb))) 2.0))
                                              (- acy (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))))
              (sh:setrect (car mains) carea T)))
-         (sh:setrect (car mains) area nil))
+         (sh:setrect (car mains) area nil)
+         ;; grown to the frame by fit (not by hand): back to its picked part when a second drawing comes
+         (if (not (member "filled" (sh:roles (car mains)))) (sh:addrole (car mains) "filled")))
         ;; insets placed by hand: nothing moves
         (insets nil)
         ;; several drawings: keep their sizes (also when stretched by hand) and center them; edges close to the
         ;; frame or the title block go onto it
         (T
-         (setq ab (sh:bbox vps))
+         (foreach e vps
+           (if (and (member "filled" (sh:roles e)) (not (sh:clip e)))
+             (progn (sh:setrect e (apply 'append (mapcar '(lambda (q) (list (car q) (cadr q))) (sh:core e))) T)
+                    (sh:tag e (append (mapcar '(lambda (r) (cons 1000 r)) (vl-remove "filled" (sh:roles e)))
+                                      (mapcar '(lambda (r) (cons 1040 r)) (sh:reals e)))))))
+         (setq vps (sh:items lay '("vp")) ab (sh:bbox vps))
          (if (and (<= (- (car (cadr ab)) (car (car ab))) (+ (- colL m) 0.5))
                   (<= (- (cadr (cadr ab)) (cadr (car ab))) (+ (- ph m m) 0.5)))
-           (setq bb ab))
+           (setq bb ab)
+           ;; they do not fit as they are (one of them still fills the frame of a smaller sheet): each back to
+           ;; its picked part, side by side as the picked parts are
+           (foreach e vps
+             (if (not (or (sh:clip e) (sh:inset-p e)))
+               (sh:setrect e (apply 'append (mapcar '(lambda (q) (list (car q) (cadr q))) (sh:core e))) T))))
          (setq dx (- acx (/ (+ (car (car bb)) (car (cadr bb))) 2.0))
                dy (- acy (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))
          (foreach e vps (sh:movevp e dx dy))
@@ -1539,6 +1551,13 @@
             (progn
               (initget "Left Right Above Below Click")
               (setq side (getkword "\nSide [Left/Right/Above/Below/Click] <Left>: "))
+              ;; a single drawing filled the frame: back to its picked part first, then the new one goes beside it
+              ;; and the sheet grows around both
+              (if (and vps (null (cdr vps)) (not (sh:inset-p (car vps))) (not (sh:poly-p (car vps))))
+                (progn (sh:sync (car vps))
+                       (setq vps (list (sh:unclip (car vps))))
+                       (sh:setrect (car vps) (apply 'append (mapcar '(lambda (q) (list (car q) (cadr q))) (sh:core (car vps)))) T)
+                       (setq bb (sh:bbox vps))))
               (if bb (setq cx (/ (+ (car (car bb)) (car (cadr bb))) 2.0) cy (/ (+ (cadr (car bb)) (cadr (cadr bb))) 2.0)))
               (setq pc (cond ((null bb) '(0.0 0.0))
                              ((= side "Right") (list (+ (car (cadr bb)) *sh-gap* (/ wP 2.0)) cy))
