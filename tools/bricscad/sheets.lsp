@@ -61,7 +61,7 @@
 (setq *sh-device* "Print As PDF.pc3")
 (if (not *sh-last-type*) (setq *sh-last-type* "Construction"))
 (if (not *sh-last-scale*) (setq *sh-last-scale* 250))
-(if (not *sh-last-paper*) (setq *sh-last-paper* "A3"))
+(if (not *sh-last-paper*) (setq *sh-last-paper* "A4"))   ; the moving frame starts from the smallest paper
 (if (not *sh-last-orient*) (setq *sh-last-orient* "L"))
 (setq *sh-stripsize* nil) ; cache: ((block x0 y0 x1 y1) ...)
 (setq *sh-loose* nil)     ; cache: ((block (offset entity-data insertion-point) ...) ...)
@@ -1419,11 +1419,8 @@
           (setq n (getint "\nHow many sheets on this layout <1>: ") i 1 scale (cadr pick))
           (while (and n (< i n))
             (setq i (1+ i))
-            (princ (strcat "\nSheet " (itoa i) " of " (itoa n) ":"))
-            (initget "Construction Tabaa None")
-            (setq k (getkword (strcat "\nTitle block [Construction/Tabaa/None] <" typ ">: ")))
-            (if k (setq typ k))
-            (setq *sh-last-scale* scale scale (sh:askscale))
+            ;; same title block and scale as the first sheet: only the drawing, its sheet number and its place
+            (princ (strcat "\nSheet " (itoa i) " of " (itoa n) " (" typ ", 1:" (itoa scale) "):"))
             (sh:gotomodel)
             (if (and (setq pick (sh:pick typ scale nil)) (setq pick (sh:checkpick pick)))
               (progn (setvar "CTAB" name) (command "_.PSPACE")
@@ -1709,15 +1706,20 @@
 ;; double-click on a block with attributes (the CUI double-click action of "Attribute Block" runs this):
 ;; a title block opens in the block editor, so editing it once changes every sheet; any other block opens the
 ;; attribute editor as before.
-(defun c:SHEETDBL (/ ss e n)
+(defun c:SHEETDBL (/ ss e n b)
   (setq ss (ssget "_I") e (if ss (ssname ss 0)))
   (if e
     (progn
       (setq n (if (= (cdr (assoc 0 (entget e))) "INSERT") (vla-get-EffectiveName (vlax-ename->vla-object e)) ""))
       (if (or (member "strip" (sh:roles e)) (member (strcase n) '("SHOVAL" "SHOVAL_MAVAT"))
               (member n (list (sh:blockfor "Construction") (sh:blockfor "Tabaa"))))
-        ;; BEDIT takes the selected insert (by name it would open the block dialog)
-        (progn (sssetfirst nil (ssadd e)) (command "_.BEDIT"))
+        ;; BEDIT takes the selected insert (by name it would open the block dialog); then zoom to the title block
+        ;; itself (parts far from it would zoom far out)
+        (progn (setq b (sh:stripbox n))
+               (sssetfirst nil (ssadd e))
+               (command "_.BEDIT")
+               (if (and b (= (getvar "BLOCKEDITOR") 1))
+                 (command "_.ZOOM" "_W" (list (- (nth 0 b) 10.0) (- (nth 1 b) 10.0)) (list (+ (nth 2 b) 10.0) (+ (nth 3 b) 10.0)))))
         (command "_.EATTEDIT" e))))
   (princ))
 
