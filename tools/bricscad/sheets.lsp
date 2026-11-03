@@ -21,6 +21,8 @@
 ;;; read the scale and view each viewport has now; a scale within 0.5% of a whole number is set exactly to it and
 ;;; written in the title block.
 ;;;   SHEETFILL   grow every drawing to the frame, the title block or the next drawing (scale and middle stay).
+;;;   SHEETUNITS  the drawing units (meters / centimeters / millimeters), kept in the drawing. Asked once by the
+;;;               first SHEET when not certain (local coordinates with INSUNITS 0 or 5); grid coordinates are meters.
 ;;;   SHEETSIZE   force a sheet size on the current sheet (A4..A0, landscape/portrait, custom W x H) or back to Auto.
 ;;;   SHEETBLOCK  choose which block is the title block of each type, and save it to the title block library.
 ;;;
@@ -82,13 +84,29 @@
 ;; drawing picked, or by the sheets already made.
 (defun sh:upm (/ u)
   (setq u (getvar "INSUNITS"))
-  (cond ((= u 4) 1.0) ((= u 1) 25.4) ((/= u 5) 1000.0)
-        (*sh-upm*)
+  (cond (*sh-upm*)
+        ;; chosen for this drawing (asked once, or SHEETUNITS)
         ((setq *sh-upm* (vlax-ldata-get "ORISHEET" "upm")))
+        ((= u 4) 1.0) ((= u 1) 25.4) ((not (member u '(0 5))) 1000.0)
         ((setq *sh-upm* (sh:upm-from-sheets)))
         ;; nothing picked yet: by where the model view is
         ((and (= (getvar "TILEMODE") 1) (sh:itm-p (trans (getvar "VIEWCTR") 1 0))) 1000.0)
-        (T 10.0)))
+        ((= u 5) 10.0)
+        (T 1000.0)))
+
+(setq *sh-unitnames* '(("Meters" . 1000.0) ("Centimeters" . 10.0) ("Millimeters" . 1.0)))
+
+(defun sh:unitname (v / r)
+  (foreach a *sh-unitnames* (if (equal (cdr a) v 1e-9) (setq r (car a))))
+  (if r r "Meters"))
+
+;; ask the drawing units and keep them in the drawing
+(defun sh:askunits (guess / k)
+  (initget "Meters Centimeters Millimeters")
+  (setq k (getkword (strcat "\nDrawing units [Meters/Centimeters/Millimeters] <" (sh:unitname guess) ">: ")))
+  (setq *sh-upm* (if k (cdr (assoc k *sh-unitnames*)) guess))
+  (vlax-ldata-put "ORISHEET" "upm" *sh-upm*)
+  *sh-upm*)
 
 ;; Israeli grid (ITM) coordinates in meters
 (defun sh:itm-p (p) (and (< 100000.0 (car p) 300000.0) (< 350000.0 (cadr p) 850000.0)))
@@ -98,14 +116,34 @@
            (setq x (sh:reals (ssname ss 0))))
     (if (sh:itm-p (list (nth 1 x) (nth 2 x))) 1000.0 10.0)))
 
-;; at the first pick in a drawing with INSUNITS 5: meters for grid coordinates, otherwise centimeters
-(defun sh:setunits (cW)
-  (if (and (= (getvar "INSUNITS") 5) (null (vlax-ldata-get "ORISHEET" "upm")))
+;; at the first pick in a drawing: grid coordinates are meters; with local coordinates and INSUNITS 0 or 5
+;; (unitless / cm) the units are not certain, so they are asked once (the guess is the default)
+(defun sh:setunits (cW / u)
+  (setq u (getvar "INSUNITS"))
+  (if (null (vlax-ldata-get "ORISHEET" "upm"))
+    (cond ((sh:itm-p cW) (setq *sh-upm* 1000.0) (vlax-ldata-put "ORISHEET" "upm" *sh-upm*))
+          ((member u '(0 5)) (sh:askunits (if (= u 5) 10.0 1000.0))))))
+
+;; the drawing would not fit on any paper (larger than a 900 x 5000 mm roll): the units are probably wrong.
+;; -> T to go on
+(defun sh:checksize (w h scale / k)
+  (if (or (> (max w h) *sh-roll-max-long*) (> (min w h) *sh-roll-max-short*))
     (progn
-      (setq *sh-upm* (if (sh:itm-p cW) 1000.0 10.0))
-      (vlax-ldata-put "ORISHEET" "upm" *sh-upm*)
-      (princ (strcat "\nModel units: " (if (= *sh-upm* 1000.0) "meters (grid coordinates)" "centimeters")
-                     " - (vlax-ldata-put \"ORISHEET\" \"upm\" 1000.0) for meters, 10.0 for cm")))))
+      (princ (strcat "\nAt 1:" (itoa scale) " this is " (rtos w 2 0) " x " (rtos h 2 0)
+                     " mm on paper, larger than any sheet. Units now: " (sh:unitname (sh:upm)) "."))
+      (initget "Units Continue Cancel")
+      (setq k (getkword "\n[Units - choose the drawing units/Continue/Cancel] <Units>: "))
+      (cond ((or (null k) (= k "Units")) (sh:askunits (sh:upm)) T)
+            ((= k "Continue") T)
+            (T nil)))
+    T))
+
+;; change the drawing units later
+(defun c:SHEETUNITS ()
+  (sh:begin)
+  (sh:askunits (sh:upm))
+  (princ (strcat "\nDrawing units: " (sh:unitname (sh:upm)) ". Run SHEETFIT on existing sheets to update their scale."))
+  (sh:end))
 
 (defun sh:k (scale) (/ (sh:upm) (float scale)))
 
@@ -955,9 +993,10 @@
   (setq typ (getkword (strcat "\nTitle block [Construction/Tabaa/None] <" *sh-last-type* ">: ")))
   (if typ (setq *sh-last-type* typ) (setq typ *sh-last-type*))
   (setq scale (sh:askscale))
-  (if (setq pick (sh:pick typ scale T))
+  (if (and (setq pick (sh:pick typ scale T))
+           (progn (sh:setunits (car (car pick)))
+                  (sh:checksize (* (sh:k (cadr pick)) (cadr (car pick))) (* (sh:k (cadr pick)) (caddr (car pick))) (cadr pick))))
     (progn
-      (sh:setunits (car (car pick)))
       (setq name (getstring T "\nLayout name <paper and scale, e.g. A3 1-250>: "))
       (if (= name "") (setq name (sh:newname) auto T))
       (if (member (strcase name) (mapcar 'strcase (layoutlist)))
@@ -1006,9 +1045,10 @@
       (setq name (car (vl-member-if '(lambda (x) (= (strcase x) (strcase name))) lays)))
       (sh:gotomodel)
       (setq scale (sh:askscale))
-      (if (setq pick (sh:pick nil scale nil))
+      (if (and (setq pick (sh:pick nil scale nil))
+               (progn (sh:setunits (car (car pick)))
+                      (sh:checksize (* (sh:k (cadr pick)) (cadr (car pick))) (* (sh:k (cadr pick)) (caddr (car pick))) (cadr pick))))
         (progn
-          (sh:setunits (car (car pick)))
           (setvar "CTAB" name)
           (command "_.PSPACE")
           (setq vps (sh:items name '("vp")) bb (sh:bbox vps)
@@ -1219,5 +1259,5 @@
     (princ "\nNo such block."))
   (sh:end))
 
-(princ "\nsheets.lsp loaded: SHEET, SHEETADD, SHEETSCALE, SHEETFIT, SHEETFILL, SHEETPAN, SHEETSIZE, SHEETBLOCK")
+(princ "\nsheets.lsp loaded: SHEET, SHEETADD, SHEETSCALE, SHEETFIT, SHEETFILL, SHEETPAN, SHEETWRAP, SHEETUNITS, SHEETSIZE, SHEETBLOCK")
 (princ)
