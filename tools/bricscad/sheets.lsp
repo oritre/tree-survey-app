@@ -1728,14 +1728,23 @@
   (sh:end))
 
 ;; PDF of every sheet on the current layout, each on its own paper, 1:1, its paper exactly (a Window picked by
-;; hand uses the first sheet's page setup and never falls exactly on the paper corners). Files next to the
-;; drawing: "<drawing> - <layout> - <sheet number or n>.pdf". The layout's page setup is the first sheet's again after.
-(defun c:SHEETPLOT (/ lay lo keys n o p f files pt0 pt1 no)
+;; hand uses the first sheet's page setup and never falls exactly on the paper corners). The file name is asked;
+;; with several sheets each gets " - <sheet number or n>". The layout's page setup is the first sheet's again after.
+(defun c:SHEETPLOT (/ lay lo keys n o p f files pt0 pt1 no f0 base)
   (sh:begin)
   (if (= (getvar "TILEMODE") 1)
     (princ "\nGo to the sheet layout first.")
     (progn
       (setq lay (getvar "CTAB") lo (sh:layobj lay) keys (sh:sheetkeys lay) n 0)
+      ;; where to save: asked (with several sheets, the name gets " - <sheet number>")
+      ;; in the folder used last time (or the drawing's)
+      (setq f0 (getenv "OriSheetPlotDir")
+            f0 (strcat (if (and f0 (vl-file-directory-p f0)) (strcat (vl-string-right-trim "\\/" f0) "\\") (getvar "DWGPREFIX"))
+                       (vl-filename-base (getvar "DWGNAME")) " - " lay ".pdf"))
+      (setq f0 (if *sh-plotfile* *sh-plotfile* (getfiled "Save the sheet PDF as" f0 "pdf" 1)))
+      (if (null f0) (exit))
+      (setenv "OriSheetPlotDir" (vl-filename-directory f0))
+      (setq base (strcat (vl-filename-directory f0) "\\" (vl-filename-base f0)))
       (setvar "BACKGROUNDPLOT" 0)
       (foreach k keys
         (setq n (1+ n) *sh-cur* k
@@ -1755,8 +1764,7 @@
             ;; the file is named by the sheet number, when there is one
             (setq no nil)
             (foreach s (sh:items lay '("strip")) (if (member "sheetno" (sh:roles s)) (setq no (cdr (assoc 1 (entget s))))))
-            (setq f (strcat (getvar "DWGPREFIX") (vl-filename-base (getvar "DWGNAME")) " - " lay " - "
-                            (if no no (itoa n)) ".pdf"))
+            (setq f (if (cdr keys) (strcat base " - " (if no no (itoa n)) ".pdf") (strcat base ".pdf")))
             (if (findfile f) (vl-file-delete f))
             (vl-catch-all-apply 'vla-PlotToFile (list (vla-get-Plot (sh:doc)) f))
             (if (findfile f) (setq files (cons f files))))))
