@@ -1668,6 +1668,22 @@
       (sh:fit (car info) s)))
   (sh:end))
 
+;; double-click on a block with attributes (the CUI double-click action of "Attribute Block" runs this):
+;; a title block opens in the block editor, so editing it once changes every sheet; any other block opens the
+;; attribute editor as before.
+(defun c:SHEETDBL (/ ss e n)
+  (setq ss (ssget "_I") e (if ss (ssname ss 0)))
+  (if e
+    (progn
+      (setq n (if (= (cdr (assoc 0 (entget e))) "INSERT") (vla-get-EffectiveName (vlax-ename->vla-object e)) ""))
+      (sssetfirst nil ss)
+      (vla-SendCommand (sh:doc)
+        (if (or (member "strip" (sh:roles e)) (member (strcase n) '("SHOVAL" "SHOVAL_MAVAT"))
+                (member n (list (sh:blockfor "Construction") (sh:blockfor "Tabaa"))))
+          "_BEDIT "
+          "_EATTEDIT "))))
+  (princ))
+
 (defun c:SHEETBLOCK (/ typ e blk d f)
   (sh:begin)
   (initget "Construction Tabaa")
