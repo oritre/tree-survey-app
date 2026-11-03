@@ -129,17 +129,32 @@
 
 ;; the drawing would not fit on any paper (larger than a 900 x 5000 mm roll): the units are probably wrong.
 ;; -> T to go on
-(defun sh:checksize (w h scale / k)
-  (if (or (> (max w h) *sh-roll-max-long*) (> (min w h) *sh-roll-max-short*))
-    (progn
-      (princ (strcat "\nAt 1:" (itoa scale) " this is " (rtos w 2 0) " x " (rtos h 2 0)
-                     " mm on paper, larger than any sheet. Units now: " (sh:unitname (sh:upm)) "."))
-      (initget "Units Continue Cancel")
-      (setq k (getkword "\n[Units - choose the drawing units/Continue/Cancel] <Units>: "))
-      (cond ((or (null k) (= k "Units")) (sh:askunits (sh:upm)) T)
-            ((= k "Continue") T)
-            (T nil)))
-    T))
+;; pick = (sel scale forced). Too big for any paper: offer a smaller scale (the first that fits), the units, go on
+;; anyway or cancel. -> the pick (maybe with another scale) or nil
+(defun sh:checkpick (pick / big w h s k sug n)
+  (setq big T)
+  (while (and pick big)
+    (setq s (cadr pick) w (* (sh:k s) (cadr (car pick))) h (* (sh:k s) (caddr (car pick))))
+    (if (or (> (max w h) *sh-roll-max-long*) (> (min w h) *sh-roll-max-short*))
+      (progn
+        (setq sug nil)
+        (foreach c *sh-scales*
+          (if (and (null sug) (> c s)
+                   (<= (* (max w h) (/ (float s) c)) *sh-roll-max-long*) (<= (* (min w h) (/ (float s) c)) *sh-roll-max-short*))
+            (setq sug c)))
+        (princ (strcat "\nAt 1:" (itoa s) " the drawing is " (rtos w 2 0) " x " (rtos h 2 0)
+                       " mm on paper, larger than any sheet (roll up to 900 x 5000). Units: " (sh:unitname (sh:upm)) "."))
+        (initget "Scale Units Continue Cancel")
+        (setq k (getkword (strcat "\n[Scale" (if sug (strcat " 1:" (itoa sug)) "") "/Units/Continue/Cancel] <Scale>: ")))
+        (cond ((or (null k) (= k "Scale"))
+               (setq n (getint (strcat "\nScale 1: <" (itoa (if sug sug (* 2 s))) ">: ")))
+               (setq pick (list (car pick) (if (and n (> n 0)) n (if sug sug (* 2 s))) (caddr pick))))
+              ((= k "Units") (sh:askunits (sh:upm)))
+              ((= k "Continue") (setq big nil))
+              (T (setq pick nil))))
+      (setq big nil)))
+  (if pick (setq *sh-last-scale* (cadr pick)))
+  pick)
 
 ;; change the drawing units later
 (defun c:SHEETUNITS ()
@@ -1362,7 +1377,7 @@
   (setq scale (sh:askscale))
   (if (and (setq pick (sh:pick typ scale T))
            (progn (sh:setunits (car (car pick)))
-                  (sh:checksize (* (sh:k (cadr pick)) (cadr (car pick))) (* (sh:k (cadr pick)) (caddr (car pick))) (cadr pick))))
+                  (setq pick (sh:checkpick pick))))
     (progn
       (setq name (getstring T "\nLayout name <paper and scale, e.g. A3 1-250>: "))
       (if (= name "") (setq name (sh:newname) auto T))
@@ -1414,8 +1429,9 @@
       (setq scale (sh:askscale))
       (if (and (setq pick (sh:pick nil scale nil))
                (progn (sh:setunits (car (car pick)))
-                      (sh:checksize (* (sh:k (cadr pick)) (cadr (car pick))) (* (sh:k (cadr pick)) (caddr (car pick))) (cadr pick))))
+                      (setq pick (sh:checkpick pick))))
         (progn
+          (setq scale (cadr pick))
           (setvar "CTAB" name)
           (command "_.PSPACE")
           (setq *sh-cur* "" vps (sh:items name '("vp")) bb (sh:bbox vps)
