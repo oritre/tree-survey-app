@@ -33,8 +33,10 @@
 ;;; viewport is turned the same way (like UCS + PLAN). Option Rotate: pick two points of a line that should be
 ;;; horizontal on the sheet.
 ;;;
-;;; The title block is inserted at paper size (1 drawing unit = 1 mm) and exploded, so its texts can be edited on
-;;; each sheet. The scale text ("1:250"), the paper size text ("A4"..) and the dates are filled in by themselves.
+;;; The title block is inserted at paper size (1 drawing unit = 1 mm) as one block insert, so editing the block
+;;; changes every sheet. Its scale text ("1:250"), paper size text ("A4"..) and dates become attributes (SCALE,
+;;; SIZE, DATE, DATE2) once per drawing, and are filled in by themselves. Older sheets with an exploded title block
+;;; get the block back on SHEETFIT. Parts of the block far from the rest are ignored when placing it.
 ;;; Model units: meters (any INSUNITS except 4 = millimeters and 1 = inches; 5 is taken as meters too).
 ;;; Plotter: "Print As PDF.pc3" (or the first plotter with PDF in its name). For a roll sheet the plotter needs a
 ;;; paper of that size; if it has none you get a message (add a custom paper size in the plotter configuration).
@@ -246,13 +248,15 @@
 (defun sh:col (sw) (if (> sw 0) (+ sw (* 2 *sh-inset*)) 0.0))
 
 ;; usable drawing area of a paper: (w h)
-(defun sh:usable (name pw ph sw shh / m p)
-  (setq m (sh:margin name pw ph) p (sh:pad name pw ph))
-  (list (- pw (* 2 m) (* 2 p) (sh:col sw)) (- ph (* 2 m) (* 2 p))))
+;; drawing area inside the frame, beside the title block (the viewport fills it, so no inner padding)
+(defun sh:usable (name pw ph sw shh / m)
+  (setq m (sh:margin name pw ph))
+  (list (- pw (* 2 m) (sh:col sw)) (- ph (* 2 m))))
 
+;; the picked part fits the drawing area, 3% allowed over (a little more around it is shown anyway)
 (defun sh:fits (name pw ph gw gh sw shh / u)
   (setq u (sh:usable name pw ph sw shh))
-  (and (<= gw (+ (car u) 1e-6)) (<= gh (+ (cadr u) 1e-6))
+  (and (<= gw (* 1.03 (car u))) (<= gh (* 1.03 (cadr u)))
        (<= (+ shh (* 2 *sh-inset*)) (- ph (* 2 (sh:margin name pw ph))))))
 
 (defun sh:up10 (v) (* 10.0 (fix (+ (/ v 10.0) 0.9999))))
@@ -304,50 +308,110 @@
           (setq drop (cons (car c) drop))))))
   (list keep drop))
 
-(defun sh:stripsize (blk / c ref bb objs)
-  (cond ((or (null blk) (= blk "")) '(0.0 0.0))
+;; The title block stays one block insert on every sheet, so a change in the block shows on all sheets. The
+;; texts that differ per sheet are attributes: SCALE ("1:250"), SIZE ("A4".."A0"), DATE / DATE2 (dates).
+;; sh:prepblock turns those texts of the block definition into attributes, once per drawing (ATTSYNC keeps the
+;; inserts that are already there).
+(defun sh:prepblock (blk / bd o s tag todo n ad i)
+  (setq bd (vla-Item (vla-get-Blocks (sh:doc)) blk))
+  (vlax-for o bd
+    (if (and (= (vla-get-ObjectName o) "AcDbAttributeDefinition") (= (strcase (vla-get-TagString o)) "SCALE"))
+      (setq n T)))
+  (if (not n)
+    (progn
+      (setq n 0)
+      (vlax-for o bd
+        (if (= (vla-get-ObjectName o) "AcDbText")
+          (progn
+            (setq s (vla-get-TextString o) tag nil)
+            (cond ((and (= s "1:250") (not (assoc "SCALE" todo))) (setq tag "SCALE"))
+                  ((and (member s '("A4" "A3" "A2" "A1" "A0")) (not (assoc "SIZE" todo))) (setq tag "SIZE"))
+                  ((or (= s "XX/XX/XXXX") (wcmatch s "#*/#*/####"))
+                   (setq tag (if (assoc "DATE" todo) (strcat "DATE" (itoa (+ 2 (setq n (1+ n))))) "DATE"))
+                   (if (= tag "DATE3") (setq tag "DATE2"))))
+            (if tag (setq todo (cons (cons tag o) todo))))))
+      (foreach t1 todo
+        (setq o (cdr t1)
+              ad (vla-AddAttribute bd (vla-get-Height o) acAttributeModeNormal (car t1)
+                                   (vla-get-InsertionPoint o) (car t1) (vla-get-TextString o)))
+        (foreach p '(StyleName ScaleFactor Rotation ObliqueAngle Layer Color)
+          (vl-catch-all-apply 'vlax-put-property (list ad p (vlax-get-property o p))))
+        (if (/= (vla-get-Alignment o) acAlignmentLeft)
+          (progn (vla-put-Alignment ad (vla-get-Alignment o))
+                 (vla-put-TextAlignmentPoint ad (vla-get-TextAlignmentPoint o))))
+        (vla-Delete o))
+      (if todo (vl-catch-all-apply 'vl-cmdf (list "_.ATTSYNC" "_N" blk)))))
+  T)
+
+;; box of the title block around its insertion point (block units = mm), without far stray parts: (x0 y0 x1 y1)
+(defun sh:stripbox (blk / c ref bb objs)
+  (cond ((or (null blk) (= blk "")) nil)
         ((setq c (assoc blk *sh-stripsize*)) (cdr c))
-        ((sh:ensureblock blk)
+        ((and (sh:ensureblock blk) (sh:prepblock blk))
          (setq ref (vla-InsertBlock (vla-get-ModelSpace (sh:doc)) (vlax-3d-point 0 0 0) blk 1.0 1.0 1.0 0.0))
          (setq objs (mapcar 'vlax-vla-object->ename (sh:list (vla-Explode ref))))
          (vla-Delete ref)
          (setq bb (sh:bbox (car (sh:cluster objs))))
          (foreach e objs (entdel e))
-         (setq c (list (- (car (cadr bb)) (car (car bb))) (- (cadr (cadr bb)) (cadr (car bb)))))
+         (setq c (list (car (car bb)) (cadr (car bb)) (car (cadr bb)) (cadr (cadr bb))))
          (setq *sh-stripsize* (cons (cons blk c) *sh-stripsize*))
-         c)
-        (T '(0.0 0.0))))
+         c)))
 
-;; insert + explode the title block in the current layout, tag its parts, fill scale / size / date
-(defun sh:addstrip (blk lay / ref objs e ed s sub)
-  (if (sh:ensureblock blk)
+(defun sh:stripsize (blk / b)
+  (if (setq b (sh:stripbox blk)) (list (- (nth 2 b) (nth 0 b)) (- (nth 3 b) (nth 1 b))) '(0.0 0.0)))
+
+;; the title block parts on a sheet -> their box ((x0 y0) (x1 y1))
+(defun sh:stripbb (strip / e ip b)
+  (if (and strip (null (cdr strip)) (= (cdr (assoc 0 (entget (setq e (car strip))))) "INSERT")
+           (setq b (sh:stripbox (vla-get-EffectiveName (vlax-ename->vla-object e)))))
+    (progn (setq ip (cdr (assoc 10 (entget e))))
+           (list (list (+ (car ip) (nth 0 b)) (+ (cadr ip) (nth 1 b)) 0.0) (list (+ (car ip) (nth 2 b)) (+ (cadr ip) (nth 3 b)) 0.0)))
+    (sh:bbox (car (sh:cluster strip)))))
+
+(defun sh:attset (ins tag val)
+  (foreach a (vlax-invoke (vlax-ename->vla-object ins) 'GetAttributes)
+    (if (wcmatch (strcase (vla-get-TagString a)) tag) (vla-put-TextString a val))))
+
+(defun sh:attget (ins tag / r)
+  (foreach a (vlax-invoke (vlax-ename->vla-object ins) 'GetAttributes)
+    (if (= (strcase (vla-get-TagString a)) tag) (setq r (vla-get-TextString a))))
+  r)
+
+;; insert the title block in the current layout (one block insert), dates filled. Returns the insert.
+(defun sh:addstrip (blk lay / ref e)
+  (if (and (sh:ensureblock blk) (sh:prepblock blk))
     (progn
-      (setq ref (vla-InsertBlock (vla-get-PaperSpace (sh:doc)) (vlax-3d-point 0 0 0) blk 1.0 1.0 1.0 0.0))
-      (setq objs (sh:list (vla-Explode ref)))
-      (vla-Delete ref)
-      ;; parts far away from the title block are dropped
-      (setq objs (sh:cluster (mapcar 'vlax-vla-object->ename objs)))
-      (foreach e (cadr objs) (entdel e))
-      (if (cadr objs) (princ (strcat "\n" (itoa (length (cadr objs))) " part(s) of the title block far from the rest were left out.")))
-      (setq objs (mapcar 'vlax-ename->vla-object (car objs)))
-      (foreach o objs
-        (setq e (vlax-vla-object->ename o) ed (entget e) sub nil)
-        (if (= (cdr (assoc 0 ed)) "TEXT")
-          (progn
-            (setq s (cdr (assoc 1 ed)))
-            (cond ((= s "1:250") (setq sub "scale"))
-                  ((member s '("A4" "A3" "A2" "A1" "A0")) (setq sub "size"))
-                  ((or (= s "XX/XX/XXXX") (wcmatch s "#*/#*/####")) (setq sub "date")
-                   (entmod (subst (cons 1 (sh:today)) (assoc 1 ed) ed))))))
-        (sh:tag e (if sub (list (cons 1000 "strip") (cons 1000 sub)) (list (cons 1000 "strip")))))
-      T)
+      (setq ref (vla-InsertBlock (vla-get-PaperSpace (sh:doc)) (vlax-3d-point 0 0 0) blk 1.0 1.0 1.0 0.0)
+            e (vlax-vla-object->ename ref))
+      (vla-put-Layer ref "0")
+      (sh:tag e (list (cons 1000 "strip")))
+      (sh:attset e "DATE*" (sh:today))
+      e)
     (progn (princ (strcat "\nTitle block \"" blk "\" not found in this drawing or in the library (SHEETBLOCK)."))
            nil)))
 
+;; sheets made by older versions have the title block exploded: put the block back, with the values they had
+(defun sh:migrate (lay typ strip / old date e blk)
+  (if (vl-remove-if '(lambda (s) (= (cdr (assoc 0 (entget s))) "INSERT")) strip)
+    (progn
+      (foreach s strip
+        (if (= (cadr (sh:roles s)) "date") (setq date (cdr (assoc 1 (entget s))))))
+      (setq old (sh:stripbb strip) blk (sh:blockfor typ))
+      (if (and (/= blk "") (setq e (sh:addstrip blk lay)))
+        (progn
+          (foreach s strip (entdel s))
+          (if date (sh:attset e "DATE*" date))
+          ;; where the old one was (fit puts it in the corner anyway)
+          (sh:move (list e) (- (car (cadr old)) (car (cadr (sh:stripbb (list e)))))
+                            (- (cadr (cadr old)) (cadr (cadr (sh:stripbb (list e))))))
+          (setq strip (list e))))))
+  strip)
+
 (defun sh:settext (lay sub val / ed)
   (foreach e (sh:items lay '("strip"))
-    (if (= (cadr (sh:roles e)) sub)
-      (progn (setq ed (entget e)) (entmod (subst (cons 1 val) (assoc 1 ed) ed))))))
+    (cond ((= (cdr (assoc 0 (entget e))) "INSERT") (sh:attset e (strcase sub) val))
+          ((= (cadr (sh:roles e)) sub)
+           (setq ed (entget e)) (entmod (subst (cons 1 val) (assoc 1 ed) ed))))))
 
 ;; ---------- plot settings ----------
 
@@ -661,11 +725,9 @@
   (if (null vps)
     (princ "\nNo drawing on this sheet. Use SHEET or SHEETADD.")
     (progn
-      (setq strip (sh:items lay '("strip")))
+      (setq strip (sh:migrate lay typ (sh:items lay '("strip"))))
       (if strip
-        (setq x (sh:cluster strip)
-              strip (progn (foreach e (cadr x) (entdel e)) (car x))
-              sbb (sh:bbox strip)
+        (setq sbb (sh:stripbb strip)
               sw (- (car (cadr sbb)) (car (car sbb)))
               shh (- (cadr (cadr sbb)) (cadr (car sbb))))
         (setq sw 0.0 shh 0.0))
@@ -1249,6 +1311,7 @@
     (progn
       (setenv (strcat "OriSheet" typ) blk)
       (setq *sh-stripsize* nil)
+      (sh:prepblock blk)
       (princ (strcat "\n" typ " title block = " blk))
       (if (setq d (sh:libdir))
         (progn
