@@ -1249,6 +1249,14 @@
       (setq a (angle (trans p1 1 0) (trans p2 1 0)))
       (setq names '("ANGBASE" "ANGDIR" "AUNITS") old (mapcar 'getvar names))
       (mapcar 'setvar names '(0.0 0 0))
+      ;; the model's UCS and view as they were, put back when the drawing has been picked
+      (if (not *sh-saved*)
+        (progn
+          (if (tblsearch "UCS" "ORISHEET_TMP") (command "_.UCS" "_D" "ORISHEET_TMP"))
+          (command "_.UCS" "_S" "ORISHEET_TMP")
+          (if (tblsearch "VIEW" "ORISHEET_TMP") (command "_.-VIEW" "_D" "ORISHEET_TMP"))
+          (command "_.-VIEW" "_S" "ORISHEET_TMP")
+          (setq *sh-saved* (if (= (getvar "WORLDUCS") 1) "world" "named"))))
       (command "_.UCS" "_W")
       (command "_.UCS" "_Z" (rtos (* a (/ 180.0 pi)) 2 10))
       (command "_.PLAN" "_C")
@@ -1343,13 +1351,27 @@
   (setvar "OSMODE" *sh-oldosmode*)
   ;; center to WCS now, while the model UCS is current (the layout has its own UCS)
   (if (listp r) (setq r (cons (cons (trans (car (car r)) 1 0) (cdr (car r))) (cdr r))))
+  (sh:restoremodel)
   (if (= r 'cancel) nil r))
+
+;; Rotate turned the model's UCS and view: back as they were (the sheet keeps the turn)
+(defun sh:restoremodel (/ names old)
+  (if (and *sh-saved* (= (getvar "TILEMODE") 1))
+    (progn
+      (setq names '("ANGBASE" "ANGDIR" "AUNITS") old (mapcar 'getvar names))
+      (mapcar 'setvar names '(0.0 0 0))
+      (if (= *sh-saved* "world") (command "_.UCS" "_W") (command "_.UCS" "_R" "ORISHEET_TMP"))
+      (command "_.-VIEW" "_R" "ORISHEET_TMP")
+      (command "_.UCS" "_D" "ORISHEET_TMP")
+      (command "_.-VIEW" "_D" "ORISHEET_TMP")
+      (mapcar 'setvar names old)))
+  (setq *sh-saved* nil))
 
 ;; ---------- commands ----------
 
 (defun sh:begin ()
   (setq *sh-olderr* *error* *sh-oldecho* (getvar "CMDECHO") *sh-oldosmode* (getvar "OSMODE"))
-  (setq *error* sh:error *sh-msg* nil *sh-paper* nil *sh-cur* nil)
+  (setq *error* sh:error *sh-msg* nil *sh-paper* nil *sh-cur* nil *sh-saved* nil)
   (setvar "CMDECHO" 0)
   (vla-StartUndoMark (sh:doc)))
 
@@ -1369,6 +1391,8 @@
   (vl-catch-all-apply 'vla-EndUndoMark (list (sh:doc)))
   (if *sh-oldecho* (setvar "CMDECHO" *sh-oldecho*))
   (if *sh-oldosmode* (setvar "OSMODE" *sh-oldosmode*))
+  ;; cancelled after Rotate: the model's UCS and view back too
+  (vl-catch-all-apply 'sh:restoremodel nil)
   (setq *error* *sh-olderr* *sh-cur* nil)
   (princ))
 
