@@ -1727,6 +1727,47 @@
       (sh:fit (car info) s)))
   (sh:end))
 
+;; PDF of every sheet on the current layout, each on its own paper, 1:1, its paper exactly (a Window picked by
+;; hand uses the first sheet's page setup and never falls exactly on the paper corners). Files next to the
+;; drawing: "<drawing> - <layout> - <sheet number or n>.pdf". The layout's page setup is the first sheet's again after.
+(defun c:SHEETPLOT (/ lay lo keys n o p f files pt0 pt1 no)
+  (sh:begin)
+  (if (= (getvar "TILEMODE") 1)
+    (princ "\nGo to the sheet layout first.")
+    (progn
+      (setq lay (getvar "CTAB") lo (sh:layobj lay) keys (sh:sheetkeys lay) n 0)
+      (setvar "BACKGROUNDPLOT" 0)
+      (foreach k keys
+        (setq n (1+ n) *sh-cur* k
+              o (if (= k "") '(0.0 0.0) (vlax-ldata-get lo k))
+              p (sh:forced (caddr (sh:info lay))))
+        (if (and o p)
+          (progn
+            ;; plotter and paper of this sheet, the window = its paper
+            (sh:plot (cadr p) (caddr p))
+            (setq pt0 (vlax-make-safearray vlax-vbDouble '(0 . 1)) pt1 (vlax-make-safearray vlax-vbDouble '(0 . 1)))
+            (vlax-safearray-fill pt0 (list (car o) (cadr o)))
+            (vlax-safearray-fill pt1 (list (+ (car o) (cadr p)) (+ (cadr o) (caddr p))))
+            (vla-SetWindowToPlot lo pt0 pt1)
+            (vla-put-PlotType lo acWindow)
+            (vla-put-StandardScale lo ac1_1)
+            (vla-put-CenterPlot lo :vlax-false)
+            ;; the file is named by the sheet number, when there is one
+            (setq no nil)
+            (foreach s (sh:items lay '("strip")) (if (member "sheetno" (sh:roles s)) (setq no (cdr (assoc 1 (entget s))))))
+            (setq f (strcat (getvar "DWGPREFIX") (vl-filename-base (getvar "DWGNAME")) " - " lay " - "
+                            (if no no (itoa n)) ".pdf"))
+            (if (findfile f) (vl-file-delete f))
+            (vl-catch-all-apply 'vla-PlotToFile (list (vla-get-Plot (sh:doc)) f))
+            (if (findfile f) (setq files (cons f files))))))
+      ;; the layout's page setup back to the first sheet
+      (setq *sh-cur* "" p (sh:forced (caddr (sh:info lay))))
+      (if p (sh:plot (cadr p) (caddr p)))
+      (setq *sh-cur* nil)
+      (setq *sh-msg* (strcat "\n" (itoa (length files)) " PDF file(s):"
+                             (apply 'strcat (mapcar '(lambda (x) (strcat "\n  " x)) (reverse files)))))))
+  (sh:end))
+
 ;; double-click on a block with attributes (the CUI double-click action of "Attribute Block" runs this):
 ;; a title block opens in the block editor, so editing it once changes every sheet; any other block opens the
 ;; attribute editor as before.
