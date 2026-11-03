@@ -63,7 +63,8 @@
 (if (not *sh-last-scale*) (setq *sh-last-scale* 250))
 (if (not *sh-last-paper*) (setq *sh-last-paper* "A3"))
 (if (not *sh-last-orient*) (setq *sh-last-orient* "L"))
-(setq *sh-stripsize* nil) ; cache: ((block w h) ...)
+(setq *sh-stripsize* nil) ; cache: ((block x0 y0 x1 y1) ...)
+(setq *sh-loose* nil)     ; cache: ((block (offset entity-data insertion-point) ...) ...)
 
 ;; ---------- small helpers ----------
 
@@ -177,6 +178,11 @@
 ;; through ActiveX: entmod does not keep xdata on viewports in BricsCAD
 (defun sh:tag (e vals / l codes data)
   (if (not (tblsearch "APPID" *sh-app*)) (regapp *sh-app*))
+  ;; made while fitting a sheet beside the first one: belongs to that sheet
+  (if (and *sh-cur* (wcmatch *sh-cur* "s:*") (not (member (cons 1000 *sh-cur*) vals)))
+    ;; after the other roles (a frame's roles are read by position), before the numbers
+    (setq vals (append (vl-remove-if-not '(lambda (q) (= (car q) 1000)) vals) (list (cons 1000 *sh-cur*))
+                       (vl-remove-if '(lambda (q) (= (car q) 1000)) vals))))
   (setq l (cons (cons 1001 *sh-app*) vals))
   (setq codes (vlax-make-safearray vlax-vbInteger (cons 0 (1- (length l))))
         data (vlax-make-safearray vlax-vbVariant (cons 0 (1- (length l)))))
@@ -193,12 +199,20 @@
 (defun sh:reals (e) (mapcar 'cdr (vl-remove-if-not '(lambda (x) (= (car x) 1040)) (sh:xd e))))
 
 ;; tagged entities of a layout whose first role is in roles (nil = all)
+;; (only those of the sheet *sh-cur* when it is set: "" the first sheet, "s:2".. sheets added beside it)
 (defun sh:items (lay roles / ss i e r)
   (if (setq ss (ssget "_X" (list (cons 410 lay) (list -3 (list *sh-app*)))))
     (repeat (setq i (sslength ss))
       (setq e (ssname ss (setq i (1- i))))
-      (if (or (null roles) (member (car (sh:roles e)) roles)) (setq r (cons e r)))))
+      (if (and (or (null roles) (member (car (sh:roles e)) roles))
+               (or (null *sh-cur*) (= (sh:sheetkey e) *sh-cur*)))
+        (setq r (cons e r)))))
   r)
+
+;; the sheet an item belongs to: "" or "s:2", "s:3".. (a complete sheet beside the first one, same layout)
+(defun sh:sheetkey (e / r)
+  (setq r (car (vl-remove-if-not '(lambda (q) (wcmatch q "s:*")) (sh:roles e))))
+  (if r r ""))
 
 ;; ---------- geometry ----------
 
@@ -362,7 +376,8 @@
 
 ;; the title block parts on a sheet -> their box ((x0 y0) (x1 y1))
 (defun sh:stripbb (strip / e ip b)
-  (if (and strip (null (cdr strip)) (= (cdr (assoc 0 (entget (setq e (car strip))))) "INSERT")
+  (setq e (car (vl-remove-if-not '(lambda (s) (= (cdr (assoc 0 (entget s))) "INSERT")) strip)))
+  (if (and e (null (vl-remove-if '(lambda (s) (or (equal s e) (sh:loose-p s))) strip))
            (setq b (sh:stripbox (vla-get-EffectiveName (vlax-ename->vla-object e)))))
     (progn (setq ip (cdr (assoc 10 (entget e))))
            (list (list (+ (car ip) (nth 0 b)) (+ (cadr ip) (nth 1 b)) 0.0) (list (+ (car ip) (nth 2 b)) (+ (cadr ip) (nth 3 b)) 0.0)))
@@ -390,8 +405,63 @@
     (progn (princ (strcat "\nTitle block \"" blk "\" not found in this drawing or in the library (SHEETBLOCK)."))
            nil)))
 
+;; Loose texts that lie on the title block in the drawing but are not part of the block (the sheet number in the
+;; gap of "גיליון    מתוך 3", notes): taken from the first insert of the block that has some, as
+;; ((offset-from-insertion-point entity-data) ...). Kept per drawing.
+(defun sh:loosetexts (blk / ss tx i j e ed ip b bb t1 td p r)
+  (cond ((assoc blk *sh-loose*) (cdr (assoc blk *sh-loose*)))
+        (T
+         (if (and (setq b (sh:stripbox blk))
+                  (setq ss (ssget "_X" (list '(0 . "INSERT") (cons 2 blk))))
+                  (setq tx (ssget "_X" '((0 . "TEXT,MTEXT")))))
+           (repeat (setq i (sslength ss))
+             (setq e (ssname ss (setq i (1- i))) ed (entget e) ip (cdr (assoc 10 ed)))
+             (if (and (null r) (null (sh:xd e)) (equal (cdr (assoc 41 ed)) 1.0 1e-6) (equal (cdr (assoc 50 ed)) 0.0 1e-6))
+               (progn
+                 (setq bb (list (+ (car ip) (nth 0 b)) (+ (cadr ip) (nth 1 b)) (+ (car ip) (nth 2 b)) (+ (cadr ip) (nth 3 b))))
+                 (repeat (setq j (sslength tx))
+                   (setq t1 (ssname tx (setq j (1- j))) td (entget t1) p (cdr (assoc 10 td)))
+                   (if (and (= (cdr (assoc 410 td)) (cdr (assoc 410 ed))) (null (sh:xd t1))
+                            (<= (nth 0 bb) (car p) (nth 2 bb)) (<= (nth 1 bb) (cadr p) (nth 3 bb)))
+                     (setq r (cons (list (mapcar '- p ip) td ip) r))))))))
+         (setq *sh-loose* (cons (cons blk r) *sh-loose*))
+         r)))
+
+;; the next sheet number in this drawing (after the sheet numbers already placed)
+(defun sh:nextsheetno (/ ss i e n)
+  (setq n 0)
+  (if (setq ss (ssget "_X" (list '(0 . "TEXT") (list -3 (list *sh-app*)))))
+    (repeat (setq i (sslength ss))
+      (setq e (ssname ss (setq i (1- i))))
+      (if (member "sheetno" (sh:roles e)) (setq n (max n (atoi (cdr (assoc 1 (entget e)))))))))
+  (1+ n))
+
+;; copy the loose texts onto the title block insert ins; a text that is just a number is the sheet number:
+;; asked (default: the next one). Tagged as part of the title block, so they move with it.
+(defun sh:addloose (ins lay unit / blk ip lst no ed d new e)
+  (setq blk (vla-get-EffectiveName (vlax-ename->vla-object ins)) ip (cdr (assoc 10 (entget ins))))
+  (foreach l (sh:loosetexts blk)
+    (setq ed (cadr l) d (mapcar '- ip (caddr l)))
+    (if (wcmatch (cdr (assoc 1 ed)) "#,##,###")
+      (progn
+        (if (null no)
+          (progn (setq no (getstring (strcat "\nSheet number <" (itoa (sh:nextsheetno)) ">: ")))
+                 (if (= no "") (setq no (itoa (sh:nextsheetno))))))
+        (setq ed (subst (cons 1 no) (assoc 1 ed) ed))))
+    ;; same text, moved by the offset between the model title block and this one, in this layout
+    (setq new (vl-remove-if '(lambda (q) (member (car q) '(-1 5 330 360 102 -3 67 410))) ed))
+    (setq new (mapcar '(lambda (q) (if (member (car q) '(10 11)) (cons (car q) (mapcar '+ (cdr q) d)) q)) new))
+    (if (entmake (append new (list '(67 . 1) (cons 410 lay))))
+      (progn
+        (setq e (entlast))
+        (sh:tag e (append (list (cons 1000 "strip") (cons 1000 (if (= (cdr (assoc 1 new)) no) "sheetno" "loose")))
+                          (if (and unit (/= unit "")) (list (cons 1000 unit)))))))))
+
 ;; sheets made by older versions have the title block exploded: put the block back, with the values they had
-(defun sh:migrate (lay typ strip / old date e blk)
+(defun sh:loose-p (e) (or (member "sheetno" (sh:roles e)) (member "loose" (sh:roles e))))
+
+(defun sh:migrate (lay typ strip / old date e blk loose)
+  (setq loose (vl-remove-if-not 'sh:loose-p strip) strip (vl-remove-if 'sh:loose-p strip))
   (if (vl-remove-if '(lambda (s) (= (cdr (assoc 0 (entget s))) "INSERT")) strip)
     (progn
       (foreach s strip
@@ -405,7 +475,7 @@
           (sh:move (list e) (- (car (cadr old)) (car (cadr (sh:stripbb (list e)))))
                             (- (cadr (cadr old)) (cadr (cadr (sh:stripbb (list e))))))
           (setq strip (list e))))))
-  strip)
+  (append strip loose))
 
 (defun sh:settext (lay sub val / ed)
   (foreach e (sh:items lay '("strip"))
@@ -712,7 +782,77 @@
 (defun sh:clamp (r area)
   (list (max (nth 0 r) (nth 0 area)) (max (nth 1 r) (nth 1 area)) (min (nth 2 r) (nth 2 area)) (min (nth 3 r) (nth 3 area))))
 
-(defun sh:fit (typ forced / lay info vps insets mains strip sbb sw shh bb ab gw gh paper pw ph m p colL acx acy dx dy f
+;; ---------- sheets beside each other on one layout ----------
+;; Each sheet ("" the first, "s:2".. added beside it) is fitted on its own. A sheet beside the first one has its
+;; paper origin kept in the layout (ldata "s:N" = (x y)); it is fitted at the origin and moved back.
+
+(defun sh:layobj (lay) (vla-Item (vla-get-Layouts (sh:doc)) lay))
+
+(defun sh:sheetkeys (lay / old r)
+  (setq old *sh-cur* *sh-cur* nil)
+  (foreach e (sh:items lay '("vp")) (if (not (member (sh:sheetkey e) r)) (setq r (append r (list (sh:sheetkey e))))))
+  (setq *sh-cur* old)
+  (if (member "" r) (cons "" (vl-remove "" r)) r))
+
+(defun sh:fit (typ forced)
+  (sh:fitsheet (if *sh-cur* *sh-cur* "") typ forced))
+
+(defun sh:fitsheet (key typ forced / lay o old)
+  (setq lay (getvar "CTAB") old *sh-cur* *sh-cur* key
+        o (if (/= key "") (vlax-ldata-get (sh:layobj lay) key)))
+  (if o (sh:shiftsheet lay (- (car o)) (- (cadr o))))
+  (sh:fit1 typ forced)
+  (if o (sh:shiftsheet lay (car o) (cadr o)))
+  (setq *sh-cur* old)
+  (princ))
+
+;; move every item of the current sheet (viewports with their clips)
+(defun sh:shiftsheet (lay dx dy)
+  (foreach e (sh:items lay nil)
+    (if (= (cdr (assoc 0 (entget e))) "VIEWPORT") (sh:movevp e dx dy) (sh:move (list e) dx dy))))
+
+(defun sh:nextsheet (lay / n old)
+  (setq n 1 old *sh-cur* *sh-cur* nil)
+  (foreach e (sh:items lay nil) (if (wcmatch (sh:sheetkey e) "s:*") (setq n (max n (atoi (substr (sh:sheetkey e) 3))))))
+  (setq *sh-cur* old)
+  (strcat "s:" (itoa (1+ n))))
+
+;; papers of all the sheets on the layout: ((x0 y0 x1 y1) ...)
+(defun sh:papers (lay / r o pc p old)
+  (setq old *sh-cur*)
+  (foreach k (sh:sheetkeys lay)
+    (setq o (if (/= k "") (vlax-ldata-get (sh:layobj lay) k) '(0.0 0.0)) *sh-cur* k
+          p (sh:forced (caddr (sh:info lay))) *sh-cur* old)
+    (if (and o p) (setq r (cons (list (car o) (cadr o) (+ (car o) (cadr p)) (+ (cadr o) (caddr p))) r))))
+  r)
+
+;; place a new paper w x h beside the papers already there: it follows the cursor and goes flush (gap) next to
+;; them when close; Enter = on the left, bottoms aligned. -> paper origin (x y)
+(defun sh:placesheet (lay w h / ps P gap go g c v u r tol cand d best bd)
+  (setq ps (sh:papers lay) gap 20.0 tol 40.0 go T)
+  (setq P (list (apply 'min (mapcar 'car ps)) (apply 'min (mapcar 'cadr ps))
+                (apply 'max (mapcar 'caddr ps)) (apply 'max (mapcar 'cadddr ps))))
+  (princ "\nClick where the new sheet goes (it sits beside the others when close), Enter = on the left: ")
+  (while go
+    (setq g (grread T 15 0) c (car g) v (cadr g))
+    (cond ((member c '(3 5))
+           (setq u (list (- (car v) (/ w 2.0)) (- (cadr v) (/ h 2.0))))
+           ;; candidates: left / right (bottoms aligned), above / below (left sides aligned)
+           (setq best nil bd tol)
+           (foreach cand (list (list (- (nth 0 P) gap w) (nth 1 P)) (list (+ (nth 2 P) gap) (nth 1 P))
+                               (list (nth 0 P) (+ (nth 3 P) gap)) (list (nth 0 P) (- (nth 1 P) gap h)))
+             (setq d (distance u cand))
+             (if (< d bd) (setq best cand bd d)))
+           (if best (setq u best))
+           (redraw)
+           (grvecs (list 3 u (list (+ (car u) w) (cadr u)) 3 (list (+ (car u) w) (cadr u)) (list (+ (car u) w) (+ (cadr u) h))
+                         3 (list (+ (car u) w) (+ (cadr u) h)) (list (car u) (+ (cadr u) h)) 3 (list (car u) (+ (cadr u) h)) u))
+           (if (= c 3) (setq go nil r u)))
+          ((and (= c 2) (member v '(13 32))) (setq go nil r (list (- (nth 0 P) gap w) (nth 1 P))))))
+  (redraw)
+  r)
+
+(defun sh:fit1 (typ forced / lay info vps insets mains strip sbb sw shh bb ab gw gh paper pw ph m p colL acx acy dx dy f
                 scs main a big x area carea R Ks wrap yb sbox)
   (setq lay (getvar "CTAB") info (sh:info lay))
   (if (null typ) (setq typ (car info)))
@@ -833,7 +973,8 @@
 ;; plot settings, message and layout name of a fitted sheet
 (defun sh:finish (lay paper main / pw ph)
   (setq pw (cadr paper) ph (caddr paper))
-  (sh:plot pw ph)
+  ;; the layout's page setup belongs to the first sheet
+  (if (member *sh-cur* '(nil "")) (sh:plot pw ph))
   (command "_.ZOOM" "_E")
   (setq *sh-paper* (sh:papername paper) *sh-main-scale* main)
   ;; shown by sh:end, after the command echo
@@ -841,7 +982,7 @@
                          (if (= (car paper) "ROLL") " mm (roll)" (if (> pw ph) " landscape" " portrait"))
                          ", 1:" (itoa main)))
   ;; a layout named by paper and scale ("A3 1-250") follows the sheet when the scale or the paper changes
-  (if (and (wcmatch lay "A# 1-#*,#*x#* 1-#*")
+  (if (and (member *sh-cur* '(nil "")) (wcmatch lay "A# 1-#*,#*x#* 1-#*")
            (not (wcmatch lay (strcat (sh:papername paper) " 1-" (itoa main) ","
                                      (sh:papername paper) " 1-" (itoa main) " (#*)"))))
     (setq *sh-last-layout* (sh:rename lay (sh:autoname (sh:papername paper) main)))))
@@ -1156,7 +1297,7 @@
 
 (defun sh:begin ()
   (setq *sh-olderr* *error* *sh-oldecho* (getvar "CMDECHO") *sh-oldosmode* (getvar "OSMODE"))
-  (setq *error* sh:error *sh-msg* nil *sh-paper* nil)
+  (setq *error* sh:error *sh-msg* nil *sh-paper* nil *sh-cur* nil)
   (setvar "CMDECHO" 0)
   (vla-StartUndoMark (sh:doc)))
 
@@ -1164,7 +1305,7 @@
   (vla-EndUndoMark (sh:doc))
   (setvar "CMDECHO" *sh-oldecho*)
   (setvar "OSMODE" *sh-oldosmode*)
-  (setq *error* *sh-olderr*)
+  (setq *error* *sh-olderr* *sh-cur* nil)
   (if *sh-msg* (prompt *sh-msg*))
   (setq *sh-msg* nil)
   (princ))
@@ -1176,7 +1317,7 @@
   (vl-catch-all-apply 'vla-EndUndoMark (list (sh:doc)))
   (if *sh-oldecho* (setvar "CMDECHO" *sh-oldecho*))
   (if *sh-oldosmode* (setvar "OSMODE" *sh-oldosmode*))
-  (setq *error* *sh-olderr*)
+  (setq *error* *sh-olderr* *sh-cur* nil)
   (princ))
 
 (defun sh:newname (/ i n)
@@ -1191,7 +1332,7 @@
   (if (and s (> s 0)) (setq *sh-last-scale* s))
   *sh-last-scale*)
 
-(defun c:SHEET (/ typ scale pick name doc lay ss i e blk auto)
+(defun c:SHEET (/ typ scale pick name doc lay ss i e blk auto s)
   (sh:begin)
   (sh:gotomodel)
   (initget "Construction Tabaa None")
@@ -1217,7 +1358,7 @@
               (setq e (ssname ss (setq i (1- i))))
               (if (/= (cdr (assoc 69 (entget e))) 1) (entdel e))))
           (setq blk (sh:blockfor typ))
-          (if (/= blk "") (sh:addstrip blk name))
+          (if (and (/= blk "") (setq s (sh:addstrip blk name))) (sh:addloose s name ""))
           (sh:addvp (car pick) (cadr pick) '(0.0 0.0) name)
           (sh:fit typ (caddr pick))
           (if (and auto *sh-paper*) (setq name (sh:rename name (sh:autoname *sh-paper* *sh-main-scale*))))
@@ -1238,7 +1379,7 @@
 (defun sh:subst-name (s old new / i)
   (if (setq i (vl-string-search old s)) (strcat (substr s 1 i) new (substr s (+ i 1 (strlen old)))) s))
 
-(defun c:SHEETADD (/ lays name scale pick bb wP hP pc vps mode side e cx cy tb u blk s fb need)
+(defun c:SHEETADD (/ lays name scale pick bb wP hP pc vps mode side e cx cy tb u blk s fb need typ paper o)
   (sh:begin)
   (setq lays (layoutlist))
   (if (and (/= (getvar "CTAB") "Model") (member (getvar "CTAB") lays)) (setq *sh-last-layout* (getvar "CTAB")))
@@ -1256,14 +1397,33 @@
         (progn
           (setvar "CTAB" name)
           (command "_.PSPACE")
-          (setq vps (sh:items name '("vp")) bb (sh:bbox vps)
+          (setq *sh-cur* "" vps (sh:items name '("vp")) bb (sh:bbox vps)
                 wP (* (sh:k scale) (cadr (car pick))) hP (* (sh:k scale) (caddr (car pick))))
           (initget "Yes No")
-          (setq tb (getkword "\nIts own title block, a second sheet on the same paper [Yes/No] <No>: "))
+          (setq tb (getkword "\nWith its own title block [Yes/No] <No>: "))
           (if (= tb "Yes")
-            (setq mode "Unit")
+            (progn (initget "Sheet Paper")
+                   (setq mode (if (= (getkword "\nAs [Sheet beside, own paper/Paper shared with this sheet] <Sheet>: ") "Paper")
+                                "Unit" "Sheet")))
             (progn (initget "Inside Beside")
                    (setq mode (getkword "\nPlace [Inside the sheet, same paper/Beside, the sheet grows] <Inside>: "))))
+          (if (= mode "Sheet")
+            ;; a complete sheet of its own (frame, paper, title block) beside the existing one, which stays as it is
+            (progn
+              (setq *sh-cur* "" typ (car (sh:info name)) blk (sh:blockfor typ) *sh-cur* nil
+                    u (sh:nextsheet name)
+                    s (sh:stripsize blk)
+                    paper (sh:choose wP hP (car s) (cadr s))
+                    o (sh:placesheet name (cadr paper) (caddr paper)))
+              (vlax-ldata-put (sh:layobj name) u o)
+              (setq e (sh:addvp (car pick) (cadr pick) (list (+ (car o) (/ (cadr paper) 2.0)) (+ (cadr o) (/ (caddr paper) 2.0))) name))
+              (sh:addrole e u)
+              (if (and (/= blk "") (setq s (sh:addstrip blk name)))
+                (progn (sh:addrole s u)
+                       (sh:move (list s) (car o) (cadr o))
+                       (sh:addloose s name u)))
+              (sh:fitsheet u typ nil)
+              (setq pc nil mode "Done")))
           (if (= mode "Unit")
             ;; a unit: the drawing with its own title block, beside the others (the paper grows)
             (progn
@@ -1286,9 +1446,10 @@
               (sh:addrole e u)
               (if (and (/= (setq blk (sh:blockfor (car (sh:info name)))) "") (setq s (sh:addstrip blk name)))
                 (progn (sh:addrole s u)
+                       (sh:addloose s name u)
                        ;; next to its drawing until the sheet is fitted
                        (sh:move (list s) (- (car pc) (car (car (sh:stripbb (list s))))) (- (cadr pc) (cadr (car (sh:stripbb (list s))))))))))
-          (if (not (member mode '("Beside" "Unit")))
+          (if (not (member mode '("Beside" "Unit" "Done")))
             ;; inside: placed by hand, the paper stays, the other drawings are cut around it
             (if (setq pc (sh:place wP hP T "\nClick where the new drawing goes (it sits flush near the frame), Enter = beside: "))
               (progn (setq e (sh:addvp (car pick) (cadr pick) pc name))
@@ -1313,6 +1474,7 @@
 ;; title block layout of the current sheet: column <-> corner (the drawing also under the title block)
 (defun c:SHEETWRAP (/ lay f r new)
   (sh:begin)
+  (setq *sh-cur* "")
   (if (or (= (getvar "TILEMODE") 1) (null (setq f (car (sh:items (setq lay (getvar "CTAB")) '("frame"))))))
     (princ "\nGo to a sheet made by SHEET first.")
     (progn
@@ -1330,12 +1492,18 @@
 
 ;; every drawing on the sheet grows to the frame, the title block or the next drawing; the scale and what is
 ;; in the middle stay
-(defun c:SHEETFILL (/ lay area vps r rs o gap e others sbox dv)
+(defun c:SHEETFILL ()
   (sh:begin)
   (if (= (getvar "TILEMODE") 1)
     (princ "\nGo to the sheet layout first.")
+    (progn (command "_.PSPACE")
+           (foreach k (sh:sheetkeys (getvar "CTAB")) (setq *sh-cur* k) (sh:fill))))
+  (sh:end))
+
+;; SHEETFILL on the current sheet (*sh-cur*)
+(defun sh:fill (/ lay area vps r rs o gap e others sbox dv)
+  (if T
     (progn
-      (command "_.PSPACE")
       (setq lay (getvar "CTAB") gap *sh-inset-gap*)
       ;; units with their own title blocks: each drawing fills its own part already
       (if (cdr (sh:unitkeys (vl-remove-if 'sh:inset-p (sh:items lay '("vp"))))) (setq lay nil))
@@ -1368,8 +1536,7 @@
                             (setq rs (max rs (nth 3 o)))))
         (setq r (list (nth 0 r) rs (nth 2 r) (nth 3 r)))
         (sh:setrect e r nil))))
-      (sh:fit nil nil)))
-  (sh:end))
+      (sh:fit nil nil))))
 
 (defun sh:pickvp (/ es e r bb)
   (if (= (getvar "TILEMODE") 1)
@@ -1395,7 +1562,7 @@
   (sh:begin)
   (if (setq e (sh:pickvp))
     (progn
-      (setq x (sh:reals (sh:sync e)) old (fix (+ (car x) 0.5)))
+      (setq *sh-cur* (sh:sheetkey e) x (sh:reals (sh:sync e)) old (fix (+ (car x) 0.5)))
       (setq new (getint (strcat "\nNew scale 1: <" (itoa old) ">: ")))
       (if (and new (> new 0) (/= new old))
         (progn
@@ -1452,11 +1619,16 @@
 
 (defun c:SHEETFIT ()
   (sh:begin)
-  (if (= (getvar "TILEMODE") 1) (princ "\nGo to the sheet layout first.") (progn (command "_.PSPACE") (sh:fit nil nil)))
+  (if (= (getvar "TILEMODE") 1)
+    (princ "\nGo to the sheet layout first.")
+    (progn (command "_.PSPACE")
+           ;; every sheet on the layout, each on its own
+           (foreach k (sh:sheetkeys (getvar "CTAB")) (sh:fitsheet k nil nil))))
   (sh:end))
 
 (defun c:SHEETSIZE (/ lay info s o w h f)
   (sh:begin)
+  (setq *sh-cur* "")
   (if (= (getvar "TILEMODE") 1)
     (princ "\nGo to the sheet layout first.")
     (progn
