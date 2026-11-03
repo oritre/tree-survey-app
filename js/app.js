@@ -1,7 +1,9 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.51.0';
+  const APP_VERSION = '1.51.1';
+  // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
+  const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
@@ -1590,7 +1592,7 @@
     pane.replaceChildren(...[
       h('button', { class: 'btn primary big block', onclick: addTree }, icon('plus'), 'עץ חדש'),
       Construction.isConstruction(cur) ? h('button', { class: 'btn big block', onclick: () => openPlan() }, icon('pin'), cur.plan ? 'מדידה' : 'טען מדידה (DWG / PDF)') : null,
-      Construction.isConstruction(cur) ? null : h('button', { class: 'btn big block', onclick: voiceMode }, icon('mic'), 'מצב דיבור'),
+      Construction.isConstruction(cur) || !VOICE_UI ? null : h('button', { class: 'btn big block', onclick: voiceMode }, icon('mic'), 'מצב דיבור'),
       h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > Core.MAX_TREES ? ` (בתבנית יש מקום ל-${Core.MAX_TREES})` : ''))),
       search,
       trees.length ? list : h('div', { class: 'empty' }, icon('sprout'), 'עוד אין עצים'),
@@ -3013,7 +3015,7 @@
           h('div', { class: 'row' },
             h('button', { class: 'btn primary', onclick: () => { sigInput.value = ''; sigInput.click(); } }, hasSig ? 'החלף' : 'הוסף חתימה')),
           sigInput),
-        h('div', { class: 'card stack' },
+        !VOICE_UI ? null : h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'מצב דיבור (Gemini)'),
           h('div', { class: 'muted small' }, 'המפתח עובר לבד לשאר המכשירים דרך גוגל דרייב. עם מפתח, מצב הדיבור מקליט כל משפט ושולח אותו ל-Gemini של גוגל, שמבין עברית מדוברת וממלא מספר עץ, מין, מיקום, ממצאים וטיפול. בלי מפתח: זיהוי הדיבור של הדפדפן. מפתח חינמי: ',
             h('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener' }, 'aistudio.google.com/apikey')),
