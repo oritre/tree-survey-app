@@ -981,12 +981,22 @@
       (sh:finish lay paper main)))
   (princ))
 
+;; zoom to the sheets' papers (not to the extents: something far away on the layout would zoom far out)
+(defun sh:zoompapers (lay / ps d)
+  (if (setq ps (sh:papers lay))
+    (progn
+      (setq d 10.0)
+      (vla-ZoomWindow (vlax-get-acad-object)
+        (vlax-3d-point (- (apply 'min (mapcar 'car ps)) d) (- (apply 'min (mapcar 'cadr ps)) d) 0.0)
+        (vlax-3d-point (+ (apply 'max (mapcar 'caddr ps)) d) (+ (apply 'max (mapcar 'cadddr ps)) d) 0.0)))
+    (command "_.ZOOM" "_E")))
+
 ;; plot settings, message and layout name of a fitted sheet
 (defun sh:finish (lay paper main / pw ph)
   (setq pw (cadr paper) ph (caddr paper))
   ;; the layout's page setup belongs to the first sheet
   (if (member *sh-cur* '(nil "")) (sh:plot pw ph))
-  (command "_.ZOOM" "_E")
+  (sh:zoompapers lay)
   (setq *sh-paper* (sh:papername paper) *sh-main-scale* main)
   ;; shown by sh:end, after the command echo
   (setq *sh-msg* (strcat "\nSheet " lay ": " (sh:papername paper)
