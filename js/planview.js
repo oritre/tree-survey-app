@@ -56,6 +56,8 @@
     const missChip = h('div', { class: 'plan-miss' },
       h('button', { class: 'pm-main', title: 'הדגשת עצי המודד שעוד לא סומנו', onclick: () => { missOn = !missOn; DB.setKV('planMiss', missOn); jumpH = null; updateBar(); redraw(); } }, missTxt),
       h('button', { class: 'pm-next', title: 'לעץ הקרוב שעוד לא סומן', onclick: nextMissing }, 'הבא ›'),
+      // כמה עצים סומנו במדידה עד עכשיו, ומספר העץ האחרון שסומן (נגיעה מראה אותו במפה)
+      h('button', { class: 'pm-count', title: 'עצים שסומנו במדידה / העץ האחרון שסומן', onclick: () => { const t = lastMarked(); if (t) { select(t.id); if (follow) setFollow(false); map.setView(toMap(t.px, t.py), Math.max(map.getZoom(), itm ? 21 : 4)); } } }),
       h('button', { class: 'pm-hide', title: 'הסתרת ההדגשה', 'aria-label': 'הסתרת ההדגשה', onclick: () => { missOn = false; DB.setKV('planMiss', false); jumpH = null; updateBar(); redraw(); } }, '✕'),
       h('button', { class: 'pm-bound', title: 'קו כחול: רק עצים בתוכו ועד 4 מ\' ממנו נספרים', onclick: () => { setMode('area'); if (!s.planBound) startPick(); } }, 'קו כחול'));
     const btn = (label, title, on, cls) => h('button', { class: 'txt ' + (cls || ''), title: title || null, 'aria-label': title || null, onclick: on }, label);
@@ -1195,8 +1197,21 @@
       return d;
     }
     function missing() { const used = linked(); return surveyor.filter(t => !used.has(t.h) && inRange(t)); }
+    // העצים שסומנו במדידה (בלי רשומות התחומים P1, P2...) והאחרון שבהם לפי זמן הסימון
+    const markedTrees = () => myTrees().filter(t => !t.polyId);
+    function lastMarked() {
+      let best = null, bi = -1;
+      s.trees.forEach((t, i) => { if (t.px == null || t.polyId) return; if (!best || (t.created || 0) > (best.created || 0) || ((t.created || 0) === (best.created || 0) && i > bi)) { best = t; bi = i; } });
+      return best;
+    }
     function updateMiss() {
-      missChip.hidden = !surveyor.length;
+      const nMarked = markedTrees().length, last = lastMarked();
+      const cnt = missChip.querySelector('.pm-count');
+      cnt.hidden = !nMarked;
+      cnt.textContent = nMarked ? `סומנו ${nMarked} · אחרון ${last && last.num ? last.num : '-'}` : '';
+      missChip.hidden = !surveyor.length && !nMarked;
+      missChip.querySelector('.pm-main').hidden = !surveyor.length;
+      if (!surveyor.length) { missChip.querySelector('.pm-next').hidden = missChip.querySelector('.pm-bound').hidden = missChip.querySelector('.pm-hide').hidden = true; return; }
       const tot = surveyor.filter(inRange).length, n = missing().length, hasB = !!s.planBound;
       missChip.classList.toggle('on', missOn); missChip.classList.toggle('done', !n);
       const where = hasB ? ' בתחום' : '';
