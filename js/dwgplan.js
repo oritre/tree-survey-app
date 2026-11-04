@@ -26,6 +26,8 @@
   // עץ בקודי המדידה: 2801 (סמל עץ עם צמרת). 1502 הוא נקודת גובה, לא עץ
   const TREE_BLOCK_RE = /^(m?2801|.*tree.*|.*עץ.*)$/i;
   const NOT_TREE_RE = /^m?15\d\d$/i;
+  // שכבה של עצים אצל המודד (כמו 2TREE_PT או M2801): כל בלוק, נקודה או עיגול בשכבה ששמה מכיל tree, עץ או 2801 הוא עץ קיים
+  const TREE_LAYER_RE = /tree|עץ|^m?2801$/i;
   const LABEL_TAGS = ['NAME', 'NUM', 'NO', 'NUMBER', 'ID', 'MARK', 'PNT', 'POINT'];
 
   // ---------- קריאת הקובץ ----------
@@ -323,7 +325,14 @@
       return { layer: layName, col, lt, lts: e.lineTypeScale > 0 ? e.lineTypeScale : 1 };
     }
 
-    const paths = [], texts = [], fills = [], inserts = {}, bounds = [];
+    const paths = [], texts = [], fills = [], inserts = {}, bounds = [], tpts = [];
+    // בלוק שהציור שלו בשכבת עצים (הבלוק עצמו יכול להיות בשכבה אחרת)
+    const treeLayerBlocks = new Set();
+    for (const [n, b] of blocks) if ((b.entities || []).some(x => TREE_LAYER_RE.test(String(x.layer || '')))) treeLayerBlocks.add(n);
+    // עץ לפי שכבה: [מזהה, x, y, מספר]
+    const treePt = (e, R, p, label) => {
+      if (TREE_LAYER_RE.test(R.layer || '') || (e.type === 'INSERT' && treeLayerBlocks.has(e.name))) tpts.push([String(e.handle || ''), p[0], p[1], label || '']);
+    };
     // שכבות: אינדקס לכל שם, כדי שאפשר יהיה להדליק ולכבות אותן באפליקציה
     const layNames = [], layIdx = new Map();
     const LI = n => { n = String(n || '0'); let i = layIdx.get(n); if (i == null) { i = layNames.length; layNames.push(n); layIdx.set(n, i); } return i; };
@@ -375,7 +384,10 @@
               if (closed && pts.length >= 3 && BOUND_LAYER_RE.test(R.layer || '')) bounds.push({ layer: R.layer, pts });
               break;
             }
-            case 'CIRCLE': add(arcPts(e.center.x, e.center.y, e.radius, 0, Math.PI * 2).map(p => ap(M, p[0], p[1])), R); break;
+            case 'CIRCLE':
+              add(arcPts(e.center.x, e.center.y, e.radius, 0, Math.PI * 2).map(p => ap(M, p[0], p[1])), R);
+              if (depth === 0) treePt(e, R, ap(M, e.center.x, e.center.y));
+              break;
             case 'ARC': add(arcPts(e.center.x, e.center.y, e.radius, e.startAngle, e.endAngle).map(p => ap(M, p[0], p[1])), R); break;
             case 'ELLIPSE': {
               const mx = e.majorAxisEndPoint.x, my = e.majorAxisEndPoint.y, r1 = Math.hypot(mx, my), r2 = r1 * e.axisRatio, rot = Math.atan2(my, mx);
@@ -388,7 +400,7 @@
               }
               add(pts, R); break;
             }
-            case 'POINT': if (e.position) { const p = ap(M, e.position.x, e.position.y); add([p, p], R); } break;
+            case 'POINT': if (e.position) { const p = ap(M, e.position.x, e.position.y); add([p, p], R); if (depth === 0) treePt(e, R, p); } break;
             case 'SOLID': case 'TRACE': {
               const c = e.corner1 && [e.corner1, e.corner2, e.corner4 || e.corner3, e.corner3].filter(Boolean);
               if (c && c.length >= 3) fills.push({ s: styleOf(R.col, -1), loops: [c.map(p => ap(M, p.x, p.y))], l: LI(R.layer) });
@@ -416,7 +428,11 @@
             }
             case 'INSERT': {
               const p = ap(M, e.insertionPoint.x, e.insertionPoint.y);
-              if (depth === 0) (inserts[e.name] = inserts[e.name] || []).push([String(e.handle || ''), p[0], p[1], attrLabel(e)]);
+              if (depth === 0) {
+                const lab = attrLabel(e);
+                (inserts[e.name] = inserts[e.name] || []).push([String(e.handle || ''), p[0], p[1], lab]);
+                treePt(e, R, p, lab);
+              }
               // ערכי התכונות (ATTRIB) כבר במיקום הסופי שלהם, במערכת של מי שמכיל את הבלוק
               const PI = { inBlock: true, layer: R.layer, col: R.col, lt: R.lt };
               for (const a of e.attribs || []) {
@@ -445,6 +461,7 @@
     // אזור העבודה: העצים, ואם אין אז 2%-98% מהנקודות (יש בקבצים קווים בודדים רחוקים מאוד)
     let xs = [], ys = [];
     if (treeBlock) for (const r of inserts[treeBlock]) { xs.push(r[1]); ys.push(r[2]); }
+    if (xs.length < 2) for (const r of tpts) { xs.push(r[1]); ys.push(r[2]); }
     if (xs.length < 2) { xs = []; ys = []; for (const p of paths) for (const q of p.pts) { xs.push(q[0]); ys.push(q[1]); } }
     xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
     const pc = (a, f) => a.length ? a[Math.min(a.length - 1, Math.max(0, Math.round((a.length - 1) * f)))] : 0;
@@ -469,11 +486,12 @@
     const FL = FL0.map(f => [f.s, ...f.loops.map(L => { const o = []; for (const q of L) o.push(r3(q[0] - ox), r3(q[1] - oy)); return o; })]);
     const ins = {};
     for (const [n, list] of Object.entries(inserts)) ins[n] = list.filter(r => !far(r[1], r[2])).map(r => [r[0], r2(r[1] - ox), r2(r[2] - oy), r[3]]);
+    const TP = tpts.filter(r => !far(r[1], r[2])).map(r => [r[0], r2(r[1] - ox), r2(r[2] - oy), r[3]]);
     const itm = ox > 100000 && ox < 300000 && oy > 350000 && oy < 820000;
     const BD = bounds.map(b => ({ layer: b.layer, pts: b.pts.map(q => [r2(q[0] - ox), r2(q[1] - oy)]) }));
     // רשימת השכבות: שם וצבע השכבה (לחלון השכבות)
     const LY = layNames.map(n => { const L = layers.get(n); return [n, L ? (L.color != null && L.colorIndex === 257 ? L.color : aci(Math.abs(L.colorIndex == null ? 7 : L.colorIndex))) : -1]; });
-    return { v: 2, layers: LY, pl: PL, fll: FLL, bounds: BD, crs: itm ? 'itm' : 'local', ox, oy, view: view.map((v, i) => r2(v - (i % 2 ? oy : ox))), paths: P, ps: PS, st: styles, dash: dashes, texts: TX, fills: FL, inserts: ins, treeBlock };
+    return { v: 3, tpts: TP, layers: LY, pl: PL, fll: FLL, bounds: BD, crs: itm ? 'itm' : 'local', ox, oy, view: view.map((v, i) => r2(v - (i % 2 ? oy : ox))), paths: P, ps: PS, st: styles, dash: dashes, texts: TX, fills: FL, inserts: ins, treeBlock };
   }
 
   // עצי המודד: [{h, x, y, name}] בקואורדינטות המקוריות
@@ -482,13 +500,19 @@
     const ins = g.inserts || {}, names = new Set(Object.keys(ins).filter(n => TREE_BLOCK_RE.test(n)));
     const b = block == null ? g.treeBlock : block;
     if (b && !NOT_TREE_RE.test(b)) names.add(b); // מדידה ישנה: נשמר בה 1502 (נקודות גובה) כבלוק העצים
-    const out = [], seen = new Set();
-    for (const n of names) for (const r of ins[n] || []) {
-      if (seen.has(r[0])) continue;
-      seen.add(r[0]);
+    const out = [], seen = new Set(), near = new Set();
+    // אותו עץ פעמיים (נקודה ועיגול באותו מקום, או בלוק עץ שגם בשכבת עצים): נספר פעם אחת
+    const cell = (x, y) => Math.round(x * 20) + ',' + Math.round(y * 20);
+    const push = r => {
+      if (r[0] && seen.has(r[0])) return;
+      const c = cell(r[1], r[2]);
+      if (near.has(c)) return;
+      seen.add(r[0]); near.add(c);
       // מספר המודד: רק אם יש בו ספרה (בבלוק של עץ עם צמרת כתוב לפעמים "עץ")
       out.push({ h: r[0], x: r[1] + g.ox, y: r[2] + g.oy, name: /\d/.test(r[3] || '') ? r[3] : '' });
-    }
+    };
+    for (const n of names) for (const r of ins[n] || []) push(r);
+    for (const r of g.tpts || []) push(r);
     return out;
   }
   const toLL = (x, y) => { const p = root.proj4(ITM, 'WGS84', [x, y]); return [p[1], p[0]]; };
