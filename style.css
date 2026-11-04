@@ -452,10 +452,6 @@ textarea.doc-text.b { font-weight: 700; }
   border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.35); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; max-width: 640px; margin: 0 auto; }
 .plan-sheet-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-inline-end: 40px; position: relative; }
 .plan-x { position: absolute; inset-inline-end: 0; top: -4px; width: 40px; height: 40px; font-size: 20px; background: transparent; border: 0; cursor: pointer; color: inherit; }
-.plan-pad { display: flex; flex-direction: column; gap: 4px; }
-.plan-keys { display: flex; gap: 4px; direction: ltr; }
-.plan-key { flex: 1 1 0; min-width: 0; padding: 8px 0; font-size: 18px; font-weight: 600; }
-.plan-dup { color: #c62828; font-weight: 600; }
 .plan-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; }
 .plan-chip::before { content: ''; width: 14px; height: 14px; border-radius: 50%; background: var(--c); border: 1px solid #333; }
 .plan-legend { position: absolute; top: 8px; inset-inline-start: 8px; z-index: 600; display: flex; flex-direction: column; gap: 3px; background: rgba(255,255,255,.88);
