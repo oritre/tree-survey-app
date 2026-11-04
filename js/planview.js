@@ -550,7 +550,7 @@
     });
 
     function nearestNum() { return root.Core.nextNum(s.trees); }
-    // מספר מוקלד מיד אחרי הוספת עץ: הספרות הראשונות מחליפות את המספר האוטומטי (מקלדת או לוח הספרות בגיליון).
+    // מספר מוקלד מיד אחרי הוספת עץ: הספרות הראשונות מחליפות את המספר האוטומטי (מהמקלדת).
     // בלי הקלדה נשאר המספר הרץ. נגמר בנגיעה הבאה במפה, באישור, או כשבוחרים עץ אחר
     let typing = null;          // { id, auto, buf }
     function startTyping(t) { typing = { id: t.id, auto: t.num, buf: '' }; }
@@ -562,7 +562,8 @@
       else if (/^\d$/.test(k)) { if (typing.buf.length >= 6) return true; typing.buf += k; }
       else return false;
       t.num = typing.buf || typing.auto;
-      changed(); renderSheet(); flash(`עץ ${t.num}`);
+      const dup = typing.buf && s.trees.some(x => x !== t && root.Core.normNum(x.num) === typing.buf);
+      changed(); renderSheet(); flash(dup ? `כבר יש עץ ${t.num}` : `עץ ${t.num}`);
       return true;
     }
     const onKey = e => {
@@ -712,16 +713,7 @@
             const old = t.ref; t.ref = !t.ref || undefined; undo.push({ what: 'לא להתייחסות', run: () => { t.ref = old; } }); changed(); renderSheet();
           } }, t.ref ? '✓ לא להתייחסות' : 'לא להתייחסות'),
           h('button', { class: 'btn', onclick: () => removeTree(t) }, 'בטל סימון'),
-          h('button', { class: 'btn primary', onclick: () => close(t.id) }, 'פרטי העץ')),
-        typing ? numPad(t) : null);
-    }
-    // לוח ספרות לעץ שנוסף עכשיו: מקלידים את המספר בלי לפתוח את המקלדת של המכשיר
-    function numPad(t) {
-      const dup = typing.buf && s.trees.some(x => x !== t && root.Core.normNum(x.num) === typing.buf);
-      const key = (k, txt) => h('button', { class: 'btn plan-key', onclick: () => typeKey(k) }, txt || k);
-      return h('div', { class: 'plan-pad' },
-        h('div', { class: 'muted small' + (dup ? ' plan-dup' : '') }, dup ? `כבר יש עץ ${typing.buf}` : typing.buf ? 'המספר שהקלדת' : `מספר אחר? הקלד עכשיו (אחרת ${typing.auto})`),
-        h('div', { class: 'plan-keys' }, ...'1234567890'.split('').map(k => key(k)), key('Backspace', '⌫'), key('Enter', '✓')));
+          h('button', { class: 'btn primary', onclick: () => close(t.id) }, 'פרטי העץ')));
     }
     async function renumber(t) {
       const n = await ctx.askNumber(`מספר לעץ ${t.num || ''}`, t.pname ? `מספר המודד: ${t.pname}` : null);
