@@ -536,6 +536,7 @@
 
     map.on('click', e => {
       if (skipClick) { skipClick = false; return; }
+      typing = null;
       const pt = e.containerPoint, xy = fromMap(e.latlng);
       if (calStep) return calTap(xy);
       if (mode === 'area') return areaTap(pt, xy);
@@ -549,6 +550,30 @@
     });
 
     function nearestNum() { return root.Core.nextNum(s.trees); }
+    // מספר מוקלד מיד אחרי הוספת עץ: הספרות הראשונות מחליפות את המספר האוטומטי (מקלדת או לוח הספרות בגיליון).
+    // בלי הקלדה נשאר המספר הרץ. נגמר בנגיעה הבאה במפה, באישור, או כשבוחרים עץ אחר
+    let typing = null;          // { id, auto, buf }
+    function startTyping(t) { typing = { id: t.id, auto: t.num, buf: '' }; }
+    function typeKey(k) {
+      const t = typing && s.trees.find(x => x.id === typing.id);
+      if (!t) { typing = null; return false; }
+      if (k === 'Enter') { typing = null; renderSheet(); return true; }
+      if (k === 'Backspace') typing.buf = typing.buf.slice(0, -1);
+      else if (/^\d$/.test(k)) { if (typing.buf.length >= 6) return true; typing.buf += k; }
+      else return false;
+      t.num = typing.buf || typing.auto;
+      changed(); renderSheet(); flash(`עץ ${t.num}`);
+      return true;
+    }
+    const onKey = e => {
+      if (!typing || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+      const el = e.target;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if ($$('.modal').length) return;
+      const k = /^Numpad\d$/.test(e.code || '') ? e.code.slice(6) : e.key === 'NumpadEnter' ? 'Enter' : e.key;
+      if (typeKey(k)) { e.preventDefault(); e.stopPropagation(); }
+    };
+    document.addEventListener('keydown', onKey, true);
     // פוליגון עצים: רשומה רגילה בסקר עם המספר P1, P2... (כמות העצים בשדה הכמות), מקושרת לתחום
     const polyTree = poly => poly && s.trees.find(t => t.polyId === poly.id);
     function nextPolyNum() { let m = 0; for (const t of s.trees) { const r = /^P(\d+)$/i.exec(String(t.num || '').trim()); if (r) m = Math.max(m, +r[1]); } return 'P' + (m + 1); }
@@ -584,6 +609,7 @@
       setXY(t, sv.x, sv.y);
       s.trees.push(t);
       undo.push({ what: `סימון עץ ${t.num}`, run: () => removeTree(t, true) });
+      startTyping(t);
       changed(); select(t.id, true);
       flash(`עץ ${t.num}` + (sv.name ? ` (מודד ${sv.name})` : ''));
     }
@@ -607,6 +633,7 @@
       setXY(t, xy[0], xy[1]);
       s.trees.push(t);
       undo.push({ what: `עץ חדש ${t.num}`, run: () => removeTree(t, true) });
+      startTyping(t);
       changed(); select(t.id, true);
       flash(`עץ חדש ${t.num}`);
     }
@@ -660,6 +687,7 @@
       if (mode === 'xy') return renderXySheet();
       if (mode === 'dist') return renderDistSheet();
       const t = selId && s.trees.find(x => x.id === selId);
+      if (typing && (!t || t.id !== typing.id || moving)) typing = null;
       if (!t) { sheet.classList.add('hidden'); hint.textContent = moving ? '' : 'נגיעה בעץ של המודד מסמנת אותו. נגיעה במקום ריק מוסיפה עץ. עץ שהוספת אפשר לגרור.'; hint.classList.toggle('hidden', false); return; }
       hint.textContent = moving ? 'גע במיקום החדש של העץ' : '';
       hint.classList.toggle('hidden', !moving);
@@ -684,7 +712,16 @@
             const old = t.ref; t.ref = !t.ref || undefined; undo.push({ what: 'לא להתייחסות', run: () => { t.ref = old; } }); changed(); renderSheet();
           } }, t.ref ? '✓ לא להתייחסות' : 'לא להתייחסות'),
           h('button', { class: 'btn', onclick: () => removeTree(t) }, 'בטל סימון'),
-          h('button', { class: 'btn primary', onclick: () => close(t.id) }, 'פרטי העץ')));
+          h('button', { class: 'btn primary', onclick: () => close(t.id) }, 'פרטי העץ')),
+        typing ? numPad(t) : null);
+    }
+    // לוח ספרות לעץ שנוסף עכשיו: מקלידים את המספר בלי לפתוח את המקלדת של המכשיר
+    function numPad(t) {
+      const dup = typing.buf && s.trees.some(x => x !== t && root.Core.normNum(x.num) === typing.buf);
+      const key = (k, txt) => h('button', { class: 'btn plan-key', onclick: () => typeKey(k) }, txt || k);
+      return h('div', { class: 'plan-pad' },
+        h('div', { class: 'muted small' + (dup ? ' plan-dup' : '') }, dup ? `כבר יש עץ ${typing.buf}` : typing.buf ? 'המספר שהקלדת' : `מספר אחר? הקלד עכשיו (אחרת ${typing.auto})`),
+        h('div', { class: 'plan-keys' }, ...'1234567890'.split('').map(k => key(k)), key('Backspace', '⌫'), key('Enter', '✓')));
     }
     async function renumber(t) {
       const n = await ctx.askNumber(`מספר לעץ ${t.num || ''}`, t.pname ? `מספר המודד: ${t.pname}` : null);
@@ -1213,6 +1250,7 @@
     let done;
     function close(openId) {
       stopGps();
+      document.removeEventListener('keydown', onKey, true);
       DB.setKV('planView:' + s.id, { c: map.getCenter(), z: map.getZoom() });
       map.remove(); ov.remove();
       $$('.plan-flash').forEach(x => x.remove());
