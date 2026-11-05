@@ -538,7 +538,7 @@
 
     map.on('click', e => {
       if (skipClick) { skipClick = false; return; }
-      typing = null;
+      endTyping();
       const pt = e.containerPoint, xy = fromMap(e.latlng);
       if (calStep) return calTap(xy);
       if (mode === 'area') return areaTap(pt, xy);
@@ -551,7 +551,36 @@
       addAt(xy);
     });
 
-    function nearestNum() { return root.Core.nextNum(s.trees); }
+    // עצים שכבר בסקר (למשל מסקר ישן או מהשטח) ועוד לא סומנו במדידה: הסימון הבא מקבל את המספר של הראשון מהם,
+    // ובסוף ההקלדה המיקום עובר לעץ הקיים במקום ליצור עץ כפול. אחרי שכולם סומנו ממשיכים מהמספר הבא
+    const unplaced = except => s.trees.filter(x => x !== except && x.px == null && !x.polyId && String(x.num || '').trim());
+    function nearestNum() {
+      const first = root.Core.sortTrees(unplaced())[0];
+      return first ? first.num : root.Core.nextNum(s.trees);
+    }
+    const fromSurvey = t => unplaced(t).some(x => root.Core.normNum(x.num) === root.Core.normNum(t.num));
+    const PLACE = ['px', 'py', 'lat', 'lon', 'acc', 'gpsSrc', 'gpsTime', 'pref', 'pname'];
+    // העץ שסומן עכשיו (t) מספרו כמו עץ קיים שלא סומן: המיקום עובר לעץ הקיים, והסימון החדש נמחק
+    function mergeIntoExisting(t) {
+      const n = root.Core.normNum(t.num);
+      const x = n && !hasData(t) && unplaced(t).find(y => root.Core.normNum(y.num) === n);
+      if (!x) return false;
+      const old = PLACE.map(k => x[k]);
+      for (const k of PLACE) { if (t[k] != null) x[k] = t[k]; else delete x[k]; }
+      const i = s.trees.indexOf(t);
+      if (i >= 0) s.trees.splice(i, 1);
+      const last = undo[undo.length - 1];
+      if (last && last.tree === t) undo.pop();
+      undo.push({ what: `סימון עץ ${x.num}`, run: () => { PLACE.forEach((k, j) => { if (old[j] != null) x[k] = old[j]; else delete x[k]; }); } });
+      if (selId === t.id) selId = x.id;
+      changed();
+      return true;
+    }
+    function endTyping() {
+      const t = typing && s.trees.find(x => x.id === typing.id);
+      typing = null;
+      if (t && mergeIntoExisting(t)) redraw();
+    }
     // מספר מוקלד מיד אחרי הוספת עץ: הספרות הראשונות מחליפות את המספר האוטומטי (מהמקלדת).
     // בלי הקלדה נשאר המספר הרץ. נגמר בנגיעה הבאה במפה, באישור, או כשבוחרים עץ אחר
     let typing = null;          // { id, auto, buf }
@@ -559,13 +588,15 @@
     function typeKey(k) {
       const t = typing && s.trees.find(x => x.id === typing.id);
       if (!t) { typing = null; return false; }
-      if (k === 'Enter') { typing = null; renderSheet(); return true; }
+      if (k === 'Enter') { endTyping(); renderSheet(); return true; }
       if (k === 'Backspace') typing.buf = typing.buf.slice(0, -1);
       else if (/^\d$/.test(k)) { if (typing.buf.length >= 6) return true; typing.buf += k; }
       else return false;
       t.num = typing.buf || typing.auto;
-      const dup = typing.buf && s.trees.some(x => x !== t && root.Core.normNum(x.num) === typing.buf);
-      changed(); renderSheet(); flash(dup ? `כבר יש עץ ${t.num}` : `עץ ${t.num}`);
+      const n = root.Core.normNum(t.num);
+      const toExisting = unplaced(t).some(x => root.Core.normNum(x.num) === n);
+      const dup = !toExisting && typing.buf && s.trees.some(x => x !== t && root.Core.normNum(x.num) === typing.buf);
+      changed(); renderSheet(); flash(toExisting ? `עץ ${t.num} מהסקר` : dup ? `כבר יש עץ ${t.num}` : `עץ ${t.num}`);
       return true;
     }
     const onKey = e => {
@@ -611,10 +642,10 @@
       t.pref = sv.h; t.pname = sv.name || '';
       setXY(t, sv.x, sv.y);
       s.trees.push(t);
-      undo.push({ what: `סימון עץ ${t.num}`, run: () => removeTree(t, true) });
+      undo.push({ what: `סימון עץ ${t.num}`, tree: t, run: () => removeTree(t, true) });
       startTyping(t);
       changed(); select(t.id, true);
-      flash(`עץ ${t.num}` + (sv.name ? ` (מודד ${sv.name})` : ''));
+      flash(`עץ ${t.num}` + (fromSurvey(t) ? ' מהסקר' : '') + (sv.name ? ` (מודד ${sv.name})` : ''));
     }
     // עץ מודד פנוי עד מטר מהעץ
     function nearSurveyor(t) {
@@ -635,10 +666,10 @@
       t.num = nearestNum();
       setXY(t, xy[0], xy[1]);
       s.trees.push(t);
-      undo.push({ what: `עץ חדש ${t.num}`, run: () => removeTree(t, true) });
+      undo.push({ what: `עץ חדש ${t.num}`, tree: t, run: () => removeTree(t, true) });
       startTyping(t);
       changed(); select(t.id, true);
-      flash(`עץ חדש ${t.num}`);
+      flash(fromSurvey(t) ? `עץ ${t.num} מהסקר` : `עץ חדש ${t.num}`);
     }
     function moveTo(xy) {
       const t = s.trees.find(x => x.id === selId);
@@ -689,8 +720,8 @@
       if (mode === 'area') return renderAreaSheet();
       if (mode === 'xy') return renderXySheet();
       if (mode === 'dist') return renderDistSheet();
+      if (typing && (selId !== typing.id || moving)) endTyping();
       const t = selId && s.trees.find(x => x.id === selId);
-      if (typing && (!t || t.id !== typing.id || moving)) typing = null;
       if (!t) { sheet.classList.add('hidden'); hint.textContent = moving ? '' : 'נגיעה בעץ של המודד מסמנת אותו. נגיעה במקום ריק מוסיפה עץ. עץ שהוספת אפשר לגרור.'; hint.classList.toggle('hidden', false); return; }
       hint.textContent = moving ? 'גע במיקום החדש של העץ' : '';
       hint.classList.toggle('hidden', !moving);
@@ -1257,6 +1288,7 @@
     let done;
     function close(openId) {
       stopGps();
+      endTyping();
       document.removeEventListener('keydown', onKey, true);
       DB.setKV('planView:' + s.id, { c: map.getCenter(), z: map.getZoom() });
       map.remove(); ov.remove();
