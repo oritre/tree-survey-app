@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.55.0';
+  const APP_VERSION = '1.55.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -762,7 +762,7 @@
       if (await loadPlanFile(f)) renderSurvey();
     });
   }
-  const GEOM_V = 4; // 2: צבעים, סוגי קו, טקסטים ומילויים מהקובץ. 3: עצי המודד לפי שכבה (2TREE_PT). 4: בלי בלוקי כיתוב (ANOT0) בשכבת העצים
+  const GEOM_V = 5; // 2: צבעים, סוגי קו, טקסטים ומילויים מהקובץ. 3: עצי המודד לפי שכבה (2TREE_PT). 4: בלי בלוקי כיתוב (ANOT0) בשכבת העצים. 5: בלוק שמצויר רחוק (TREE בקפלן 6) נחשב עץ רק ליד סמל עץ
   async function planGeom(p) {
     let d = await DB.getPhoto(planKey(p)), g = d && d.geom;
     // מדידה שנקראה בגרסה קודמת: קוראים שוב מהקובץ המקורי ששמור במכשיר, כדי שתיראה כמו ב-BricsCAD
