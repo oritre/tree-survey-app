@@ -304,6 +304,10 @@
       const i = this.idx.get(r);
       if (i != null) this.rows[i] = this.rows[i].replace(/^(<row [^>]*?) hidden="1"/, '$1');
     }
+    height(r, ht) {
+      const i = this.idx.get(r);
+      if (i != null) this.rows[i] = this.rows[i].replace(/^<row [^>]*?>/, m => m.replace(/ (ht|customHeight)="[^"]*"/g, '').replace(/^<row r="\d+"/, `$& ht="${ht}" customHeight="1"`));
+    }
     hide(r) {
       const i = this.idx.get(r);
       if (i != null && !/^<row [^>]*? hidden="1"/.test(this.rows[i])) this.rows[i] = this.rows[i].replace(/^<row r="\d+"/, '$& hidden="1"');
@@ -498,6 +502,9 @@
     if (!embed) sheet.hide(4);   // שורת התוויות של התמונות, ריקה באקסל בלי תמונות: עוד מקום בעמוד 1
     // בעמודים הנוספים: שורות ריקות בראש העמוד ובסופו (45, 89, 90) מוסתרות, כדי שהעמוד ייכנס לדף אחד
     for (let k = 0; k < avail; k++) for (const r of [45, 89, 90]) sheet.hide(r + 46 * k);
+    // הלוגו בכותרת העליונה גבוה מהשוליים העליונים: בעמודים הנוספים שורת הרווח שמעל הטבלה (49) גבוהה מספיק
+    // כדי שכותרת הטבלה תתחיל מתחת ללוגו ולא עליו (בעמוד 1 יש מעליה את כותרת הסקר)
+    for (let k = 0; k < avail; k++) sheet.height(49 + 46 * k, 51);
     const spLast = 918 + off + moreSp;
     for (let r = 885 + off + Math.max(1, species); r <= spLast; r++) sheet.hide(r);
     // אקסל בלי התמונות: מסתירים את עמודות הנספח BF:BK
