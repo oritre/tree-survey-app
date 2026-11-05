@@ -333,10 +333,27 @@
     for (const [n, b] of blocks) if (!(b.entities || []).some(x => !TEXT_ENT.test(x.type))) textBlocks.add(n);
     const treeLayerBlocks = new Set();
     for (const [n, b] of blocks) if ((b.entities || []).some(x => !TEXT_ENT.test(x.type) && TREE_LAYER_RE.test(String(x.layer || '')))) treeLayerBlocks.add(n);
+    // בלוק שהציור שלו רחוק מנקודת ההכנסה (כמו TREE בקפלן 6: הוגדר מחדש עם קואורדינטות של השטח, אז בכל הכנסה הוא מצויר
+    // הרחק מחוץ לשרטוט ובמקום רואים רק נקודה). הכנסה של בלוק כזה היא עץ רק אם מצויר לידה סמל עץ (קווים בשכבת עצים)
+    const farBlocks = new Set();
+    for (const [n, b] of blocks) {
+      const bp = b.basePoint || { x: 0, y: 0 }, ds = [];
+      for (const x of b.entities || []) {
+        if (TEXT_ENT.test(x.type)) continue;
+        const q = x.center || x.position || x.insertionPoint || x.startPoint || (x.vertices && x.vertices[0]);
+        if (q && typeof q.x === 'number') ds.push(Math.hypot(q.x - bp.x, q.y - bp.y));
+      }
+      if (ds.length && Math.min(...ds) > 50) farBlocks.add(n);
+    }
+    const needSym = new Set(); // רשומות של עצים שצריך לבדוק שיש לידם סמל
     // עץ לפי שכבה: [מזהה, x, y, מספר]
     const treePt = (e, R, p, label) => {
       if (e.type === 'INSERT' && textBlocks.has(e.name)) return;
-      if (TREE_LAYER_RE.test(R.layer || '') || (e.type === 'INSERT' && treeLayerBlocks.has(e.name))) tpts.push([String(e.handle || ''), p[0], p[1], label || '']);
+      if (TREE_LAYER_RE.test(R.layer || '') || (e.type === 'INSERT' && treeLayerBlocks.has(e.name))) {
+        const r = [String(e.handle || ''), p[0], p[1], label || ''];
+        if (e.type === 'INSERT' && farBlocks.has(e.name)) needSym.add(r);
+        tpts.push(r);
+      }
     };
     // שכבות: אינדקס לכל שם, כדי שאפשר יהיה להדליק ולכבות אותן באפליקציה
     const layNames = [], layIdx = new Map();
@@ -435,7 +452,9 @@
               const p = ap(M, e.insertionPoint.x, e.insertionPoint.y);
               if (depth === 0) {
                 const lab = attrLabel(e);
-                (inserts[e.name] = inserts[e.name] || []).push([String(e.handle || ''), p[0], p[1], lab]);
+                const ir = [String(e.handle || ''), p[0], p[1], lab];
+                if (farBlocks.has(e.name)) needSym.add(ir);
+                (inserts[e.name] = inserts[e.name] || []).push(ir);
                 treePt(e, R, p, lab);
               }
               // ערכי התכונות (ATTRIB) כבר במיקום הסופי שלהם, במערכת של מי שמכיל את הבלוק
@@ -458,6 +477,24 @@
       }
     }
     walk(db.entities, ID, 0, { inBlock: false, layer: '0', col: -1, lt: 'CONTINUOUS' });
+
+    // עצים מבלוק שמצויר רחוק: נשארים רק אלה שיש לידם (עד 0.6 מ') קו או עיגול בשכבת עצים
+    if (needSym.size) {
+      const SYM_R = 0.6, grid = new Map(), key = (i, j) => i + ',' + j;
+      for (const p of paths) if (TREE_LAYER_RE.test(layNames[p.l] || '')) for (const q of p.pts) {
+        const k = key(Math.floor(q[0]), Math.floor(q[1]));
+        (grid.get(k) || grid.set(k, []).get(k)).push(q);
+      }
+      const hasSym = r => {
+        const i0 = Math.floor(r[1]), j0 = Math.floor(r[2]);
+        for (let i = i0 - 1; i <= i0 + 1; i++) for (let j = j0 - 1; j <= j0 + 1; j++)
+          for (const q of grid.get(key(i, j)) || []) if (Math.hypot(q[0] - r[1], q[1] - r[2]) <= SYM_R) return true;
+        return false;
+      };
+      const keep = r => !needSym.has(r) || hasSym(r);
+      for (let i = tpts.length - 1; i >= 0; i--) if (!keep(tpts[i])) tpts.splice(i, 1);
+      for (const n of Object.keys(inserts)) inserts[n] = inserts[n].filter(keep);
+    }
 
     // עצי המודד: הבלוק שמתאים לשם של עץ ויש ממנו הכי הרבה
     const cands = Object.keys(inserts).filter(n => TREE_BLOCK_RE.test(n)).sort((a, b) => inserts[b].length - inserts[a].length);
@@ -496,7 +533,7 @@
     const BD = bounds.map(b => ({ layer: b.layer, pts: b.pts.map(q => [r2(q[0] - ox), r2(q[1] - oy)]) }));
     // רשימת השכבות: שם וצבע השכבה (לחלון השכבות)
     const LY = layNames.map(n => { const L = layers.get(n); return [n, L ? (L.color != null && L.colorIndex === 257 ? L.color : aci(Math.abs(L.colorIndex == null ? 7 : L.colorIndex))) : -1]; });
-    return { v: 4, tpts: TP, layers: LY, pl: PL, fll: FLL, bounds: BD, crs: itm ? 'itm' : 'local', ox, oy, view: view.map((v, i) => r2(v - (i % 2 ? oy : ox))), paths: P, ps: PS, st: styles, dash: dashes, texts: TX, fills: FL, inserts: ins, treeBlock };
+    return { v: 5, tpts: TP, layers: LY, pl: PL, fll: FLL, bounds: BD, crs: itm ? 'itm' : 'local', ox, oy, view: view.map((v, i) => r2(v - (i % 2 ? oy : ox))), paths: P, ps: PS, st: styles, dash: dashes, texts: TX, fills: FL, inserts: ins, treeBlock };
   }
 
   // עצי המודד: [{h, x, y, name}] בקואורדינטות המקוריות
