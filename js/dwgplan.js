@@ -327,10 +327,15 @@
 
     const paths = [], texts = [], fills = [], inserts = {}, bounds = [], tpts = [];
     // בלוק שהציור שלו בשכבת עצים (הבלוק עצמו יכול להיות בשכבה אחרת)
+    // בלוק שיש בו רק טקסט (כמו ANOT0 של המודד: "עץ", קוטר "%%C=0.20", "[1]") הוא כיתוב, לא עץ, גם אם הוא בשכבת עצים
+    const TEXT_ENT = /^(ATTDEF|ATTRIB|TEXT|MTEXT)$/;
+    const textBlocks = new Set();
+    for (const [n, b] of blocks) if (!(b.entities || []).some(x => !TEXT_ENT.test(x.type))) textBlocks.add(n);
     const treeLayerBlocks = new Set();
-    for (const [n, b] of blocks) if ((b.entities || []).some(x => TREE_LAYER_RE.test(String(x.layer || '')))) treeLayerBlocks.add(n);
+    for (const [n, b] of blocks) if ((b.entities || []).some(x => !TEXT_ENT.test(x.type) && TREE_LAYER_RE.test(String(x.layer || '')))) treeLayerBlocks.add(n);
     // עץ לפי שכבה: [מזהה, x, y, מספר]
     const treePt = (e, R, p, label) => {
+      if (e.type === 'INSERT' && textBlocks.has(e.name)) return;
       if (TREE_LAYER_RE.test(R.layer || '') || (e.type === 'INSERT' && treeLayerBlocks.has(e.name))) tpts.push([String(e.handle || ''), p[0], p[1], label || '']);
     };
     // שכבות: אינדקס לכל שם, כדי שאפשר יהיה להדליק ולכבות אותן באפליקציה
@@ -491,7 +496,7 @@
     const BD = bounds.map(b => ({ layer: b.layer, pts: b.pts.map(q => [r2(q[0] - ox), r2(q[1] - oy)]) }));
     // רשימת השכבות: שם וצבע השכבה (לחלון השכבות)
     const LY = layNames.map(n => { const L = layers.get(n); return [n, L ? (L.color != null && L.colorIndex === 257 ? L.color : aci(Math.abs(L.colorIndex == null ? 7 : L.colorIndex))) : -1]; });
-    return { v: 3, tpts: TP, layers: LY, pl: PL, fll: FLL, bounds: BD, crs: itm ? 'itm' : 'local', ox, oy, view: view.map((v, i) => r2(v - (i % 2 ? oy : ox))), paths: P, ps: PS, st: styles, dash: dashes, texts: TX, fills: FL, inserts: ins, treeBlock };
+    return { v: 4, tpts: TP, layers: LY, pl: PL, fll: FLL, bounds: BD, crs: itm ? 'itm' : 'local', ox, oy, view: view.map((v, i) => r2(v - (i % 2 ? oy : ox))), paths: P, ps: PS, st: styles, dash: dashes, texts: TX, fills: FL, inserts: ins, treeBlock };
   }
 
   // עצי המודד: [{h, x, y, name}] בקואורדינטות המקוריות
