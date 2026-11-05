@@ -212,6 +212,16 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tree-row .sp:has(.dims) { white-space: normal; }
 .tree-row .sp .dims { font-weight: 400; color: var(--muted); font-size: 14px; }
 .tree-row .meta { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list-head .btn { min-height: 36px; padding: 4px 12px; font-size: 14px; }
+.pick-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 8px; border-radius: 12px; background: var(--accent-soft-2); border: 1px solid var(--accent); }
+.pick-bar .pick-count { flex: 1; font-weight: 700; font-size: 14px; min-width: 90px; }
+.pick-bar .btn { min-height: 40px; padding: 4px 12px; font-size: 15px; }
+.tree-row.picked { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
+.tree-row.pick { grid-template-columns: 72px 1fr auto; }
+.tree-row .n:has(.pick-box) { gap: 6px; }
+.pick-box { width: 20px; height: 20px; flex: none; border-radius: 6px; border: 2px solid var(--border-strong); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; }
+.tree-row.picked .pick-box { background: var(--danger); border-color: var(--danger); color: #fff; }
+.pick-box .ic { width: 14px; height: 14px; }
 .badges { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 120px; }
 .badge { font-size: 13px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap; line-height: 1.5; }
 .badge.u-כ, .badge.u-1 { background: var(--danger-soft); color: var(--danger); border-color: transparent; font-weight: 700; }

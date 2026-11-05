@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.55.1';
+  const APP_VERSION = '1.56.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1557,8 +1557,10 @@
     const pineMissing = !Construction.isConstruction(cur) && Core.isPine(t.species) && (t.pines == null || t.pines === '');
     const urgCls = v => v === Core.OK ? 'ok' : v;
     const urg = !Construction.isConstruction(cur) && t.urgency ? ' u-' + urgCls(t.urgency) : '';
-    return h('button', { class: 'tree-row' + (t.id === curTreeId ? ' on' : '') + urg, 'data-id': t.id, 'data-search': `${t.num || ''} ${t.species || ''} ${t.notes || ''}`.toLowerCase(), onclick: () => selectTree(t.id) },
-      h('span', { class: 'n' }, t.num || '—'),
+    const picked = selMode && selIds.has(t.id);
+    return h('button', { class: 'tree-row' + (!selMode && t.id === curTreeId ? ' on' : '') + (selMode ? ' pick' : '') + (picked ? ' picked' : '') + urg, 'data-id': t.id, 'data-search': `${t.num || ''} ${t.species || ''} ${t.notes || ''}`.toLowerCase(),
+      'aria-pressed': selMode ? String(picked) : null, onclick: () => selMode ? togglePick(t.id) : selectTree(t.id) },
+      h('span', { class: 'n' }, selMode ? h('span', { class: 'pick-box' }, picked ? icon('check') : null) : null, t.num || '—'),
       h('span', { style: 'min-width:0' },
         h('div', { class: 'sp' }, t.species || 'ללא מין', treeDims(t) ? h('span', { class: 'dims' }, ' · ' + treeDims(t)) : null),
         h('div', { class: 'meta' }, t.notes || '')),
@@ -1580,10 +1582,43 @@
     const none = $('.no-match', list.parentNode);
     if (none) none.classList.toggle('hidden', shown > 0 || !q);
   }
+  // בחירה של כמה עצים ומחיקה ביחד (ori). selFor = הסקר שהבחירה שייכת לו
+  let selMode = false, selIds = new Set(), selFor = null;
+  function togglePick(id) {
+    if (selIds.has(id)) selIds.delete(id); else selIds.add(id);
+    renderTreeList();
+  }
+  function endPick() { selMode = false; selIds = new Set(); renderTreeList(); renderEditor(); }
+  async function deletePicked() {
+    const ts = cur.trees.filter(t => selIds.has(t.id));
+    if (!ts.length) return;
+    const nPh = ts.reduce((a, t) => a + (t.photos || []).length, 0);
+    const nums = ts.map(t => t.num).filter(Boolean);
+    if (!confirm(`למחוק ${ts.length} עצים${nums.length ? ' (' + nums.join(', ') + ')' : ''}${nPh ? ' ואת ' + nPh + ' התמונות שלהם' : ''}?`)) return;
+    const sorted = Core.sortTrees(cur.trees);
+    const firstIdx = sorted.findIndex(t => selIds.has(t.id));
+    for (const t of ts) for (const p of t.photos || []) await DB.deletePhoto(p.id);
+    cur.trees = cur.trees.filter(t => !selIds.has(t.id));
+    if (!treeById(curTreeId)) curTreeId = neighborTree(sorted, firstIdx);
+    selMode = false; selIds = new Set();
+    await saveNow();
+    renderTreeList();
+    renderEditor();
+  }
+  // אחרי מחיקה: העץ שהיה אחרי המחוק ברשימה (או לפניו בסוף הרשימה), כדי לא לקפוץ לראש הרשימה
+  function neighborTree(sortedBefore, idx) {
+    const left = sortedBefore.filter(t => cur.trees.includes(t));
+    const after = sortedBefore.slice(idx).find(t => cur.trees.includes(t));
+    return (after || left[left.length - 1] || {}).id || null;
+  }
+
   function renderTreeList(pane) {
     pane = pane || $('.list-pane');
     if (!pane) return;
+    if (selFor !== cur.id) { selMode = false; selIds = new Set(); selFor = cur.id; }
+    const oldList = $('.tree-list', pane), oldTop = oldList ? oldList.scrollTop : 0;
     const trees = Core.sortTrees(cur.trees);
+    for (const id of [...selIds]) if (!treeById(id)) selIds.delete(id);
     const n = trees.filter(Core.hasContent).length;
     const list = h('div', { class: 'tree-list' }, trees.map(treeRow));
     const search = trees.length > 6 ? h('input', { class: 'in tree-search', type: 'search', value: treeFilter, placeholder: 'סינון: מספר, מין או הערה', 'aria-label': 'סינון העצים',
@@ -1593,13 +1628,31 @@
       h('button', { class: 'btn primary big block', onclick: addTree }, icon('plus'), 'עץ חדש'),
       Construction.isConstruction(cur) ? h('button', { class: 'btn big block', onclick: () => openPlan() }, icon('pin'), cur.plan ? 'מדידה' : 'טען מדידה (DWG / PDF)') : null,
       Construction.isConstruction(cur) || !VOICE_UI ? null : h('button', { class: 'btn big block', onclick: voiceMode }, icon('mic'), 'מצב דיבור'),
-      h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > Core.MAX_TREES ? ` (בתבנית יש מקום ל-${Core.MAX_TREES})` : ''))),
+      h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > Core.MAX_TREES ? ` (בתבנית יש מקום ל-${Core.MAX_TREES})` : '')),
+        trees.length > 1 && !selMode ? h('button', { class: 'btn small', onclick: () => { saveNow(); selMode = true; selIds = new Set(); renderTreeList(); } }, icon('check'), 'בחירה') : null),
+      selMode ? h('div', { class: 'pick-bar' },
+        h('span', { class: 'pick-count' }, selIds.size ? `נבחרו ${selIds.size}` : 'סמן עצים למחיקה'),
+        h('button', { class: 'btn small', onclick: () => {
+          const shown = [...list.querySelectorAll('.tree-row:not(.hidden)')].map(r => r.dataset.id);
+          const all = shown.every(id => selIds.has(id));
+          shown.forEach(id => all ? selIds.delete(id) : selIds.add(id));
+          renderTreeList();
+        } }, 'בחר הכל'),
+        h('button', { class: 'btn small danger', disabled: !selIds.size, onclick: deletePicked }, icon('trash'), 'מחק'),
+        h('button', { class: 'btn small', onclick: endPick }, 'ביטול')) : null,
       search,
       trees.length ? list : h('div', { class: 'empty' }, icon('sprout'), 'עוד אין עצים'),
       h('div', { class: 'muted small no-match hidden', style: 'text-align:center' }, 'אין עץ שמתאים לסינון')].filter(Boolean));
     applyTreeFilter(list);
+    list.scrollTop = oldTop;
     const on = $('.tree-row.on', pane);
-    if (on) on.scrollIntoView({ block: 'nearest' });
+    if (on) scrollRowIntoList(list, on);
+  }
+  // מגלגל רק בתוך הרשימה (לא את כל הדף), ורק אם העץ הנבחר לא נראה
+  function scrollRowIntoList(list, row) {
+    const lr = list.getBoundingClientRect(), rr = row.getBoundingClientRect();
+    if (rr.top < lr.top) list.scrollTop -= lr.top - rr.top + 4;
+    else if (rr.bottom > lr.bottom) list.scrollTop += rr.bottom - lr.bottom + 4;
   }
 
   function refreshRow(t) {
@@ -1896,9 +1949,11 @@
   async function deleteTree() {
     const t = treeById(curTreeId);
     if (!confirm(`למחוק את עץ ${t.num || ''}${t.photos.length ? ' ואת ' + t.photos.length + ' התמונות שלו' : ''}?`)) return;
+    const sorted = Core.sortTrees(cur.trees), idx = sorted.indexOf(t);
     for (const p of t.photos) await DB.deletePhoto(p.id);
     cur.trees = cur.trees.filter(x => x !== t);
-    curTreeId = (Core.sortTrees(cur.trees)[0] || {}).id || null;
+    curTreeId = neighborTree(sorted, idx);
+    history.replaceState(null, '', `#/s/${cur.id}/trees` + (curTreeId ? `/t/${encodeURIComponent(curTreeId)}` : ''));
     await saveNow();
     renderTreeList();
     renderEditor();
