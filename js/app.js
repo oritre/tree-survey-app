@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.61.0';
+  const APP_VERSION = '1.62.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1825,6 +1825,8 @@
     draw(Math.min(items.length, 20));
   }
 
+  // רשימות מההגדרות מוצגות בסקר לפי א-ב (סדר ההגדרות עצמו לא משתנה)
+  const heSort = a => [...new Set(a)].sort((x, y) => x.trim().localeCompare(y.trim(), 'he'));
   let sugCache = { speciesAll: SPECIES_SEED, speciesTop: null, phrasesTop: PHRASE_SEED, constructionNotes: CONSTRUCTION_NOTES_SEED };
   function refreshSuggestions() { suggestions().then(s => { sugCache = s; }).catch(() => {}); }
 
@@ -1899,7 +1901,7 @@
       onchange: askPines });
     markPine();
     const chipSpecies = Construction.isConstruction(cur)
-      ? [...new Set(sug.speciesAll.map(Construction.canonSpecies).filter(x => Construction.SPECIES.has(x)))].slice(0, 16)
+      ? heSort([...new Set(sug.speciesAll.map(Construction.canonSpecies).filter(x => Construction.SPECIES.has(x)))].slice(0, 16))
       : sug.speciesTop || SPECIES_SEED.map(genusOf).filter((g, i, a) => g && a.indexOf(g) === i);
     // הצ'יפ של המין שכבר נבחר מסומן
     const markSpChips = () => {
@@ -1961,7 +1963,8 @@
     notesIn.value = t.notes || '';
     const noteParts = () => notesIn.value.split(/\s*[,.]\s*/).map(s => s.trim()).filter(Boolean);
     const markNoteChips = () => { const parts = noteParts(); for (const c of notesChips.children) c.classList.toggle('on', parts.includes(c.textContent)); };
-    const notesChips = h('div', { class: 'chips' }, (Construction.isConstruction(cur) ? sug.constructionNotes || CONSTRUCTION_NOTES_SEED : sug.phrasesTop).map(p => h('button', { class: 'chip', type: 'button',
+    // בסקר מוצגות לפי א-ב, בלי קשר לסדר שבהגדרות
+    const notesChips = h('div', { class: 'chips' }, heSort(Construction.isConstruction(cur) ? sug.constructionNotes || CONSTRUCTION_NOTES_SEED : sug.phrasesTop).map(p => h('button', { class: 'chip', type: 'button',
       onclick: () => {
         const parts = noteParts();
         if (parts.includes(p)) notesIn.value = parts.filter(x => x !== p).join(', ');
