@@ -554,7 +554,10 @@
     // עצים שכבר בסקר (למשל מסקר ישן או מהשטח) ועוד לא סומנו במדידה: הסימון הבא מקבל את המספר של הראשון מהם,
     // ובסוף ההקלדה המיקום עובר לעץ הקיים במקום ליצור עץ כפול. אחרי שכולם סומנו ממשיכים מהמספר הבא
     const unplaced = except => s.trees.filter(x => x !== except && x.px == null && !x.polyId && String(x.num || '').trim());
+    // נפתח מכרטיס של עץ שלא סומן: הסימון הבא הוא העץ הזה
+    const placeFor = !focus && ctx.focusId && s.trees.find(t => t.id === ctx.focusId);
     function nearestNum() {
+      if (placeFor && placeFor.px == null && unplaced().includes(placeFor)) return placeFor.num;
       const first = root.Core.sortTrees(unplaced())[0];
       return first ? first.num : root.Core.nextNum(s.trees);
     }
@@ -1322,15 +1325,17 @@
       legendHtml();
     }
     let flashT = null;
-    function flash(msg) {
+    function flash(msg, ms) {
       const el = h('div', { class: 'plan-flash' }, msg);
       $$('.plan-flash').forEach(x => x.remove());
-      ov.append(el); clearTimeout(flashT); flashT = setTimeout(() => el.remove(), 1400);
+      ov.append(el); clearTimeout(flashT); flashT = setTimeout(() => el.remove(), ms || 1400);
     }
     function changed() { ctx.save(); redraw(); updateBar(); }
 
     renderSheet();
     setTimeout(() => { map.invalidateSize(); redraw(); }, 50);
+    if (placeFor && placeFor.px == null) flash(placeFor.polyId ? `עץ ${placeFor.num || ''} שייך לתחום במדידה`
+      : String(placeFor.num || '').trim() ? `גע במקום של עץ ${placeFor.num} כדי לסמן אותו` : 'לעץ אין מספר. תן לו מספר בכרטיס כדי לסמן אותו', 3500);
 
     let done;
     function close(openId) {
