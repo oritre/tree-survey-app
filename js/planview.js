@@ -576,10 +576,55 @@
       changed();
       return true;
     }
+    // "עץ N נמצא כאן": העץ הקיים עם המספר (עם הפרטים והתמונות) עובר לסימון הזה, והסימון הריק נמחק.
+    // אם לעץ הקיים היה סימון אחר במדידה, הוא מתפנה
+    function moveExistingHere(t, x, prev) {
+      const old = PLACE.map(k => x[k]);
+      for (const k of PLACE) { if (t[k] != null) x[k] = t[k]; else delete x[k]; }
+      const i = s.trees.indexOf(t);
+      if (i >= 0) s.trees.splice(i, 1);
+      const last = undo[undo.length - 1];
+      if (last && last.tree === t) undo.pop();
+      undo.push({ what: `העברת עץ ${x.num}`, run: () => {
+        PLACE.forEach((k, j) => { if (old[j] != null) x[k] = old[j]; else delete x[k]; });
+        if (i >= 0 && !s.trees.includes(t)) { t.num = prev; s.trees.splice(Math.min(i, s.trees.length), 0, t); }
+      } });
+      if (selId === t.id) selId = x.id;
+      changed(); renderSheet();
+      flash(`עץ ${x.num} עבר לכאן` + ((x.photos || []).length ? ` עם ${x.photos.length} תמונות` : ''));
+    }
+    // מספר שכבר יש לעץ אחר: שואלים מה התכוונו. מחזיר false אם ביטלו
+    async function numTaken(t, x, v, prev) {
+      const nPh = (x.photos || []).length;
+      const opts = [];
+      if (!hasData(t) && !t.polyId && !x.polyId) opts.push({ value: 'move', primary: true, label: `עץ ${v} נמצא כאן`,
+        hint: `עץ ${v}${(x.species || '').trim() && !x.speciesAuto ? ' (' + x.species.trim() + ')' : ''} עובר לסימון הזה עם כל הפרטים${nPh ? ' ו-' + nPh + ' התמונות' : ''}` + (x.px != null ? '. הסימון הקודם שלו מתפנה' : '') });
+      if (hasData(t) && String(prev || '').trim()) opts.push({ value: 'swap', label: `להחליף מספרים`, hint: `העץ הזה יהיה ${v}, ועץ ${v} יקבל את ${prev}. הפרטים והתמונות נשארים עם כל עץ` });
+      opts.push({ value: 'dup', label: `שני עצים עם המספר ${v}` });
+      opts.push({ value: 'cancel', label: 'ביטול' });
+      const c = ctx.askChoice ? await ctx.askChoice(`כבר יש עץ ${v}`, null, opts)
+        : (confirm(`כבר יש עץ ${v}. לתת את אותו מספר גם לעץ הזה?`) ? 'dup' : 'cancel');
+      if (c === 'move') { moveExistingHere(t, x, prev); return true; }
+      if (c === 'swap') {
+        t.num = v; x.num = prev;
+        undo.push({ what: `החלפת מספרים ${prev} ↔ ${v}`, run: () => { t.num = prev; x.num = v; } });
+        changed(); renderSheet(); flash(`עץ ${v} ↔ עץ ${prev}`);
+        return true;
+      }
+      if (c === 'dup') { t.num = v; undo.push({ what: `מספר ${prev} ← ${v}`, run: () => { t.num = prev; } }); changed(); renderSheet(); return true; }
+      t.num = prev; changed(); renderSheet();
+      return false;
+    }
     function endTyping() {
       const t = typing && s.trees.find(x => x.id === typing.id);
+      const ty = typing;
       typing = null;
-      if (t && mergeIntoExisting(t)) redraw();
+      if (!t) return;
+      if (mergeIntoExisting(t)) { redraw(); return; }
+      // מספר שהוקלד ושייך לעץ שכבר סומן במקום אחר: שואלים אם זה אותו עץ
+      const v = ty.buf && root.Core.normNum(t.num);
+      const x = v && s.trees.find(y => y !== t && root.Core.normNum(y.num) === v);
+      if (x) numTaken(t, x, v, ty.auto);
     }
     // מספר מוקלד מיד אחרי הוספת עץ: הספרות הראשונות מחליפות את המספר האוטומטי (מהמקלדת).
     // בלי הקלדה נשאר המספר הרץ. נגמר בנגיעה הבאה במפה, באישור, או כשבוחרים עץ אחר
@@ -752,7 +797,9 @@
       const n = await ctx.askNumber(`מספר לעץ ${t.num || ''}`, t.pname ? `מספר המודד: ${t.pname}` : null);
       if (n == null) return;
       const v = String(n);
-      if (s.trees.some(x => x !== t && root.Core.normNum(x.num) === v) && !confirm(`כבר יש עץ ${v}. לתת את אותו מספר גם לעץ הזה?`)) return;
+      t = s.trees.find(x => x.id === t.id) || t;
+      const x = s.trees.find(y => y !== t && root.Core.normNum(y.num) === v);
+      if (x) { await numTaken(t, x, v, t.num); return; }
       const old = t.num;
       t.num = v;
       undo.push({ what: `מספר ${old} ← ${v}`, run: () => { t.num = old; } });

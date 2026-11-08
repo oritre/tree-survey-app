@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.56.2';
+  const APP_VERSION = '1.57.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -810,7 +810,7 @@
     const imageUrl = pg.img ? URL.createObjectURL(pg.img) : null;
     const openId = await PlanView.open({
       survey: cur, geom: g, imageUrl, h, toast, uid, makeTree, focusId,
-      askNumber, save: saveSoon,
+      askNumber, askChoice, save: saveSoon,
       tileLayer: name => tileLayer(...(LAYERS[name] || LAYERS['גוגל – לוויין'])),
     });
     if (imageUrl) URL.revokeObjectURL(imageUrl);
