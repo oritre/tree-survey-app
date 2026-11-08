@@ -527,9 +527,9 @@
       `<rowBreaks count="${breaks.length}" manualBreakCount="${breaks.length}">` + breaks.map(r => `<brk id="${r}" max="16383" man="1"/>`).join('') + '</rowBreaks>');
     // עמודות F-H הצהובות (גזע 1-3) מוסתרות תמיד. הנתונים נשארים בתאים והנוסחאות מחשבות מהם
     sheet.head = sheet.head.replace(/<col min="5" max="8"([^>]*?)\/>/, (m, a) => `<col min="5" max="5"${a}/><col min="6" max="8"${a.replace(/ hidden="1"/, '')} hidden="1"/>`);
-    // שוליים ימין/שמאל 0.7": "שמור בשם PDF" של אקסל חותך תמונות שקרובות לקצה הדף (בערך 0.57" מהקצה),
-    // אז התמונות הימניות בנספח יצאו חתוכות. בשוליים האלה כל העמוד (715 נק') עדיין נכנס ברוחב הדף
-    sheet.tail = sheet.tail.replace(/<pageMargins([^>]*?)\/>/, (m, a) => '<pageMargins' + a.replace(/\s(left|right)="[^"]*"/g, ' $1="0.7"') + '/>');
+    // שוליים: ימין 0.65", שמאל כמו בתבנית (0.236"). "שמור בשם PDF" של אקסל חותך תמונות בערך 0.57" מהקצה הימני
+    // (שם התמונות הימניות בנספח), ושמאל נשאר צר כדי שעמודה R (הערות) תיכנס לעמוד הראשון. 0.7" בשני הצדדים (1.67.1) הוציא את R
+    sheet.tail = sheet.tail.replace(/<pageMargins([^>]*?)\/>/, (m, a) => '<pageMargins' + a.replace(/\sright="[^"]*"/, ' right="0.65"').replace(/\sleft="[^"]*"/, ' left="0.23622047244094491"') + '/>');
     if (!embed) sheet.head = sheet.head.replace(/<col min="58" max="69"([^>]*?)\/>/, (m, a) => / hidden="1"/.test(a) ? m : `<col min="58" max="69"${a} hidden="1"/>`);
 
     zip.file('xl/worksheets/sheet1.xml', sheet.toXml());
