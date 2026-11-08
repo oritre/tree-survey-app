@@ -413,11 +413,6 @@
   }
 
   // getPhoto(id) -> Blob של התמונה (או null)
-  // שורת גוש וחלקה (בתבנית תא אחד B3:R4): תווית, מספר, תווית, מספר. הגליון מימין לשמאל, B בצד ימין
-  const GUSH_CELLS = {
-    B3: { label: 'גוש', merge: 'B3:J4' }, K3: { key: 'gush', merge: 'K3:M4' },
-    N3: { label: 'חלקה', merge: 'N3:O4' }, P3: { key: 'helka', merge: 'P3:Q4' },
-  };
   async function buildWorkbook(templateBytes, survey, getPhoto) {
     const zip = await JSZip.loadAsync(templateBytes);
     const st = settingsOf(survey);
@@ -444,9 +439,9 @@
     const params = new RowSheet(await zip.file('xl/worksheets/sheet4.xml').async('string'));  // חד גזעי
 
     // כותרת: B3 גוש וחלקה, B7 כתובת, Q1 תאריך קבוע (בתבנית NOW() שמתעדכן)
-    // גוש וחלקה: שורה 3 מפוצלת לתאים נפרדים (גוש | מספר | חלקה | מספר), כדי שאפשר יהיה להקליד את המספרים
-    // אחר כך באקסל והרווחים נשארים קבועים. תא מספר ריק נשאר ריק
-    for (const [ref, v] of Object.entries(GUSH_CELLS)) sheet.set(ref, v.label || (String(survey[v.key] || '').trim() || null));
+    // גוש וחלקה: תמיד בשורה, גם כשלא מולאו. מספר חסר = 2 רווחים במקומו, כדי להקליד אותו ידנית באקסל
+    const gush = String(survey.gush || '').trim(), helka = String(survey.helka || '').trim();
+    sheet.set('B3', 'גוש' + (gush ? ' ' + gush + ' ' : '  ') + 'חלקה' + (helka ? ' ' + helka : ''));
     sheet.set('B7', survey.site || null);
     if (survey.date) sheet.set('Q1', dateSerial(survey.date));
 
@@ -504,10 +499,6 @@
       sheet.edit(c.img, s => `<c r="${c.img}"${s ? ` s="${s}"` : ''} t="e" vm="${vm}"><v>#VALUE!</v></c>`);
     }
     await addCellImages(zip, images);
-    await alignCells(zip, sheet, ['B3'], 'horizontal="left" vertical="center" readingOrder="2"');
-    await alignCells(zip, sheet, ['K3', 'N3', 'P3'], 'horizontal="right" vertical="center" indent="1" readingOrder="2"');
-    sheet.tail = sheet.tail.replace('<mergeCell ref="B3:R4"/>', Object.values(GUSH_CELLS).map(v => `<mergeCell ref="${v.merge}"/>`).join(''))
-      .replace(/<mergeCells count="\d+">/, m => m.replace(/\d+/, n => +n + Object.keys(GUSH_CELLS).length - 1));
     // תוויות התמונות מיושרות תמיד לימין (בלי זה מספר נצמד לימין וטקסט כמו 2-5 לשמאל)
     await alignRight(zip, sheet, SLOT_CELLS.filter(c => c.page <= avail).map(c => c.label));
 
