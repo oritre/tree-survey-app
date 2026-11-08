@@ -93,11 +93,23 @@
     return new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
   }
 
-  // פותח עורך במסך מלא. מחזיר את רשימת הקווים (ריקה אם לא סימנו), null אם בוטל (גם בכפתור החזרה), או 'retake' (עם opts.retakeLabel) לצילום מחדש
+  // הקווים עוברים מתמונה ביחס w/h אחד לתמונה ביחס אחר, כשהראשונה היא חיתוך מהמרכז של השנייה
+  // (הווידאו של המצלמה הוא בדרך כלל חיתוך של התמונה המלאה, למשל 16:9 מתוך 4:3)
+  function remap(s, fromAR, toAR) {
+    if (isBri(s)) return s;
+    const f = toAR < fromAR ? toAR / fromAR : fromAR / toAR;
+    const m = toAR < fromAR ? ([x, y]) => [x, 0.5 + (y - 0.5) * f] : ([x, y]) => [0.5 + (x - 0.5) * f, y];
+    return Object.assign({}, s, { p: s.p.map(m) });
+  }
+
+  // פותח עורך במסך מלא. מחזיר את רשימת הקווים (ריקה אם לא סימנו), null אם בוטל (גם בכפתור החזרה), או 'retake' (עם opts.retakeLabel) לצילום מחדש.
+  // עם opts.moreLabel יש כפתור "שמור וצלם עוד": מחזיר את הקווים עם more = true.
+  // opts.upgrade: Promise של תמונה טובה יותר (הצילום של המצלמה) שמחליפה את התמונה בעורך כשהיא מוכנה; opts.onImage(blob) נקרא כשהוחלפה
   function open(blob, strokes, opts) {
     opts = opts || {};
     return new Promise(async resolve => {
-      const img = await createImageBitmap(blob);
+      let img = await createImageBitmap(blob);
+      let closed = false;
       let list = (strokes || []).filter(s => !isBri(s)).map(s => JSON.parse(JSON.stringify(s)));
       let bri = briOf(strokes);
       const redo = [];
@@ -127,7 +139,9 @@
           </div>
           <span class="sp"></span>
           ${opts.retakeLabel ? `<button data-act="retake" class="txt">${opts.retakeLabel}</button>` : ''}
+          <span class="annot-wait" hidden title="התמונה המלאה מהמצלמה עוד בדרך">⏳</span>
           <button data-act="cancel" class="txt">${opts.cancelLabel || 'ביטול'}</button>
+          ${opts.moreLabel ? `<button data-act="more" class="txt">${opts.moreLabel}</button>` : ''}
           <button data-act="save" class="txt save">${opts.saveLabel || 'שמור'}</button>
         </div>
         <div class="annot-stage"><canvas></canvas></div>`;
@@ -238,6 +252,7 @@
 
       let release = null;
       function close(result) {
+        closed = true;
         window.removeEventListener('resize', layout);
         ov.remove();
         if (release) release();
@@ -257,12 +272,39 @@
         else if (b.dataset.act === 'retake') return close('retake');
         else if (b.dataset.act === 'fit') { zoom = 1; tx = ty = 0; applyZoom(); resize(); }
         else if (b.dataset.act === 'bri0') { bri = 1; syncBri(); }
-        else if (b.dataset.act === 'save') return close(Math.abs(bri - 1) > 0.001 ? list.concat([{ t: 'bri', v: Math.round(bri * 100) / 100 }]) : list);
+        else if (b.dataset.act === 'save' || b.dataset.act === 'more') {
+          const out = Math.abs(bri - 1) > 0.001 ? list.concat([{ t: 'bri', v: Math.round(bri * 100) / 100 }]) : list;
+          if (b.dataset.act === 'more') out.more = true;
+          return close(out);
+        }
         draw(); sync();
       });
       window.addEventListener('resize', layout);
       sync(); syncBri();
       requestAnimationFrame(layout);
+
+      if (opts.upgrade) {
+        const wait = ov.querySelector('.annot-wait');
+        wait.hidden = false;
+        opts.upgrade.then(async b => {
+          if (closed || !b) return;
+          const nimg = await createImageBitmap(b);
+          if (closed) return;
+          const a0 = img.width / img.height, a1 = nimg.width / nimg.height;
+          if (Math.abs(a0 / a1 - 1) > 0.02) {
+            // כיוון אחר (לאורך/לרוחב) עם סימונים: לא מחליפים, כדי לא להזיז את הסימונים
+            if ((a0 > 1) !== (a1 > 1) && (list.length || redo.length || cur)) return;
+            if ((a0 > 1) === (a1 > 1)) {
+              list = list.map(x => remap(x, a0, a1));
+              for (let i = 0; i < redo.length; i++) redo[i] = remap(redo[i], a0, a1);
+              if (cur) cur = remap(cur, a0, a1);
+            }
+          }
+          img = nimg;
+          if (opts.onImage) opts.onImage(b);
+          layout();
+        }).catch(() => {}).finally(() => { wait.hidden = true; });
+      }
     });
   }
 
