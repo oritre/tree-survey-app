@@ -389,7 +389,8 @@
         editor = autoGrow(h('textarea', { class: 'in doc-text' + (b.center ? ' c' : '') + (b.bold ? ' b' : ''), rows: 1, 'aria-label': 'טקסט הפסקה', placeholder: b.ex ? 'לדוגמה: ' + b.ex : 'שורה ריקה',
           oninput: e => {
             // מרגע שעורכים פסקה כאן היא טקסט חופשי (גם אם הייתה שדה במילוי פרטים)
-            if (b.kind !== 'text' && b.kind !== 'title' && b.kind !== 'priceHead') { b.kind = 'text'; }
+            // (שורת כותרת נשארת שורת כותרת, כי ממנה נקבע שם הקובץ)
+            if (b.kind !== 'text' && b.kind !== 'title' && b.kind !== 'priceHead' && b.kind !== 'subject') { b.kind = 'text'; }
             b.t = e.target.value; changed();
           } }, val));
       }

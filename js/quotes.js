@@ -193,7 +193,12 @@
     // ori: יציבות = שם המוסד; היתר בניה = הכתובת בלבד (בלי גוש/חלקה ובלי שם התבנית)
     const inst = q.blocks.find(b => b.inst && !b.del && b.kind === 'subject' && (b.t || '').trim());
     if (inst) return inst.t.trim();
-    const subj = q.blocks.filter(b => b.kind === 'subject' && !b.del && (b.t || '').trim()).map(b => b.t.trim());
+    // שורות הכותרת שבין "הצעת מחיר..." ל"בהמשך ל...". גם שורה שנערכה ב"עריכת כל המסמך" (הפכה לטקסט חופשי) או נוספה שם
+    const ti = q.blocks.findIndex(b => b.kind === 'title' && !b.del);
+    let end = q.blocks.findIndex((b, i) => i > ti && /בהמשך ל/.test(blockText(q, b) || ''));
+    if (end < 0) end = q.blocks.length;
+    const subj = q.blocks.filter((b, i) => !b.del && (b.kind === 'subject' || (ti >= 0 && i > ti && i < end && b.kind === 'text')))
+      .map(b => (blockText(q, b) || '').trim()).filter(t => t && !/^\s*גוש\s/.test(t));
     if (subj.length) return subj.join(' ');
     const blank = q.blocks.find(b => b.kind === 'blank' && b.blank === 'colon' && !b.del && (b.val || '').trim());
     if (blank) return blank.val.trim();
