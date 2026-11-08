@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.59.1';
+  const APP_VERSION = '1.60.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1713,25 +1713,106 @@
     toast(t.num ? `שוכפל לעץ ${t.num}` : 'העץ שוכפל');
   }
 
-  // השלמה אוטומטית של מין העץ בסקר בטיחות: כל המינים מרשימת סקר הבנייה, רק המילה הראשונה (איקליפטוס המקור → איקליפטוס)
-  let safetySpeciesCache = null;
-  function safetySpecies() {
-    if (!safetySpeciesCache) safetySpeciesCache = [...new Set([...Construction.SPECIES.keys()]
-      .map(n => n.replace(/\u00a0/g, ' ').trim().split(/\s+/)[0].replace(/-$/, ''))
-      .filter(w => /[\u0590-\u05ff]/.test(w)))].sort((a, b) => a.localeCompare(b, 'he'));
-    return safetySpeciesCache;
+  // מין העץ בסקר בטיחות: כל המינים מרשימת סקר הבנייה, רק המילה הראשונה ובלי כפילויות
+  // (שיטה מכחילה, שיטת המקור → שיטה; סיגלון עלה-מימוזה → סיגלון; איקליפטוס המקור → איקליפטוס)
+  const GENUS_FIX = { 'איקלפטוס': 'איקליפטוס', 'אלומגן': 'אלמוגן' };
+  const looseHe = v => v.replace(/[יו]/g, '');
+  function rawGenus(n) {
+    const w = String(n || '').replace(/\u00a0/g, ' ').trim().split(/\s+/);
+    let g = (w[0] || '').replace(/-$/, '');
+    if (g === 'בן' && w[1] === 'עוזרר') g = 'בן עוזרר';
+    return GENUS_FIX[g] || g;
+  }
+  let genusData = null;
+  function genusInfo() {
+    if (genusData) return genusData;
+    const raw = new Set([...Construction.SPECIES.keys()].map(rawGenus).filter(w => /[\u0590-\u05ff]/.test(w)));
+    // צורת סמיכות → השם עצמו: שיטת → שיטה, אלת → אלה, בוהיניית → בוהיניה
+    const abs = g => /יית$/.test(g) ? g.slice(0, -2) + 'ה' : /ת$/.test(g) && raw.has(g.slice(0, -1) + 'ה') ? g.slice(0, -1) + 'ה' : g;
+    const map = new Map(), loose = new Map();
+    for (const g of raw) map.set(g, abs(g));
+    const list = [...new Set(map.values())].sort((a, b) => a.localeCompare(b, 'he'));
+    for (const g of list) loose.set(looseHe(g), g);
+    for (const [g, a] of map) if (!loose.has(looseHe(g))) loose.set(looseHe(g), a);
+    return genusData = { list, set: new Set(list), map, loose };
+  }
+  function safetySpecies() { return genusInfo().list; }
+  // השם הקצר של מין שנכתב (גם בכתיב חסר: אקליפטוס → איקליפטוס). לא ברשימה → ריק
+  function genusOf(name) {
+    const g = rawGenus(name);
+    if (!g) return '';
+    const { set, map, loose } = genusInfo();
+    if (set.has(g)) return g;
+    return map.get(g) || loose.get(looseHe(g)) || '';
   }
 
-  let sugCache = { speciesAll: SPECIES_SEED, speciesTop: SPECIES_SEED.slice(0, 10), phrasesTop: PHRASE_SEED, constructionNotes: CONSTRUCTION_NOTES_SEED };
+  // השלמה תוך כדי הקלדה למין העץ בסקר בטיחות. כמה מינים מופרדים בפסיק: ההשלמה היא למין האחרון
+  function safetySpeciesCombo(input) {
+    input.removeAttribute('list');
+    input.setAttribute('autocomplete', 'off');
+    const menu = h('div', { class: 'combo-menu hidden', role: 'listbox' });
+    const norm = v => (v || '').replace(/[\u00a0\s]+/g, ' ').trim();
+    const hide = () => menu.classList.add('hidden');
+    const parts = () => { const v = input.value, i = v.lastIndexOf(','); return [i < 0 ? '' : v.slice(0, i + 1) + ' ', v.slice(i + 1)]; };
+    const show = () => {
+      if (document.activeElement !== input) return;
+      const q = norm(parts()[1]);
+      if (!q) return hide();
+      const lq = looseHe(q);
+      // קודם מה שמתחיל במה שהוקלד, אחר כך כתיב חסר/מלא (אקליפטוס ↔ איקליפטוס), ואז מה שמכיל אותו
+      const loose = lq.length >= 2;
+      const rank = v => v.startsWith(q) ? 0 : loose && v[0] === q[0] && looseHe(v).startsWith(lq) ? 1 : v.includes(q) ? 2 : loose && looseHe(v).includes(lq) ? 3 : 9;
+      const list = safetySpecies().filter(v => v !== q && rank(v) < 9).sort((a, b) => rank(a) - rank(b)).slice(0, 30);
+      if (!list.length) return hide();
+      menu.replaceChildren(...list.map(v => h('button', { type: 'button', class: 'combo-opt', role: 'option',
+        onpointerdown: e => e.preventDefault(), onmousedown: e => e.preventDefault(),
+        onclick: () => { input.value = parts()[0] + v; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); hide(); } }, v)));
+      menu.scrollTop = 0;
+      menu.classList.remove('hidden');
+    };
+    input.addEventListener('input', e => { if (e.isTrusted) show(); });
+    input.addEventListener('focus', show);
+    input.addEventListener('blur', () => setTimeout(hide, 200));
+    input.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+    return h('div', { class: 'combo' }, input, menu);
+  }
+
+  // הבחירה המהירה: כמה שנכנס בשתי שורות מתוך items (הנבחרים ביותר ראשונים), מוצג לפי א-ב.
+  // מחושב מחדש כשרוחב המסך משתנה (סיבוב הטאבלט)
+  function fitChipRows(box, items, make, after, maxRows = 2) {
+    let lastW = -1;
+    const rows = () => new Set([...box.children].map(c => c.offsetTop)).size;
+    const draw = k => { box.replaceChildren(...items.slice(0, k).sort((a, b) => a.localeCompare(b, 'he')).map(make)); };
+    const fit = () => {
+      if (!box.isConnected) { ro.disconnect(); return; }
+      const w = box.clientWidth;
+      if (!w || w === lastW) return;
+      lastW = w;
+      let lo = 0, hi = Math.min(items.length, 60);
+      draw(hi);
+      if (rows() > maxRows) {
+        while (hi - lo > 1) { const mid = (lo + hi) >> 1; draw(mid); if (rows() <= maxRows) lo = mid; else hi = mid; }
+        draw(lo);
+      }
+      if (after) after();
+    };
+    const ro = new ResizeObserver(fit);
+    ro.observe(box);
+    draw(Math.min(items.length, 20));
+  }
+
+  let sugCache = { speciesAll: SPECIES_SEED, speciesTop: null, phrasesTop: PHRASE_SEED, constructionNotes: CONSTRUCTION_NOTES_SEED };
   function refreshSuggestions() { suggestions().then(s => { sugCache = s; }).catch(() => {}); }
 
   async function suggestions() {
     const all = await DB.allSurveys();
-    const sp = new Map();
+    const sp = new Map(), gen = new Map();
     // לומדים רק מסקרי בטיחות: ההערות והמינים של סקרי בנייה לא נכנסים להצעות
     for (const s of all.filter(x => !Construction.isConstruction(x))) for (const t of s.trees) {
       const k = (t.species || '').trim();
       if (k) sp.set(k, (sp.get(k) || 0) + 1);
+      // כמה פעמים נבחר כל מין (לפי השם הקצר), לבחירה המהירה
+      for (const g of new Set(k.split(/[,;/+]|\s+ו(?=[\u0590-\u05ff])/).map(genusOf).filter(Boolean))) gen.set(g, (gen.get(g) || 0) + 1);
     }
     const custom = await DB.getKV('species', null);
     const phrases = await DB.getKV('phrases', null);
@@ -1739,7 +1820,7 @@
     const uniq = a => [...new Set(a)];
     return {
       speciesAll: uniq(top(sp).concat(custom || SPECIES_SEED)),
-      speciesTop: uniq(top(sp).concat(custom || SPECIES_SEED)).slice(0, 10),
+      speciesTop: uniq(top(gen).concat((custom || SPECIES_SEED).map(genusOf).filter(Boolean))),
       // הערות: רק הרשימה הקבועה מההגדרות, בלי למידה מהסקרים
       phrasesTop: phrases || PHRASE_SEED,
       constructionNotes: (await DB.getKV('constructionNotes', null)) || CONSTRUCTION_NOTES_SEED,
@@ -1789,17 +1870,24 @@
       if (n == null) { pineIn.focus(); return; }
       t.pines = n; pineIn.value = n; markPine(); changed();
     };
-    const spIn = h('input', { class: 'in', value: t.speciesAuto ? '' : t.species || '', placeholder: t.speciesAuto ? t.species.trim() : '', list: 'speciesList', 'aria-label': 'מין עץ',
+    const spIn = h('input', { class: 'in', value: t.speciesAuto ? '' : t.species || '', placeholder: t.speciesAuto ? t.species.trim() : '', 'aria-label': 'מין עץ',
       oninput: e => { t.species = e.target.value; if (t.speciesAuto) { delete t.speciesAuto; spIn.placeholder = ''; } markPine(); changed(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); if (e.inputType === 'insertReplacementText' || !e.inputType) askPines(); },
       onchange: askPines });
     markPine();
     const chipSpecies = Construction.isConstruction(cur)
       ? [...new Set(sug.speciesAll.map(Construction.canonSpecies).filter(x => Construction.SPECIES.has(x)))].slice(0, 16)
-      : sug.speciesTop;
+      : sug.speciesTop || SPECIES_SEED.map(genusOf).filter((g, i, a) => g && a.indexOf(g) === i);
     // הצ'יפ של המין שכבר נבחר מסומן
-    const markSpChips = () => { for (const c of spChips.children) c.classList.toggle('on', c.textContent === (t.species || '').trim()); };
-    const spChips = h('div', { class: 'chips' }, chipSpecies.map(s => h('button', { class: 'chip', type: 'button',
-      onclick: () => { t.species = s; spIn.value = s; markPine(); markSpChips(); changed(); askPines(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); } }, s)));
+    const markSpChips = () => {
+      const v = (t.species || '').trim(), g = Construction.isConstruction(cur) ? v : genusOf(v);
+      for (const c of spChips.children) c.classList.toggle('on', c.textContent === v || c.textContent === g);
+    };
+    const spChip = s => h('button', { class: 'chip', type: 'button',
+      onclick: () => { t.species = s; spIn.value = s; markPine(); markSpChips(); changed(); askPines(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); } }, s);
+    const spChips = h('div', { class: 'chips' });
+    // בטיחות: שתי שורות של המינים שנבחרו הכי הרבה, לפי א-ב
+    if (Construction.isConstruction(cur)) spChips.append(...chipSpecies.map(spChip));
+    else fitChipRows(spChips, chipSpecies, spChip, markSpChips);
     spIn.addEventListener('input', markSpChips);
     markSpChips();
 
@@ -1836,7 +1924,6 @@
     const build = Construction.isConstruction(cur) ? constructionFields(t, changed, spIn) : null;
 
     pane.replaceChildren(
-      h('datalist', { id: 'speciesList' }, (build ? [...Construction.SPECIES.keys()] : safetySpecies()).map(s => h('option', { value: s }))),
       h('div', { class: 'card stack' },
         // הצילום ראשון בטופס, כדי לא לפספס אותו (ori, כל סוגי הסקרים)
         h('div', {},
@@ -1851,7 +1938,7 @@
             h('label', { class: 'row', style: 'margin-top:6px;cursor:pointer', title: 'נשמר בסקר לגיבוי. בהפקת דוח שואלים אם לכלול אותו' },
               h('input', { type: 'checkbox', checked: !!t.ref, style: 'width:24px;height:24px', onchange: e => { t.ref = e.target.checked || undefined; const pl = t.polyId && (cur.planPolys || []).find(p => p.id === t.polyId); if (pl) pl.ref = t.ref; changed(); } }),
               h('span', {}, 'לא להתייחסות (גיבוי בלבד)'))),
-          h('div', {}, field('מין עץ', build ? speciesCombo(spIn, t) : spIn))),
+          h('div', {}, field('מין עץ', build ? speciesCombo(spIn, t) : safetySpeciesCombo(spIn)))),
         build && cur.plan && t.px != null ? h('div', { class: 'row plan-tag' },
           h('span', { class: 'muted small' }, t.pref ? `במדידה: עץ של המודד${t.pname ? ' ' + t.pname : ''}` : 'במדידה: עץ שסימנתי'),
           h('button', { class: 'btn', onclick: () => openPlan(t.id) }, icon('pin'), 'הצג במדידה')) : null,
