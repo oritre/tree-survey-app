@@ -519,6 +519,7 @@
     const cellW = (pageWmm - ML - MR) / COLS, cellH = (pageHmm - MT - MB) / ROWS, imgH = cellH - NUMBOX;
     const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const pt = v => (v * MM).toFixed(2) + 'pt';
+    // התמונות נחתכות ליחס של התא (מהמרכז), כמו בדוח היציבות: תמונה מלאה 3:4 מ-takePhoto ממלאת את התא כמו פריים 9:16
     const pics = new Array(items.length);
     let n = 0, next = 0;
     const work = async () => {
@@ -527,7 +528,7 @@
         const b = await getPhotoBlob(items[i].id);
         if (b) {
           const key = 'pp:' + items[i].id + ':' + b.size;
-          if (!shrunk.has(key)) shrunk.set(key, shrink(b, 1100).then(async sb => ({ url: await blobToDataUrl(sb), bmp: await createImageBitmap(sb) })));
+          if (!shrunk.has(key)) shrunk.set(key, shrink(b, 1100, (cellW - 2 * PAD) / (imgH - 2 * PAD)).then(async sb => ({ url: await blobToDataUrl(sb), bmp: await createImageBitmap(sb) })));
           const r = await shrunk.get(key);
           pics[i] = { url: r.url, w: r.bmp.width, h: r.bmp.height };
         }
