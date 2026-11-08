@@ -12,8 +12,9 @@
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('אין גישה למצלמה בדפדפן הזה');
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      // 4:3 כמו הצילום המלא של החיישן: כך גם פריים מהווידאו (כשהצילום נתקע) יוצא באותה צורה, וההחלפה בעורך לא קופצת
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 4032 }, height: { ideal: 3024 }, aspectRatio: { ideal: 4 / 3 } },
+      // 16:9 (בטאבלט לאורך 9:16): כמעט בדיוק הצורה של תא התמונה בדוחות (רוחב/גובה 0.56-0.61), כך שמה שרואים במצלמה
+      // הוא מה שייכנס לדוח. הצילום המלא (3:4) נשמר שלם, ובדוח נחתך מהמרכז לצורת התא
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
     });
     const track = stream.getVideoTracks()[0];
     const caps = track.getCapabilities ? track.getCapabilities() : {};
