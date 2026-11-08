@@ -12,7 +12,8 @@
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('אין גישה למצלמה בדפדפן הזה');
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
+      // 4:3 כמו הצילום המלא של החיישן: כך גם פריים מהווידאו (כשהצילום נתקע) יוצא באותה צורה, וההחלפה בעורך לא קופצת
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 4032 }, height: { ideal: 3024 }, aspectRatio: { ideal: 4 / 3 } },
     });
     const track = stream.getVideoTracks()[0];
     const caps = track.getCapabilities ? track.getCapabilities() : {};
@@ -62,7 +63,6 @@
   // takePhoto נתקע לפעמים באנדרואיד ולא חוזר עד שסוגרים את המצלמה (ואז הפריים מהווידאו כבר שחור),
   // לכן הוא מוגבל בזמן, ופריים מהווידאו נשמר מראש (o.backup אם כבר צולם).
   // o.maxSide: מצלמים ברזולוציה הקטנה ביותר שעדיין גדולה ממנו (התמונה מוקטנת אליו בכל מקרה), וזה מהיר יותר
-  let takePhotoHung = false;
   async function grab(video, ic, torch, o) {
     o = o || {};
     const backup = o.noFallback ? null : o.backup || frame(video);
@@ -77,9 +77,9 @@
       const attempt = o => ic.takePhoto(o).then(b => (b && b.size ? b : null));
       const p = attempt(set).catch(() => attempt().catch(() => null));
       const TIMEOUT = {};
-      blob = takePhotoHung ? null : await Promise.race([p, new Promise(r => setTimeout(() => r(TIMEOUT), 3500))]);
-      // נתקע פעם אחת: עד שהאפליקציה תיפתח מחדש מצלמים מהווידאו מיד, בלי לחכות שוב
-      if (blob === TIMEOUT) { takePhotoHung = true; blob = null; }
+      blob = ic._hung ? null : await Promise.race([p, new Promise(r => setTimeout(() => r(TIMEOUT), 3500))]);
+      // נתקע פעם אחת: עד שהמצלמה תיסגר מצלמים מהווידאו מיד, בלי לחכות שוב. בפתיחה הבאה (ImageCapture חדש) מנסים שוב
+      if (blob === TIMEOUT) { ic._hung = true; blob = null; }
       if (blob && await isBlack(blob)) blob = null;
     }
     if (!blob && o.noFallback) return null;
