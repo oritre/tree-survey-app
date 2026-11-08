@@ -523,8 +523,10 @@
     // מעברי עמוד: כל עמוד של הסקר בדף משלו, והטבלאות המסכמות בדף חדש
     const breaks = [44, ...Array.from({ length: pages }, (_, k) => 90 + 46 * k)];
     breaks[breaks.length - 1] = 882 + off;
-    sheet.tail = sheet.tail.replace(/<rowBreaks[\s\S]*?<\/rowBreaks>/, '').replace(/(<\/headerFooter>|<headerFooter\/>)/, '$1' +
-      `<rowBreaks count="${breaks.length}" manualBreakCount="${breaks.length}">` + breaks.map(r => `<brk id="${r}" max="16383" man="1"/>`).join('') + '</rowBreaks>');
+    sheet.tail = sheet.tail.replace(/<rowBreaks[\s\S]*?<\/rowBreaks>/, '').replace(/<colBreaks[\s\S]*?<\/colBreaks>/, '').replace(/(<\/headerFooter>|<headerFooter\/>)/, '$1' +
+      `<rowBreaks count="${breaks.length}" manualBreakCount="${breaks.length}">` + breaks.map(r => `<brk id="${r}" max="16383" man="1"/>`).join('') + '</rowBreaks>' +
+      // מעבר עמוד קבוע לפני עמודת התמונות BF: אחרת אקסל מכניס את BF (תמונות 1, 8...) לעמוד של הטבלאות שלפניה (1.68.3)
+      '<colBreaks count="1" manualBreakCount="1"><brk id="57" max="1048575" man="1"/></colBreaks>');
     // עמודות F-H הצהובות (גזע 1-3) מוסתרות תמיד. הנתונים נשארים בתאים והנוסחאות מחשבות מהם
     sheet.head = sheet.head.replace(/<col min="5" max="8"([^>]*?)\/>/, (m, a) => `<col min="5" max="5"${a}/><col min="6" max="8"${a.replace(/ hidden="1"/, '')} hidden="1"/>`);
     // שוליים: ימין 0.65", שמאל כמו בתבנית (0.236"). "שמור בשם PDF" של אקסל חותך תמונות בערך 0.57" מהקצה הימני
