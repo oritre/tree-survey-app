@@ -568,13 +568,14 @@
       const n = root.Core.normNum(t.num);
       const x = n && !hasData(t) && unplaced(t).find(y => root.Core.normNum(y.num) === n);
       if (!x) return false;
-      const old = PLACE.map(k => x[k]);
+      const old = PLACE.map(k => x[k]), oldNotes = x.notes;
       for (const k of PLACE) { if (t[k] != null) x[k] = t[k]; else delete x[k]; }
+      syncApprox(x);
       const i = s.trees.indexOf(t);
       if (i >= 0) s.trees.splice(i, 1);
       const last = undo[undo.length - 1];
       if (last && last.tree === t) undo.pop();
-      undo.push({ what: `סימון עץ ${x.num}`, run: () => { PLACE.forEach((k, j) => { if (old[j] != null) x[k] = old[j]; else delete x[k]; }); } });
+      undo.push({ what: `סימון עץ ${x.num}`, run: () => { PLACE.forEach((k, j) => { if (old[j] != null) x[k] = old[j]; else delete x[k]; }); x.notes = oldNotes; } });
       if (selId === t.id) selId = x.id;
       changed();
       return true;
@@ -582,14 +583,15 @@
     // "עץ N נמצא כאן": העץ הקיים עם המספר (עם הפרטים והתמונות) עובר לסימון הזה, והסימון הריק נמחק.
     // אם לעץ הקיים היה סימון אחר במדידה, הוא מתפנה
     function moveExistingHere(t, x, prev) {
-      const old = PLACE.map(k => x[k]);
+      const old = PLACE.map(k => x[k]), oldNotes = x.notes;
       for (const k of PLACE) { if (t[k] != null) x[k] = t[k]; else delete x[k]; }
+      syncApprox(x);
       const i = s.trees.indexOf(t);
       if (i >= 0) s.trees.splice(i, 1);
       const last = undo[undo.length - 1];
       if (last && last.tree === t) undo.pop();
       undo.push({ what: `העברת עץ ${x.num}`, run: () => {
-        PLACE.forEach((k, j) => { if (old[j] != null) x[k] = old[j]; else delete x[k]; });
+        PLACE.forEach((k, j) => { if (old[j] != null) x[k] = old[j]; else delete x[k]; }); x.notes = oldNotes;
         if (i >= 0 && !s.trees.includes(t)) { t.num = prev; s.trees.splice(Math.min(i, s.trees.length), 0, t); }
       } });
       if (selId === t.id) selId = x.id;
@@ -679,6 +681,15 @@
       undo.push({ what: 'לא להתייחסות', run: () => { poly.ref = old[0]; if (t) t.ref = old[1]; } });
       changed(); renderSheet();
     }
+    // עץ שהוספתי בעצמי (לא עץ של המודד) = מיקום מקורב: ההערה נוספת אוטומטית, ונמחקת כשמשייכים לעץ המודד
+    const APPROX = 'מיקום מקורב';
+    const noteList = t => String(t.notes || '').split(/\s*[,.]\s*/).map(x => x.trim()).filter(Boolean);
+    function syncApprox(t) {
+      if (t.polyId) return;
+      const parts = noteList(t), has = parts.includes(APPROX);
+      if (!t.pref && !has) t.notes = parts.concat(APPROX).join(', ');
+      else if (t.pref && has) t.notes = parts.filter(x => x !== APPROX).join(', ');
+    }
     function setXY(t, x, y) {
       t.px = Math.round(x * 100) / 100; t.py = Math.round(y * 100) / 100;
       const w = root.proj4 && root.Plan.itmOf(s.plan, t.px, t.py);
@@ -703,16 +714,18 @@
       return best;
     }
     function linkSurveyor(t, sv) {
-      const old = [t.px, t.py, t.lat, t.lon, t.gpsSrc, t.pref, t.pname];
+      const old = [t.px, t.py, t.lat, t.lon, t.gpsSrc, t.pref, t.pname, t.notes];
       t.pref = sv.h; t.pname = sv.name || '';
       setXY(t, sv.x, sv.y);
-      undo.push({ what: `שיוך עץ ${t.num}`, run: () => { [t.px, t.py, t.lat, t.lon, t.gpsSrc, t.pref, t.pname] = old; } });
+      syncApprox(t);
+      undo.push({ what: `שיוך עץ ${t.num}`, run: () => { [t.px, t.py, t.lat, t.lon, t.gpsSrc, t.pref, t.pname, t.notes] = old; } });
       changed(); renderSheet(); flash(`עץ ${t.num} שויך לעץ המודד`);
     }
     function addAt(xy) {
       const t = ctx.makeTree();
       t.num = nearestNum();
       setXY(t, xy[0], xy[1]);
+      syncApprox(t);
       s.trees.push(t);
       undo.push({ what: `עץ חדש ${t.num}`, tree: t, run: () => removeTree(t, true) });
       startTyping(t);
@@ -729,7 +742,7 @@
       changed(); renderSheet();
     }
     function hasData(t) {
-      return (t.photos || []).length || (t.notes || '').trim() || (!t.speciesAuto && (t.species || '').trim())
+      return (t.photos || []).length || noteList(t).some(x => x !== APPROX) || (!t.speciesAuto && (t.species || '').trim())
         || ['height', 'qty', 'trunk1', 'trunk2', 'trunk3', 'health', 'location', 'canopy', 'transplant'].some(k => t[k] != null && t[k] !== '');
     }
     async function removeTree(t, quiet) {
