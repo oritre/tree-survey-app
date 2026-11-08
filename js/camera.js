@@ -1,6 +1,7 @@
 // מצלמה בתוך האפליקציה: נפתחת מיד, צילום בלחיצה אחת.
 // onShot(blob) נקרא לכל תמונה. אם הוא מחזיר 'close' המצלמה נסגרת (עברנו לסימון ושמרנו), 'cancel' נסגרת בלי לשמור,
 // 'retake' חוזרים למצלמה לצילום חדש, false התמונה לא נשמרה, וכל דבר אחר: נשמרה והמצלמה ממשיכה (צילום ברצף).
+// opts.instant: onShot מקבל מיד את הפריים מהווידאו (canvas) ו-{ better } עם הצילום האיכותי כשיהיה מוכן.
 // opts.review: אחרי כל צילום התמונה מוצגת במסך מלא עם "החלף תמונה" / "צלם עוד" / "סיום", ו-onShot נקרא רק אחרי
 // "סיום" (נשמרת והמצלמה נסגרת) או "צלם עוד" (נשמרת והמצלמה נשארת פתוחה לתמונה הבאה).
 (function (root) {
@@ -34,6 +35,13 @@
     c.getContext('2d').drawImage(video, 0, 0);
     return c;
   }
+  // תמונה קטנה (data URL) לפינה של המצלמה
+  function thumbOf(c) {
+    const t = document.createElement('canvas');
+    t.width = 160; t.height = Math.max(1, Math.round(160 * c.height / c.width));
+    t.getContext('2d').drawImage(c, 0, 0, t.width, t.height);
+    return t.toDataURL('image/jpeg', 0.7);
+  }
   // תמונה שחורה כמעט לגמרי (המצלמה עוד לא "התעוררה" או שהצילום נכשל)
   async function isBlack(src) {
     try {
@@ -57,7 +65,7 @@
   let takePhotoHung = false;
   async function grab(video, ic, torch, o) {
     o = o || {};
-    const backup = o.backup || frame(video);
+    const backup = o.noFallback ? null : o.backup || frame(video);
     let blob = null;
     if (ic) {
       const set = torch ? {} : { fillLightMode: 'off' };
@@ -74,6 +82,7 @@
       if (blob === TIMEOUT) { takePhotoHung = true; blob = null; }
       if (blob && await isBlack(blob)) blob = null;
     }
+    if (!blob && o.noFallback) return null;
     if (!blob) {
       const c = backup && !(await isBlack(backup)) ? backup : frame(video);
       if (c && !(await isBlack(c))) blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
@@ -85,17 +94,15 @@
     opts = opts || {};
     const { stream, track, caps, ic } = await start();
     let torch = false;
-    // תיקון בהירות (פיצוי חשיפה), נשמר בין פתיחות
+    // תיקון בהירות (פיצוי חשיפה) לצילום אחד: כל צילום (וכל פתיחה) מתחיל מהבהירות הרגילה (ori)
     const ec = caps.exposureCompensation;
     let ev = 0;
-    try { ev = +localStorage.getItem('camEv') || 0; } catch (_) {}
+    try { localStorage.removeItem('camEv'); } catch (_) {}
     const setEv = v => {
       if (!ec) return;
       ev = Math.max(ec.min, Math.min(ec.max, Math.round(v / (ec.step || 0.5)) * (ec.step || 0.5)));
       track.applyConstraints({ advanced: [{ exposureCompensation: ev }] }).catch(() => {});
-      try { localStorage.setItem('camEv', ev); } catch (_) {}
     };
-    if (ec && ev) setEv(ev);
 
     return new Promise(resolve => {
       const ov = document.createElement('div');
@@ -172,10 +179,23 @@
         }
         ov.classList.add('busy');
         try {
+          // opts.instant: עוברים מיד לסימון על הפריים של רגע הלחיצה, והצילום האיכותי של המצלמה (שלוקח לפעמים כמה שניות)
+          // ממשיך ברקע ומוחלף בעורך כשהוא מוכן: onShot(frame, { better: Promise<Blob|null>, thumb })
+          if (opts.instant && backup && !(await isBlack(backup))) {
+            const better = grab(video, ic, torch, { maxSide: opts.maxSide, noFallback: true });
+            better.catch(() => {});
+            const thumb = thumbOf(backup);
+            if (ev) { setEv(0); showEv(); }
+            ov.classList.remove('busy');
+            ov.classList.add('hidden');
+            const kept = await onShot(backup, { better, thumb });
+            return after(kept, thumb);
+          }
           const blob = await grab(video, ic, torch, { backup, maxSide: opts.maxSide });
           ov.classList.remove('busy');
           if (closed) return;
           if (!blob) { opts.onError && opts.onError('התמונה יצאה שחורה, צלם שוב'); return; }
+          if (ev) { setEv(0); showEv(); } // הצילום הבא חוזר לבהירות הרגילה
           let more = false;
           if (opts.review) {
             const ok = await askReview(blob);
@@ -187,19 +207,23 @@
           ov.classList.add('hidden');
           let kept = await onShot(blob);
           if (more && kept === 'close') kept = true; // צלם עוד: נשמרה, והמצלמה נשארת פתוחה
-          if (kept === 'close') { n++; return close(); }
-          if (kept === 'cancel' || closed) return close();
-          ov.classList.remove('hidden');
-          if (video.paused) video.play().catch(() => {});
-          ov.focus();
-          if (kept !== false && kept !== 'retake') {
-            n++;
-            count.textContent = n;
-            if (lastImg.src) URL.revokeObjectURL(lastImg.src);
-            lastImg.src = URL.createObjectURL(blob);
-            ov.querySelector('.cam-last').classList.add('on');
-          }
+          after(kept, blob);
         } finally { busy = false; ov.classList.remove('busy'); }
+      }
+      // אחרי onShot: נסגרים, או חוזרים למצלמה (ואם נשמרה, התמונה האחרונה והמונה בפינה)
+      function after(kept, last) {
+        if (kept === 'close') { n++; return close(); }
+        if (kept === 'cancel' || closed) return close();
+        ov.classList.remove('hidden');
+        if (video.paused) video.play().catch(() => {});
+        ov.focus();
+        if (kept !== false && kept !== 'retake') {
+          n++;
+          count.textContent = n;
+          if (lastImg.src && lastImg.src.startsWith('blob:')) URL.revokeObjectURL(lastImg.src);
+          lastImg.src = typeof last === 'string' ? last : URL.createObjectURL(last);
+          ov.querySelector('.cam-last').classList.add('on');
+        }
       }
 
       ov.addEventListener('click', e => {

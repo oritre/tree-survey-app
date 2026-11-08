@@ -2031,22 +2031,40 @@
   // שומרת תמונה אחת לעץ: (סימון אם ביקשו) -> טאבלט -> רישום בסקר. מחזירה false אם לא נשמרה,
   // 'cancel' אם במסך הסימון לחצו ביטול, ו-'retake' אם בחרו לצלם שוב (רק כשמגיעים מהמצלמה של האפליקציה)
   // background: מחזירה מיד אחרי ההחלטה במסך הסימון, והשמירה ממשיכה ברקע (המצלמה נסגרת בלי לחכות)
-  async function addPhoto(t, file, annotate, canRetake, background) {
-    // ההקטנה רצה במקביל למסך הסימון, שנפתח מיד על התמונה המקורית
-    const processing = processImage(file);
-    processing.catch(() => {});
+  // cam (מהמצלמה של האפליקציה): { better } הצילום האיכותי שעוד בדרך (file הוא הפריים מהווידאו), more: כפתור "שמור וצלם עוד".
+  // מחזירה 'more' כשבחרו "שמור וצלם עוד"
+  async function addPhoto(t, file, annotate, canRetake, background, cam) {
+    cam = cam || {};
+    // ההקטנה רצה במקביל למסך הסימון, שנפתח מיד על התמונה המקורית.
+    // כשהצילום האיכותי עוד בדרך, מקטינים את מה שמוצג בעורך בסוף (או את הצילום האיכותי ברגע שהוחלף בעורך)
+    let processing = null;
+    const process = src => { processing = processImage(src); processing.catch(() => {}); };
+    if (!cam.better || !annotate) process(file);
     let strokes = [];
     if (annotate) {
       // שמור: עם הסימונים אם ציירו, בלי אם לא. ביטול: התמונה לא נשמרת
-      try { strokes = await Annotate.open(file, [], { saveLabel: 'שמור', cancelLabel: 'ביטול', retakeLabel: canRetake ? 'צלם שוב' : '' }); }
+      try {
+        strokes = await Annotate.open(file, [], { saveLabel: 'שמור', cancelLabel: 'ביטול', retakeLabel: canRetake ? 'צלם שוב' : '',
+          moreLabel: cam.more ? 'שמור וצלם עוד' : '', upgrade: cam.better, onImage: process });
+      }
       catch (err) { console.error(err); strokes = []; }
       if (strokes === 'retake') return 'retake';
       if (!strokes) return 'cancel';
     }
+    if (!processing) process(file);
+    const more = !!strokes.more;
+    strokes = strokes.slice();
     const saving = savePhoto(t, processing, strokes);
-    return background ? true : saving;
+    return background ? (more ? 'more' : true) : saving;
   }
-  async function savePhoto(t, processing, strokes) {
+  // השמירות בתור אחת אחרי השנייה, כדי שבכמה תמונות ברצף רק הראשונה תיכנס לדוח
+  let photoSaveChain = Promise.resolve();
+  function savePhoto(t, processing, strokes) {
+    const run = photoSaveChain.then(() => savePhotoNow(t, processing, strokes));
+    photoSaveChain = run.catch(() => {});
+    return run;
+  }
+  async function savePhotoNow(t, processing, strokes) {
     try {
       const p = await processing;
       let rec = { id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h };
@@ -2087,10 +2105,12 @@
       // בסקר לבנייה לא צריך מסך סימון אחרי הצילום
       const annotate = !Construction.isConstruction(cur) && await DB.getKV('annotateAfter', true);
       try {
-        await Camera.open(async blob => {
-          const r = await addPhoto(t, blob, annotate, annotate, true);
-          return r === true ? 'close' : r;
-        }, { title: `עץ ${t.num || ''} ${t.species || ''}`.trim(), doneLabel: 'סגור', review: !annotate, maxSide: await DB.getKV('photoMax', 2000), onError: m => toast(m, 2500) });
+        // עם סימון: העורך נפתח מיד על הפריים של רגע הלחיצה, ו"שמור וצלם עוד" חוזר למצלמה לתמונה נוספת לאותו עץ
+        // (הראשונה נשארת בדוח, כמו בכל תמונה נוספת)
+        await Camera.open(async (blob, extra) => {
+          const r = await addPhoto(t, blob, annotate, annotate, true, Object.assign({ more: true }, extra));
+          return r === true ? 'close' : r === 'more' ? true : r;
+        }, { title: `עץ ${t.num || ''} ${t.species || ''}`.trim(), doneLabel: 'סגור', review: !annotate, instant: annotate, maxSide: await DB.getKV('photoMax', 2000), onError: m => toast(m, 2500) });
         return;
       } catch (e) {
         toast('המצלמה של האפליקציה לא זמינה (' + e.message + '), פותח את מצלמת המכשיר', 3000);
@@ -2319,8 +2339,11 @@
       if (!rec.blob) return;
     }
     const orig = rec.orig || rec.blob;
-    const strokes = await Annotate.open(orig, rec.strokes || [], { saveLabel: 'שמור', cancelLabel: 'ביטול' });
+    let strokes = await Annotate.open(orig, rec.strokes || [], { saveLabel: 'שמור', cancelLabel: 'ביטול' });
     if (!strokes) return;
+    strokes = strokes.slice();
+    // נפתח רק לצפייה ונשמר בלי שינוי: לא מעלים שוב לטלגרם ולגוגל דרייב
+    if (JSON.stringify(strokes) === JSON.stringify(rec.strokes || [])) return;
     await DB.putPhoto(await applyStrokes(rec, orig, strokes));
     const old = thumbUrls.get(p.id);
     if (old) { URL.revokeObjectURL(old); thumbUrls.delete(p.id); }
@@ -2357,7 +2380,7 @@
             oninput: e => { p.note = e.target.value; saveSoon(); Sync.kick(); } });
       return h('div', { class: 'ph-card' + (p.inReport ? ' in-report' : '') },
         h('div', { class: 'ph' },
-          h('img', { src: url, alt: 'תמונה של עץ ' + Core.photoLabel(t, p), onclick: () => openPhoto(p.id) }),
+          h('img', { src: url, alt: 'תמונה של עץ ' + Core.photoLabel(t, p), onclick: () => editPhoto(t, p) }), // לחיצה על התמונה: מסך מלא עם סימון ובהירות (ori), גם אחרי שנשמרה
           h('span', { class: 'sync' },
             p.fromOld ? null : p.tgMsgId ? h('span', { class: 'tg', title: 'גובתה בטלגרם' }, 'TG ✓') : h('span', { class: 'tg pending', title: 'ממתינה לשליחה לטלגרם' }, 'TG …'),
             p.odId ? h('span', { class: 'od', title: 'נשמרה בגוגל דרייב' }, 'GD ✓') : null),
@@ -2408,16 +2431,6 @@
     refreshRow(from); refreshRow(to); renderPhotos();
     Sync.kick(true);
     toast(`התמונה הועברה לעץ ${to.num || to.species || ''}`.trim());
-  }
-
-  async function openPhoto(id) {
-    let blob;
-    try { blob = await photoBlob(cur, id); } catch (e) { toast('לא ניתן לטעון את התמונה מגוגל דרייב: ' + e.message, 4000); return; }
-    if (!blob) return;
-    const url = URL.createObjectURL(blob);
-    const ov = h('div', { style: 'position:fixed;inset:0;background:#000;z-index:60;display:flex;align-items:center;justify-content:center', onclick: () => { ov.remove(); URL.revokeObjectURL(url); } },
-      h('img', { src: url, style: 'max-width:100%;max-height:100%;object-fit:contain' }));
-    document.body.append(ov);
   }
 
   // ---------- הפקה ----------
