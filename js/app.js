@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.63.0';
+  const APP_VERSION = '1.63.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -440,7 +440,9 @@
 
   // סקר חדש להיום על בסיס סקר קיים. withPhotos: התמונות מועתקות (בטאבלט, או קישור לקובץ שכבר בגוגל דרייב)
   async function copySurvey(old, withPhotos) {
-    const keep = ['num', 'okNum', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS];
+    // גם המיקום על המדידה (סקר לבנייה): בלי זה הסקר החדש נפתח בלי המדידה ובלי סימוני העצים
+    const keep = ['num', 'okNum', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS,
+      'px', 'py', 'pref', 'pname', 'polyId'];
     const s = { id: uid(), type: Construction.typeOf(old), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
       code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', cset: old.cset ? Object.assign({}, old.cset) : undefined, warnGps: !!old.warnGps, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
     for (const t of old.trees || []) {
@@ -456,6 +458,17 @@
         nt.photos.push(np);
       }
       s.trees.push(nt);
+    }
+    // המדידה: עותק עם מזהה חדש (מחיקת המדידה באחד הסקרים לא תמחק אותה מהשני). הקבצים בגוגל דרייב משותפים,
+    // והקבצים שבמכשיר מועתקים, כך שהמדידה נפתחת מיד גם בלי קליטה
+    if (old.plan) {
+      s.plan = Object.assign({}, old.plan, { id: uid() });
+      for (const k of ['plan:', 'plandwg:', 'planimg:']) {
+        const d = await DB.getPhoto(k + old.plan.id).catch(() => null);
+        if (d) await DB.putPhoto(Object.assign({}, d, { id: k + s.plan.id }));
+      }
+      s.planPolys = JSON.parse(JSON.stringify(old.planPolys || []));
+      if (old.planBound) s.planBound = JSON.parse(JSON.stringify(old.planBound));
     }
     s.site = composeSite(s);
     await DB.putSurvey(s);
