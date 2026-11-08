@@ -130,6 +130,8 @@
   // ---------- נספח תמונות (עמודות BF:BK) ----------
   // בכל עמוד 2 שורות של 6 משבצות. לכל משבצת: תווית (מספר העץ), תא תמונה ממוזג (img עד end), ושרשרת נוסחאות
   // (מספר -> נתיב Pictures -> העתק) שהמאקרו ReplacePathWithImage הופך לתמונה במחשב.
+  // רוחב/גובה של תא תמונה בנספח: עמודה 22.71 תווים (~123 נק'), שורות 8-22 (~218 נק')
+  const PHOTO_ASPECT = 123 / 218;
   const PHOTO_COLS = ['BF', 'BG', 'BH', 'BI', 'BJ', 'BK'];
   const PHOTO_ROWS = [{ page: 0, label: 4, img: 8, end: 22, chain: [5, 6, 7] }, { page: 0, label: 23, img: 24, end: 40, chain: [41, 42, 43] }];
   for (let k = 0; k < MAX_PAGES; k++) {
@@ -555,6 +557,6 @@
 
   root.Construction = {
     TYPES, typeOf, TRANSPLANT, transplantOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
-    compute, category, warnings, buildWorkbook, TREE_ROWS: TREE_ROWS.slice(0, MAX_TREES), MAX_TREES, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
+    compute, category, warnings, buildWorkbook, PHOTO_ASPECT, TREE_ROWS: TREE_ROWS.slice(0, MAX_TREES), MAX_TREES, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
   };
 })(this);

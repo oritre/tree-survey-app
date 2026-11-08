@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.67.1';
+  const APP_VERSION = '1.67.2';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2978,7 +2978,11 @@
     if (Construction.isConstruction(s)) {
       const res = await fetch('template/construction.xltm');
       if (!res.ok) throw new Error('לא נמצאה תבנית סקר הבנייה');
-      const bytes = await Construction.buildWorkbook(await Sig.patch(new Uint8Array(await res.arrayBuffer())), s, id => photoBlob(s, id));
+      const bytes = await Construction.buildWorkbook(await Sig.patch(new Uint8Array(await res.arrayBuffer())), s, async id => {
+        // נחתכת ליחס של תא התמונה בנספח (כמו בסקר יציבות), כדי שתמונה 3:4 תמלא את התא כמו תמונה 9:16
+        const b = await photoBlob(s, id);
+        return b && ((await ReportPrint.shrink(b, 2000, Construction.PHOTO_ASPECT, 0.9).catch(() => null)) || b);
+      });
       return { blob: new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }), name: fileBase(s) + '.xlsm', placed: 0 };
     }
     const r = await SurveyExcel.buildWorkbook(await templateBytes(), s, async (id, aspect) => {
