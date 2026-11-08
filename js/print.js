@@ -15,6 +15,33 @@
   const FONT_K = 0.93; // גודל הגופן המודפס ביחס לגודל בגיליון
   const PAD = 2.2;
 
+  // ---------- טקסט ארוך בשורת עץ ----------
+  // הקטנה מקסימלית של הכתב בעמודות מין העץ וההערות. מעבר לזה הטקסט נחתך בדוח
+  const MIN_FIT = 0.7;
+  // רוחב הטקסט בשורת עץ בדוח (נקודות): B:C מין העץ, D:H ההערות. לפי רוחבי העמודות בתבנית
+  const FIT_W = { species: (9.875 + 9.05) * PT_PER_CHAR - 2 * PAD, notes: (8.875 + 9.05 + 10.25 + 9.875 + 9.05) * PT_PER_CHAR - 2 * PAD };
+  const FIT_PT = 11 * FONT_K;
+  let measureCtx = null;
+  function textWidth(text, pt, bold) {
+    if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+    measureCtx.font = `${bold ? 700 : 400} ${pt}pt RepArial, Arimo, Arial, sans-serif`;
+    return measureCtx.measureText(text).width * 72 / 96; // פיקסלים → נקודות
+  }
+  function fitScale(text, pt, avail, bold) {
+    if (!text) return 1;
+    const w = textWidth(text, pt, bold) + 0.5;
+    return w <= avail ? 1 : Math.max(MIN_FIT, avail / w);
+  }
+  // כמה נכנס בשורה בדוח: scale = הקטנת הכתב (1 = בלי), left = כמה תווים עוד אפשר להוסיף (שלילי = ייחתך)
+  function textFit(text, kind) {
+    text = String(text || '').trim();
+    const avail = FIT_W[kind];
+    const w = text ? textWidth(text, FIT_PT) : 0;
+    const per = text ? w / text.length : textWidth('אבגדה הוזחט', FIT_PT) / 11;
+    const max = avail / MIN_FIT;
+    return { scale: w <= avail ? 1 : Math.max(MIN_FIT, avail / w), over: w > max, left: Math.floor((max - w) / per), normalLeft: Math.floor((avail - w) / per) };
+  }
+
   let layoutP = null;
   const getLayout = () => layoutP || (layoutP = fetch('template/layout.json').then(r => r.json()));
 
@@ -24,7 +51,7 @@
 
   // הערכים שהאפליקציה כותבת לגיליון (כמו excel.js), לפי כתובת תא
   function sheetValues(survey, slots) {
-    const v = {}, imgs = {};
+    const v = {}, imgs = {}, fit = new Set();
     const place = Core.placeOf(survey);
     if (survey.code) v.B5 = survey.code; else v.A5 = ''; // בלי סמל מוסד / מנהל: גם הכותרת לא מודפסת
     if (survey.manager) v.B6 = survey.manager; else v.A6 = '';
@@ -38,9 +65,10 @@
       v['B' + r] = (t.species || '').trim();
       v['D' + r] = Core.notesCell(t);
       v['I' + r] = Core.urgencyCell(t);
+      fit.add('B' + r); fit.add('D' + r);
     });
     putSlots(v, imgs, slots.slice(0, Core.BASE_PRINTED));
-    return { v, imgs, trees };
+    return { v, imgs, trees, fit };
   }
   // תמונות הנספח לפי הסדר (i מ-0 בתוך העמודים), במשבצות של התבנית. imgs[תא] = מפתח התמונה (slotKey)
   function putSlots(v, imgs, slots, firstBlock) {
@@ -226,8 +254,11 @@
         }
         x0 = Math.max(x0, PAGE_LEFT); x1 = Math.min(x1, RIGHT_EDGE);
         const f = st.f || {};
+        let fsz = (f.sz || 11) * FONT_K;
+        // מין עץ והערות בטבלה: טקסט ארוך מוקטן כדי להיכנס בשורה (כמו "התאם לגודל התא" באקסל), עד MIN_FIT
+        if (vals.fit && vals.fit.has(ref)) fsz *= fitScale(String(valueOf(ref) || ''), fsz, x1 - x0 - 2 * PAD, f.b);
         const css = [`left:${x0}pt`, `top:${y0}pt`, `width:${x1 - x0}pt`, `height:${y1 - y0}pt`,
-          `font-size:${(f.sz || 11) * FONT_K}pt`, f.b ? 'font-weight:700' : '', f.i ? 'font-style:italic' : '', f.u ? 'text-decoration:underline' : '',
+          `font-size:${fsz}pt`, f.b ? 'font-weight:700' : '', f.i ? 'font-style:italic' : '', f.u ? 'text-decoration:underline' : '',
           f.c ? `color:#${f.c}` : '',
           `justify-content:${{ left: 'flex-end', center: 'center', centerContinuous: 'center' }[h] || 'flex-start'}`,
           `align-items:${{ top: 'flex-start', center: 'center' }[st.v] || 'flex-end'}`,
@@ -535,5 +566,5 @@
     return PdfVec.fromHtml(pages, { rootId: 'printRoot', widthPt: W });
   }
 
-  root.ReportPrint = { photosPdf, toPdf, shrink, pdfPages, buildPages, preloadFonts, fileTitle, CSS, fontCss, pageToJpeg, makePdf };
+  root.ReportPrint = { textFit, photosPdf, toPdf, shrink, pdfPages, buildPages, preloadFonts, fileTitle, CSS, fontCss, pageToJpeg, makePdf };
 })(self);

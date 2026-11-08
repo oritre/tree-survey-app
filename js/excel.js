@@ -371,12 +371,30 @@
     if (survey.date) sheet.setCell('F2', numCell(dateSerial(survey.date)));
 
     // עצים
+    // מין העץ וההערות: "התאם לגודל התא", כדי שטקסט ארוך יוקטן ולא ייחתך (כמו ב-PDF)
+    let stylesXml = await zip.file('xl/styles.xml').async('string');
+    const shrunk = new Map();
+    const shrinkStyle = s => {
+      if (s == null) return s;
+      if (shrunk.has(s)) return shrunk.get(s);
+      const m = /<cellXfs count="(\d+)">([\s\S]*?)<\/cellXfs>/.exec(stylesXml);
+      const xfs = m ? m[2].match(/<xf [^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g) : null;
+      if (!xfs || !xfs[+s]) { shrunk.set(s, s); return s; }
+      let xf = xfs[+s];
+      if (/<alignment/.test(xf)) xf = xf.replace(/<alignment(?![^>]*shrinkToFit)/, '<alignment shrinkToFit="1"');
+      else xf = xf.replace(/\s*\/>$/, '><alignment shrinkToFit="1"/></xf>').replace(/(<xf [^>]*?)>/, (a, b) => /applyAlignment/.test(b) ? a : b + ' applyAlignment="1">');
+      const id = xfs.length;
+      stylesXml = stylesXml.replace(m[0], `<cellXfs count="${id + 1}">${m[2]}${xf}</cellXfs>`);
+      shrunk.set(s, String(id));
+      return String(id);
+    };
+    const fitCell = fn => (ref, s) => fn(ref, shrinkStyle(s));
     const trees = Core.sortTrees(survey.trees).filter(Core.hasContent).slice(0, Core.MAX_TREES);
     trees.forEach((t, i) => {
       const r = Core.TREE_ROWS[i];
       sheet.setCell('A' + r, valueCell(strings, String(t.num || '').trim()));
-      sheet.setCell('B' + r, valueCell(strings, (t.species || '').trim()));
-      sheet.setCell('D' + r, valueCell(strings, Core.notesCell(t)));
+      sheet.setCell('B' + r, fitCell(valueCell(strings, (t.species || '').trim())));
+      sheet.setCell('D' + r, fitCell(valueCell(strings, Core.notesCell(t))));
       sheet.setCell('I' + r, valueCell(strings, Core.urgencyCell(t)));
       sheet.setCell('J' + r, valueCell(strings, Core.jValue(t)));
     });
@@ -417,6 +435,7 @@
     if (!/<oddFooter>/.test(sheet.xml)) sheet.xml = sheet.xml.replace('</oddHeader></headerFooter>', '</oddHeader><oddFooter>&amp;C&amp;G</oddFooter></headerFooter>');
     zip.file('xl/worksheets/sheet1.xml', sheet.xml);
     zip.file('xl/sharedStrings.xml', strings.toXml());
+    if (shrunk.size) zip.file('xl/styles.xml', stylesXml);
 
     // גיליון נתוני שטח
     zip.file('xl/worksheets/sheet2.xml', fieldSheetXml(survey, slots));

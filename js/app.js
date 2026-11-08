@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.60.0';
+  const APP_VERSION = '1.61.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1737,10 +1737,34 @@
     return genusData = { list, set: new Set(list), map, loose };
   }
   function safetySpecies() { return genusInfo().list; }
+  // רבים: שיטה → שיטים, סיגלון → סיגלונים, אקליפטוס → אקליפטוסים, מילה → מילות
+  const PLURAL_FIX = { 'שיטה': 'שיטים', 'זית': 'זיתים', 'תות': 'תותים', 'בר-זית': 'ברי-זית', 'בן עוזרר': 'בני עוזרר', 'דק-פרי': 'דקי-פרי',
+    'כנף-זרע': 'כנפי-זרע', 'ליצ\'י': 'ליצ\'י', 'לבנה': 'לבנים', 'גלדיצייה': 'גלדיציות' };
+  const FINAL_TO_MID = { 'ן': 'נ', 'ם': 'מ', 'ף': 'פ', 'ך': 'כ', 'ץ': 'צ' };
+  function pluralOf(g) {
+    if (PLURAL_FIX[g]) return PLURAL_FIX[g];
+    if (/ו$/.test(g)) return g; // אבוקדו, מנגו, גינקו
+    if (/(ה|ית|כת|פת|מת)$/.test(g)) return g.replace(/(ה|ת)$/, '') + 'ות';
+    if (/י$/.test(g)) return g + 'ים';
+    const last = g.slice(-1);
+    return g.slice(0, -1) + (FINAL_TO_MID[last] || last) + 'ים';
+  }
+  let pluralData = null;
+  function pluralInfo() {
+    if (pluralData) return pluralData;
+    const toPl = new Map(), toSg = new Map(), loose = new Map();
+    for (const g of safetySpecies()) { const p = pluralOf(g); if (p === g) continue; toPl.set(g, p); toSg.set(p, g); loose.set(looseHe(p), g); }
+    return pluralData = { toPl, toSg, loose };
+  }
+  // מין אחד (בלי פסיקים) ברבים? מחזיר את היחיד, או ריק
+  const singularOf = x => { x = String(x || '').trim(); const P = pluralInfo(); return P.toSg.get(x) || (genusInfo().set.has(x) ? '' : P.loose.get(looseHe(x))) || ''; };
   // השם הקצר של מין שנכתב (גם בכתיב חסר: אקליפטוס → איקליפטוס). לא ברשימה → ריק
   function genusOf(name) {
+    const sg = singularOf(name);
+    if (sg) return sg;
     const g = rawGenus(name);
     if (!g) return '';
+    if (singularOf(g)) return singularOf(g);
     const { set, map, loose } = genusInfo();
     if (set.has(g)) return g;
     return map.get(g) || loose.get(looseHe(g)) || '';
@@ -1879,16 +1903,57 @@
       : sug.speciesTop || SPECIES_SEED.map(genusOf).filter((g, i, a) => g && a.indexOf(g) === i);
     // הצ'יפ של המין שכבר נבחר מסומן
     const markSpChips = () => {
-      const v = (t.species || '').trim(), g = Construction.isConstruction(cur) ? v : genusOf(v);
-      for (const c of spChips.children) c.classList.toggle('on', c.textContent === v || c.textContent === g);
+      const v = (t.species || '').trim();
+      const gs = Construction.isConstruction(cur) ? [v] : v.split(',').map(genusOf).filter(Boolean);
+      for (const c of spChips.children) c.classList.toggle('on', c.textContent === v || gs.includes(c.textContent));
+      if (spExtra.refresh) spExtra.refresh();
+      spIn.dispatchEvent(new Event('fit'));
     };
+    const spExtra = {};
     const spChip = s => h('button', { class: 'chip', type: 'button',
-      onclick: () => { t.species = s; spIn.value = s; markPine(); markSpChips(); changed(); askPines(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); } }, s);
+      onclick: () => {
+        // בסקר בטיחות, אחרי "עוד מין" (השדה נגמר בפסיק) הצ'יפ מתווסף, ולא מחליף
+        const v0 = (spIn.value || '').trim();
+        const v = !Construction.isConstruction(cur) && /,$/.test(v0) ? v0 + ' ' + s : s;
+        t.species = v; spIn.value = v; markPine(); markSpChips(); changed(); askPines(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh();
+      } }, s);
     const spChips = h('div', { class: 'chips' });
     // בטיחות: שתי שורות של המינים שנבחרו הכי הרבה, לפי א-ב
     if (Construction.isConstruction(cur)) spChips.append(...chipSpecies.map(spChip));
     else fitChipRows(spChips, chipSpecies, spChip, markSpChips);
     spIn.addEventListener('input', markSpChips);
+    // סקר בטיחות: יחיד/רבים למין האחרון שבשדה, "עוד מין" לכמה מינים באותה שורה, וכמה מקום נשאר בשורה בדוח
+    const spMeter = fitMeter(spIn, 'species');
+    if (!Construction.isConstruction(cur)) {
+      const setSp = v => { spIn.value = v; spIn.dispatchEvent(new Event('input', { bubbles: true })); spIn.dispatchEvent(new Event('change', { bubbles: true })); };
+      const lastTok = () => { const v = spIn.value, i = v.lastIndexOf(','); return { head: i < 0 ? '' : v.slice(0, i + 1) + ' ', tok: v.slice(i + 1).trim() }; };
+      const plBtn = h('button', { class: 'chip', type: 'button', 'aria-pressed': 'false', title: 'יחיד / רבים למין האחרון (שיטה ↔ שיטים)',
+        onclick: () => {
+          const { head, tok } = lastTok();
+          if (!tok) return toast('בחר קודם מין עץ');
+          const sg = singularOf(tok);
+          if (sg) return setSp(head + sg);
+          const g = genusOf(tok), pl = g && pluralInfo().toPl.get(g);
+          if (!pl) return toast('אין צורת רבים למין הזה. אפשר לכתוב אותה בשדה');
+          setSp(head + pl + tok.slice(rawGenus(tok).length).replace(/^\s*$/, ''));
+        } }, 'רבים');
+      const moreBtn = h('button', { class: 'chip', type: 'button', title: 'עוד מין באותה שורה, למשל: שיטים, סיגלונים',
+        onclick: () => {
+          const v = spIn.value.trim();
+          if (!v) { spIn.focus(); return; }
+          if (!/,$/.test(v)) spIn.value = v + ', ';
+          t.species = spIn.value; changed(); markSpChips();
+          spIn.focus();
+          toast('הקלד או בחר עוד מין');
+        } }, icon('plus'), 'עוד מין');
+      spExtra.refresh = () => {
+        const { tok } = lastTok();
+        const on = !!singularOf(tok);
+        plBtn.classList.toggle('on', on); plBtn.setAttribute('aria-pressed', String(on));
+        plBtn.textContent = on ? 'רבים ✓' : 'רבים';
+      };
+      spExtra.row = h('div', { class: 'row sp-tools' }, plBtn, moreBtn, spMeter);
+    }
     markSpChips();
 
     // הערות. צ'יפ של הערה שכבר כתובה מסומן, ולחיצה עליו מסירה אותה
@@ -1901,7 +1966,7 @@
         const parts = noteParts();
         if (parts.includes(p)) notesIn.value = parts.filter(x => x !== p).join(', ');
         else { const cur0 = notesIn.value.trim(); notesIn.value = cur0 ? cur0.replace(/[,.]$/, '') + ', ' + p : p; }
-        t.notes = notesIn.value; markNoteChips(); changed();
+        t.notes = notesIn.value; markNoteChips(); changed(); notesIn.dispatchEvent(new Event('fit'));
       } }, p)));
     markNoteChips();
 
@@ -1938,7 +2003,7 @@
             h('label', { class: 'row', style: 'margin-top:6px;cursor:pointer', title: 'נשמר בסקר לגיבוי. בהפקת דוח שואלים אם לכלול אותו' },
               h('input', { type: 'checkbox', checked: !!t.ref, style: 'width:24px;height:24px', onchange: e => { t.ref = e.target.checked || undefined; const pl = t.polyId && (cur.planPolys || []).find(p => p.id === t.polyId); if (pl) pl.ref = t.ref; changed(); } }),
               h('span', {}, 'לא להתייחסות (גיבוי בלבד)'))),
-          h('div', {}, field('מין עץ', build ? speciesCombo(spIn, t) : safetySpeciesCombo(spIn)))),
+          h('div', {}, field('מין עץ', build ? speciesCombo(spIn, t) : safetySpeciesCombo(spIn)), build ? null : spExtra.row)),
         build && cur.plan && t.px != null ? h('div', { class: 'row plan-tag' },
           h('span', { class: 'muted small' }, t.pref ? `במדידה: עץ של המודד${t.pname ? ' ' + t.pname : ''}` : 'במדידה: עץ שסימנתי'),
           h('button', { class: 'btn', onclick: () => openPlan(t.id) }, icon('pin'), 'הצג במדידה')) : null,
@@ -1946,6 +2011,7 @@
         build ? null : pineWrap,
         build,
         field(build ? 'הערות' : 'הערות וטיפול מומלץ', notesIn),
+        build ? null : fitMeter(notesIn, 'notes'),
         notesChips,
         build ? null : field('דחיפות', seg),
         h('div', { class: 'editor-foot' },
@@ -1953,6 +2019,36 @@
           build ? null : h('button', { class: 'btn', onclick: () => duplicateTree(t) }, icon('copy'), 'שכפל עץ'),
           h('button', { class: 'btn primary', onclick: addTree }, icon('plus'), 'עץ הבא'))));
     renderPhotos();
+  }
+
+  // כמה מקום נשאר בשורה בדוח (מין העץ / ההערות בסקר בטיחות). טקסט ארוך מוקטן בדוח, ומעבר למקסימום נחתך
+  function fitMeter(input, kind) {
+    const el = h('span', { class: 'fit-meter small', role: 'status' });
+    if (Construction.isConstruction(cur) || !window.ReportPrint || !ReportPrint.textFit) return el;
+    const upd = () => {
+      const v = (input.value || '').trim();
+      const f = ReportPrint.textFit(v, kind);
+      el.classList.toggle('over', f.over);
+      el.classList.toggle('shrink', !f.over && f.scale < 1);
+      el.textContent = !v ? '' : f.over ? `ארוך מדי לשורה בדוח: ייחתך. לקצר בכ-${-f.left} תווים`
+        : f.scale < 1 ? `נשארו כ-${f.left} תווים (הכתב בדוח יוקטן)` : `נשארו כ-${f.left} תווים`;
+    };
+    input.addEventListener('input', upd);
+    input.addEventListener('change', upd);
+    input.addEventListener('fit', upd);
+    upd();
+    return el;
+  }
+  // לפני הפקת דוח: עצים שהמין או ההערות שלהם ארוכים מדי לשורה בדוח
+  function fitWarnings(survey) {
+    if (!window.ReportPrint || !ReportPrint.textFit) return [];
+    const w = [];
+    for (const t of Core.sortTrees(survey.trees).filter(Core.hasContent)) {
+      const name = 'עץ ' + (t.num || t.species);
+      if (ReportPrint.textFit(t.species, 'species').over) w.push(`${name}: מין העץ ארוך מדי לשורה בדוח ויחתך.`);
+      if (ReportPrint.textFit(Core.notesCell(t), 'notes').over) w.push(`${name}: ההערות ארוכות מדי לשורה בדוח ויחתכו.`);
+    }
+    return w;
   }
 
   // מין עץ בסקר לבנייה: רשימה נפתחת (חץ), חיפוש לפי חלק מהשם, ו-X שמנקה. רק שמות מהתבנית
@@ -2551,7 +2647,7 @@
   const NO_SIG = 'אין במכשיר הזה חתימה וחותמת, והדוח ייצא בלעדיהן. מוסיפים בהגדרות, או מתחברים לגוגל דרייב והיא תיטען משם.';
   async function renderExport(body) {
     if (Construction.isConstruction(cur)) return renderConstructionExport(body);
-    const warns = Core.warnings(cur);
+    const warns = Core.warnings(cur).concat(fitWarnings(cur));
     if (!(await Sig.load())) warns.push(NO_SIG);
     const rs = Core.reportSlots(cur.trees);
     const status = h('div', { class: 'small muted', role: 'status' });
