@@ -436,8 +436,11 @@
     const params = new RowSheet(await zip.file('xl/worksheets/sheet4.xml').async('string'));  // חד גזעי
 
     // כותרת: B3 גוש וחלקה, B7 כתובת, Q1 תאריך קבוע (בתבנית NOW() שמתעדכן)
-    const gh = [survey.gush ? 'גוש ' + survey.gush : '', survey.helka ? 'חלקה ' + survey.helka : ''].filter(Boolean).join(' ');
-    sheet.set('B3', gh || null);
+    // גוש וחלקה תמיד מופיעים, גם כשלא מולאו: רווח במקום המספר כדי להקליד אותו אחר כך באקסל
+    // רווחים קשיחים (NBSP) כדי שהשורה לא תישבר לשתי שורות
+    const sp = n => '\u00A0'.repeat(n);
+    const gh = 'גוש' + sp(1) + (String(survey.gush || '').trim() || sp(10)) + sp(3) + 'חלקה' + sp(1) + (String(survey.helka || '').trim() || sp(10));
+    sheet.set('B3', gh);
     sheet.set('B7', survey.site || null);
     if (survey.date) sheet.set('Q1', dateSerial(survey.date));
 
@@ -521,6 +524,8 @@
     breaks[breaks.length - 1] = 882 + off;
     sheet.tail = sheet.tail.replace(/<rowBreaks[\s\S]*?<\/rowBreaks>/, '').replace(/(<\/headerFooter>|<headerFooter\/>)/, '$1' +
       `<rowBreaks count="${breaks.length}" manualBreakCount="${breaks.length}">` + breaks.map(r => `<brk id="${r}" max="16383" man="1"/>`).join('') + '</rowBreaks>');
+    // עמודות F-H הצהובות (גזע 1-3) מוסתרות תמיד. הנתונים נשארים בתאים והנוסחאות מחשבות מהם
+    sheet.head = sheet.head.replace(/<col min="5" max="8"([^>]*?)\/>/, (m, a) => `<col min="5" max="5"${a}/><col min="6" max="8"${a.replace(/ hidden="1"/, '')} hidden="1"/>`);
     if (!embed) sheet.head = sheet.head.replace(/<col min="58" max="69"([^>]*?)\/>/, (m, a) => / hidden="1"/.test(a) ? m : `<col min="58" max="69"${a} hidden="1"/>`);
 
     zip.file('xl/worksheets/sheet1.xml', sheet.toXml());
