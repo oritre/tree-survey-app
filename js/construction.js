@@ -118,9 +118,10 @@
   // שורות העצים בגיליון סקר: עמוד 1 שורות 11-35, ואז עמודים של 32 עצים (53-84, 99-130, ...).
   // עמוד נוסף k תופס את השורות 45+46k עד 90+46k. בתבנית יש 18 עמודים מוסתרים; כשצריך יותר,
   // מוסיפים עמודים זהים לפני הטבלאות המסכמות (שורה 873), כך שהמבנה נשאר אחיד
-  const TPL_PAGES = 18, MAX_PAGES = 38;
-  const MAX_TREES = 1225;   // השורות של לשונית "טעינת עצים" (2-1226)
+  // אין מגבלה מעשית: עמודים נוספים מועתקים לפי הצורך, וגם שורות ב"טעינת עצים" (בתבנית 2-1226) נוספות מעבר לזה
+  const TPL_PAGES = 18, MAX_PAGES = 150;
   const PAGE1 = 25;
+  const MAX_TREES = PAGE1 + 32 * MAX_PAGES;   // 4825
   const TREE_ROWS = [];
   for (let r = 11; r <= 35; r++) TREE_ROWS.push(r);
   for (let k = 0; k < MAX_PAGES; k++) for (let r = 53 + 46 * k; r <= 84 + 46 * k; r++) TREE_ROWS.push(r);
@@ -462,11 +463,18 @@
       const load = new RowSheet(await zip.file('xl/worksheets/sheet2.xml').async('string'));
       load.unshare(603);   // נוסחה משותפת שחלק מהתאים שלה נכתבים מחדש: אקסל מבקש לתקן את הקובץ
       const tpl = load.rows[load.row(602)].replace(/<f t="shared" si="\d+"\/>/, '<f>IF(SUM(K602:N602)=0,"",SUM(K602:N602))</f>');
+      let last = 0;
       for (let i = 601; i < trees.length; i++) {
         const r = 2 + i, tr = TREE_ROWS[i];
-        if (load.idx.get(r) == null) break;
-        load.rows[load.idx.get(r)] = mapRow(tpl, r, x => ({ col: x.col, row: x.sheet === SHEET ? tr : x.row === 602 ? r : x.row }), 'טעינת עצים')
+        const row = mapRow(tpl, r, x => ({ col: x.col, row: x.sheet === SHEET ? tr : x.row === 602 ? r : x.row }), 'טעינת עצים')
           .replace(/<row r="\d+"[^>]*>/, m => m.replace(/ hidden="1"/, ''));
+        // מעבר לשורה 1226 של התבנית: שורה חדשה בסוף הגיליון
+        if (load.idx.get(r) == null) { load.idx.set(r, load.rows.length); load.rows.push(row); last = r; }
+        else load.rows[load.idx.get(r)] = row;
+      }
+      if (last) {
+        load.head = load.head.replace(/<dimension ref="A1:([A-Z]+)\d+"/, `<dimension ref="A1:$1${last}"`);
+        load.tail = load.tail.replace(/(<conditionalFormatting sqref=")([^"]+)"/g, (m, a, v) => a + v.replace(/:([A-Z]+)1226\b/g, `:$1${last}`) + '"');
       }
       zip.file('xl/worksheets/sheet2.xml', load.toXml());
     }

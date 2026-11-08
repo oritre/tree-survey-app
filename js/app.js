@@ -1,10 +1,12 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.62.0';
+  const APP_VERSION = '1.63.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
+  // כמה עצים נכנסים לקובץ: סקר יציבות לפי התבנית (72), סקר לבנייה מוסיף עמודים לפי הצורך
+  const maxTrees = s => Construction.isConstruction(s) ? Construction.MAX_TREES : Core.MAX_TREES;
 
   const SPECIES_SEED = ['אורן ירושלים', 'אורן קנרי', 'אורן ברוטיה', 'אורן הצנובר', 'ברוש מצוי', 'פיקוס השדרות', 'פיקוס בנימינה',
     'פיקוס קדוש', 'פיקוס התאנה', 'מכנף נאה', 'צאלון נאה', 'ברכיכיטון אדרי', 'אזדרכת מצויה', 'תות לבן', 'שיטה מכחילה',
@@ -1628,7 +1630,7 @@
       h('button', { class: 'btn primary big block', onclick: addTree }, icon('plus'), 'עץ חדש'),
       Construction.isConstruction(cur) ? h('button', { class: 'btn big block', onclick: () => openPlan() }, icon('pin'), cur.plan ? 'מדידה' : 'טען מדידה (DWG / PDF)') : null,
       Construction.isConstruction(cur) || !VOICE_UI ? null : h('button', { class: 'btn big block', onclick: voiceMode }, icon('mic'), 'מצב דיבור'),
-      h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > Core.MAX_TREES ? ` (בתבנית יש מקום ל-${Core.MAX_TREES})` : '')),
+      h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > maxTrees(cur) ? ` (בתבנית יש מקום ל-${maxTrees(cur)})` : '')),
         trees.length > 1 && !selMode ? h('button', { class: 'btn small', onclick: () => { saveNow(); selMode = true; selIds = new Set(); renderTreeList(); } }, icon('check'), 'בחירה') : null),
       selMode ? h('div', { class: 'pick-bar' },
         h('span', { class: 'pick-count' }, selIds.size ? `נבחרו ${selIds.size}` : 'סמן עצים למחיקה'),
