@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.65.1';
+  const APP_VERSION = '1.66.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -292,8 +292,8 @@
       } else if (!cur && /^#\/?$/.test(location.hash || '#/')) renderHome();
     },
     buildReport, buildPdf, planFiles, hasRef: s => hasRef(s), REF_SUFFIX, refName,
-    // שם תת-התיקייה של סקר לבנייה בתיקיית הדוחות (שם הקבצים בלי "סקר עצים לבנייה - ")
-    reportDirName: s => fileBase(s).replace(/^סקר עצים לבנייה - /, ''),
+    // שם תת-התיקייה של סקר לבנייה בתיקיית הדוחות: כתובת - תאריך (כמו לפני 1.66, כדי שתיקיות קיימות לא ישנו שם)
+    reportDirName: s => safeName(`${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${(s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : ''}`),
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
     ui: { h, icon, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, shareName, today, fmtDate },
   };
@@ -2918,7 +2918,8 @@
     s = s || cur;
     // שני סקרים עם אותו שם ותאריך (באותה תיקיית פרויקט) מקבלים שמות קבצים שונים
     const k = (s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : '';
-    if (Construction.isConstruction(s)) return safeName(`סקר עצים לבנייה - ${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${k}`);
+    // סקר לבנייה (ori, 1.66): שם הקובץ הוא רק הכתובת, למשל "הרב קוק 82 קרית מוצקין"
+    if (Construction.isConstruction(s)) return safeName(`${s.site || 'סקר עצים לבנייה'}${k}`);
     // סקר בטיחות (כללים של ori):
     // עריכה של קובץ מהארכיון / סקר ישן שיובא: אותו שם כמו בדרייב
     const orig = (s.source && s.source.file) || (s.imported && s.odSrcName);
