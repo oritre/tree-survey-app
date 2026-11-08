@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.67.3';
+  const APP_VERSION = '1.67.4';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2919,7 +2919,8 @@
     // שני סקרים עם אותו שם ותאריך (באותה תיקיית פרויקט) מקבלים שמות קבצים שונים
     const k = (s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : '';
     // סקר לבנייה (ori, 1.66): שם הקובץ הוא רק הכתובת, למשל "הרב קוק 82 קרית מוצקין"
-    if (Construction.isConstruction(s)) return safeName(`${s.site || 'סקר עצים לבנייה'}${k}`);
+    // בלי פסיק בין הרחוב לעיר (ori, 1.67.4)
+    if (Construction.isConstruction(s)) return safeName(`${[s.street, s.city].map(x => (x || '').trim()).filter(Boolean).join(' ') || (s.site || '').replace(/,/g, ' ') || 'סקר עצים לבנייה'}${k}`);
     // סקר בטיחות (כללים של ori):
     // עריכה של קובץ מהארכיון / סקר ישן שיובא: אותו שם כמו בדרייב
     const orig = (s.source && s.source.file) || (s.imported && s.odSrcName);
