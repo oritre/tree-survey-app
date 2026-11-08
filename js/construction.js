@@ -170,7 +170,8 @@
   // תמונות בתוך התא: בתבנית כבר יש 2 ערכי rich (שגיאות של FILTER), מוסיפים אחריהם
   const RD = 'http://schemas.microsoft.com/office/spreadsheetml/2017/richdata';
   // התאים refs מקבלים עותק של הסגנון שלהם עם יישור אופקי לימין (סגנון חדש בסוף cellXfs)
-  async function alignRight(zip, sheet, refs) {
+  const alignRight = (zip, sheet, refs) => alignCells(zip, sheet, refs, 'horizontal="right"');
+  async function alignCells(zip, sheet, refs, attrs) {
     let st = await zip.file('xl/styles.xml').async('string');
     const m = /<cellXfs count="(\d+)">([\s\S]*?)<\/cellXfs>/.exec(st);
     const xfs = m[2].match(/<xf\b[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g);
@@ -179,7 +180,7 @@
       if (!made.has(s)) {
         const x = xfs[+s].replace(/\/>$|>[\s\S]*<\/xf>$/, '').replace(/ applyAlignment="\d"/, '');
         made.set(s, String(xfs.length + add.length));
-        add.push(`${x} applyAlignment="1"><alignment horizontal="right"/></xf>`);
+        add.push(`${x} applyAlignment="1"><alignment ${attrs}/></xf>`);
       }
       return made.get(s);
     };
@@ -412,6 +413,11 @@
   }
 
   // getPhoto(id) -> Blob של התמונה (או null)
+  // שורת גוש וחלקה (בתבנית תא אחד B3:R4): תווית, מספר, תווית, מספר. הגליון מימין לשמאל, B בצד ימין
+  const GUSH_CELLS = {
+    B3: { label: 'גוש', merge: 'B3:J4' }, K3: { key: 'gush', merge: 'K3:M4' },
+    N3: { label: 'חלקה', merge: 'N3:O4' }, P3: { key: 'helka', merge: 'P3:Q4' },
+  };
   async function buildWorkbook(templateBytes, survey, getPhoto) {
     const zip = await JSZip.loadAsync(templateBytes);
     const st = settingsOf(survey);
@@ -438,11 +444,9 @@
     const params = new RowSheet(await zip.file('xl/worksheets/sheet4.xml').async('string'));  // חד גזעי
 
     // כותרת: B3 גוש וחלקה, B7 כתובת, Q1 תאריך קבוע (בתבנית NOW() שמתעדכן)
-    // גוש וחלקה תמיד מופיעים, גם כשלא מולאו: רווח במקום המספר כדי להקליד אותו אחר כך באקסל
-    // רווחים קשיחים (NBSP) כדי שהשורה לא תישבר לשתי שורות
-    const sp = n => '\u00A0'.repeat(n);
-    const gh = 'גוש' + sp(1) + (String(survey.gush || '').trim() || sp(10)) + sp(3) + 'חלקה' + sp(1) + (String(survey.helka || '').trim() || sp(10));
-    sheet.set('B3', gh);
+    // גוש וחלקה: שורה 3 מפוצלת לתאים נפרדים (גוש | מספר | חלקה | מספר), כדי שאפשר יהיה להקליד את המספרים
+    // אחר כך באקסל והרווחים נשארים קבועים. תא מספר ריק נשאר ריק
+    for (const [ref, v] of Object.entries(GUSH_CELLS)) sheet.set(ref, v.label || (String(survey[v.key] || '').trim() || null));
     sheet.set('B7', survey.site || null);
     if (survey.date) sheet.set('Q1', dateSerial(survey.date));
 
@@ -500,6 +504,10 @@
       sheet.edit(c.img, s => `<c r="${c.img}"${s ? ` s="${s}"` : ''} t="e" vm="${vm}"><v>#VALUE!</v></c>`);
     }
     await addCellImages(zip, images);
+    await alignCells(zip, sheet, ['B3'], 'horizontal="left" vertical="center" readingOrder="2"');
+    await alignCells(zip, sheet, ['K3', 'N3', 'P3'], 'horizontal="right" vertical="center" indent="1" readingOrder="2"');
+    sheet.tail = sheet.tail.replace('<mergeCell ref="B3:R4"/>', Object.values(GUSH_CELLS).map(v => `<mergeCell ref="${v.merge}"/>`).join(''))
+      .replace(/<mergeCells count="\d+">/, m => m.replace(/\d+/, n => +n + Object.keys(GUSH_CELLS).length - 1));
     // תוויות התמונות מיושרות תמיד לימין (בלי זה מספר נצמד לימין וטקסט כמו 2-5 לשמאל)
     await alignRight(zip, sheet, SLOT_CELLS.filter(c => c.page <= avail).map(c => c.label));
 
