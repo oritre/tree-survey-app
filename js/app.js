@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.63.1';
+  const APP_VERSION = '1.64.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2022,9 +2022,11 @@
               h('input', { type: 'checkbox', checked: !!t.ref, style: 'width:24px;height:24px', onchange: e => { t.ref = e.target.checked || undefined; const pl = t.polyId && (cur.planPolys || []).find(p => p.id === t.polyId); if (pl) pl.ref = t.ref; changed(); } }),
               h('span', {}, 'לא להתייחסות (גיבוי בלבד)'))),
           h('div', {}, field('מין עץ', build ? speciesCombo(spIn, t) : safetySpeciesCombo(spIn)), build ? null : spExtra.row)),
-        build && cur.plan && t.px != null ? h('div', { class: 'row plan-tag' },
-          h('span', { class: 'muted small' }, t.pref ? `במדידה: עץ של המודד${t.pname ? ' ' + t.pname : ''}` : 'במדידה: עץ שסימנתי'),
-          h('button', { class: 'btn', onclick: () => openPlan(t.id) }, icon('pin'), 'הצג במדידה')) : null,
+        // כפתור מדידה בכל עץ בסקר לבנייה: עץ שסומן נפתח במקומו, ועץ שלא סומן נפתח לסימון (הנגיעה הבאה מסמנת אותו)
+        build ? h('div', { class: 'row plan-tag' },
+          h('span', { class: 'muted small' }, t.px != null ? (t.pref ? `במדידה: עץ של המודד${t.pname ? ' ' + t.pname : ''}` : 'במדידה: עץ שסימנתי')
+            : cur.plan ? 'לא סומן במדידה' : 'אין מדידה בסקר'),
+          h('button', { class: 'btn', onclick: () => openPlan(t.id) }, icon('pin'), t.px != null ? 'הצג במדידה' : cur.plan ? 'סמן במדידה' : 'טען מדידה')) : null,
         build ? null : spChips,
         build ? null : pineWrap,
         build,
