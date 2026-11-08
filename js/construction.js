@@ -530,6 +530,9 @@
     // שוליים: ימין 0.65", שמאל כמו בתבנית (0.236"). "שמור בשם PDF" של אקסל חותך תמונות בערך 0.57" מהקצה הימני
     // (שם התמונות הימניות בנספח), ושמאל נשאר צר כדי שעמודה R (הערות) תיכנס לעמוד הראשון. 0.7" בשני הצדדים (1.67.1) הוציא את R
     sheet.tail = sheet.tail.replace(/<pageMargins([^>]*?)\/>/, (m, a) => '<pageMargins' + a.replace(/\sright="[^"]*"/, ' right="0.65"').replace(/\sleft="[^"]*"/, ' left="0.23622047244094491"') + '/>');
+    // דף A4 קבוע (לא לפי ברירת המחדל של המדפסת) והדפסה ב-95%: אקסל מחשב את רוחב העמודות בהדפסה
+    // בערך 8% יותר ממה שמצויר, ועם השוליים הימניים עמודה R ועמודת התמונה השישית יצאו לעמוד נפרד (1.68.2)
+    sheet.tail = sheet.tail.replace(/<pageSetup([^>]*?)\/>/, (m, a) => '<pageSetup paperSize="9" scale="95"' + a.replace(/\s(paperSize|scale)="[^"]*"/g, '') + '/>');
     if (!embed) sheet.head = sheet.head.replace(/<col min="58" max="69"([^>]*?)\/>/, (m, a) => / hidden="1"/.test(a) ? m : `<col min="58" max="69"${a} hidden="1"/>`);
 
     zip.file('xl/worksheets/sheet1.xml', sheet.toXml());
