@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.57.1';
+  const APP_VERSION = '1.58.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2764,10 +2764,13 @@
       const bytes = await Construction.buildWorkbook(await Sig.patch(new Uint8Array(await res.arrayBuffer())), s, id => photoBlob(s, id));
       return { blob: new Blob([bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }), name: fileBase(s) + '.xlsm', placed: 0 };
     }
-    const r = await SurveyExcel.buildWorkbook(await templateBytes(), s, async id => {
+    const r = await SurveyExcel.buildWorkbook(await templateBytes(), s, async (id, aspect) => {
       const p = await DB.getPhoto(id);
-      const blob = await photoBlob(s, id);
-      return blob ? { blob, w: p && p.w, h: p && p.h } : null;
+      let blob = await photoBlob(s, id);
+      if (!blob) return null;
+      // נחתכת ליחס של התא בנספח, כדי שכל התמונות ימלאו את התא באותה צורה
+      if (aspect) blob = (await ReportPrint.shrink(blob, 2000, aspect, 0.9).catch(() => null)) || blob;
+      return { blob, w: p && p.w, h: p && p.h };
     }, { embedPhotos: true });
     return { blob: new Blob([r.bytes], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }), name: fileBase(s) + '.xlsm', placed: r.placed };
   }

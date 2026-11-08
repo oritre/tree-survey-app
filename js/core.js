@@ -8,7 +8,9 @@
     .concat(range(37, 47), [62, 63], range(67, 86), range(90, 107), [116, 117], range(121, 128));
   const MAX_TREES = TREE_ROWS.length; // 72
   const MAX_SLOTS = 72;
-  const MAX_PRINTED = 24; // 4 תמונות בשורה, 2 שורות בעמוד, 3 עמודים
+  const BASE_PRINTED = 24; // בתבנית: 4 תמונות בשורה, 2 שורות בעמוד, 3 עמודים
+  const PER_EXTRA_PAGE = 8; // מעבר ל-24 נוספים עמודי נספח (כמו עמוד 3), 8 תמונות בכל עמוד
+  const MAX_PRINTED = 400; // גבול ביטחון בלבד
 
   function range(a, b) { const r = []; for (let i = a; i <= b; i++) r.push(i); return r; }
 
@@ -233,7 +235,7 @@
       for (const n of expandNum(t.num)) if (!(t.photos || []).some(p => p.sub === n)) w.push(`עץ ${n} (מתוך ${t.num}): אין תמונה למספר הזה.`);
     }
     const rs = reportSlots(survey.trees);
-    if (rs.length > MAX_PRINTED) w.push(`סומנו ${rs.length} תמונות לדוח, ובנספח יש מקום ל-${MAX_PRINTED}. התמונות שאחרי ${MAX_PRINTED} לא ייכנסו.`);
+    if (rs.length > MAX_PRINTED) w.push(`סומנו ${rs.length} תמונות לדוח, והדוח מקבל עד ${MAX_PRINTED}. התמונות שאחרי ${MAX_PRINTED} לא ייכנסו.`);
     return w;
   }
 
@@ -244,7 +246,7 @@
     return { name: t(s.siteName), address: [t(s.street), t(s.city)].filter(Boolean).join(', ') };
   }
 
-  const api = { placeOf, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, normNum, expandNum, firstNum, isPine, jValue, hasContent,
+  const api = { placeOf, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, jValue, hasContent,
     sortTrees, splitActive, slotsOf, photoForSlot, groupKey, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
     nextNum, warnings, OK, DEFAULT_URGENCY, isOk, urgencyCell, notesCell, setUrgency };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;

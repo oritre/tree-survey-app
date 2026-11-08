@@ -46,6 +46,61 @@
   function colName(n) { let s = ''; n++; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
   function colNum(letters) { let n = 0; for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; }
 
+  // מעבר ל-24 תמונות: עמודי נספח נוספים אחרי שורה 163, כל אחד העתק של עמוד 3 (שורות 111-163, 8 תמונות)
+  const EXTRA_SRC0 = 111, EXTRA_SRC1 = 163, EXTRA_SPAN = EXTRA_SRC1 - EXTRA_SRC0 + 1;
+  const PRINT_LAST_ROW = 278;
+  // איפה תמונה מספר i (מ-0) יושבת בנספח: בלוק בתבנית, עמודה, והזזה בשורות לעמודים הנוספים
+  function appendixCell(i) {
+    if (i < Core.BASE_PRINTED) return { block: Math.floor(i / 4), col: COL_K + (i % 4), off: 0 };
+    const k = Math.floor((i - Core.BASE_PRINTED) / Core.PER_EXTRA_PAGE), j = (i - Core.BASE_PRINTED) % Core.PER_EXTRA_PAGE;
+    return { block: 4 + Math.floor(j / 4), col: COL_K + (j % 4), off: EXTRA_SPAN * (k + 1) };
+  }
+  function extraPages(n) { return Math.max(0, Math.ceil((n - Core.BASE_PRINTED) / Core.PER_EXTRA_PAGE)); }
+  // יחס רוחב/גובה של תא התמונה בבלוק (רוחב עמודה 22.75 = 164 פיקסלים = 123 נק')
+  function slotAspect(block) {
+    const hh = BLOCK_HEIGHTS[IMG_ROW0[block]].reduce((a, b) => a + b, 0);
+    return (COL_PX * 0.75) / hh;
+  }
+
+  // מוסיף עמודי נספח אחרי שורה 163: מעתיק את העיצוב, הגבהים והמיזוגים של K:N בעמוד 3 (בלי נוסחאות),
+  // עם מעבר עמוד ידני לפני כל עמוד. מחזיר את השורה האחרונה
+  function addAppendixPages(sheet, pages) {
+    const src = [];
+    for (let r = EXTRA_SRC0; r <= EXTRA_SRC1; r++) {
+      const m = sheet.rowRe(r).exec(sheet.xml);
+      if (!m) throw new Error('row ' + r + ' missing');
+      const attrs = /^<row ([^>]*?)\/?>/.exec(m[0])[1].replace(/\s*\br="\d+"/, '').replace(/\s*\bspans="[^"]*"/, '').trim();
+      const cells = [...m[0].matchAll(/<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g)]
+        .filter(c => { const n = colNum(c[1]); return n >= COL_K && n < COL_K + 4; })
+        .map(c => { const st = /\ss="(\d+)"/.exec(c[2]); return [c[1], st ? ` s="${st[1]}"` : '']; });
+      src.push({ r, attrs, cells });
+    }
+    let last = EXTRA_SRC1;
+    for (let p = 1; p <= pages; p++) {
+      for (const row of src) {
+        const nr = row.r + EXTRA_SPAN * p;
+        const xml = `<row r="${nr}" ${row.attrs}>` + row.cells.map(([c, st]) => `<c r="${c}${nr}"${st}/>`).join('') + '</row>';
+        const m = sheet.rowRe(nr).exec(sheet.xml);
+        sheet.xml = m ? sheet.xml.replace(m[0], xml) : sheet.xml.replace('</sheetData>', xml + '</sheetData>');
+        last = nr;
+      }
+    }
+    // מיזוגים
+    const merges = [...sheet.xml.matchAll(/<mergeCell ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\/>/g)]
+      .filter(m => colNum(m[1]) >= COL_K && colNum(m[3]) < COL_K + 4 && +m[2] >= EXTRA_SRC0 && +m[4] <= EXTRA_SRC1);
+    const add = [];
+    for (let p = 1; p <= pages; p++) for (const m of merges) add.push(`<mergeCell ref="${m[1]}${+m[2] + EXTRA_SPAN * p}:${m[3]}${+m[4] + EXTRA_SPAN * p}"/>`);
+    sheet.xml = sheet.xml.replace(/<mergeCells count="(\d+)">/, (_, n) => `<mergeCells count="${+n + add.length}">`).replace('</mergeCells>', add.join('') + '</mergeCells>');
+    // מעבר עמוד לפני כל עמוד נוסף
+    const brks = [];
+    for (let p = 1; p <= pages; p++) brks.push(`<brk id="${EXTRA_SRC1 + EXTRA_SPAN * (p - 1)}" max="16383" man="1"/>`);
+    const rb = `<rowBreaks count="${brks.length}" manualBreakCount="${brks.length}">${brks.join('')}</rowBreaks>`;
+    if (/<\/headerFooter>/.test(sheet.xml)) sheet.xml = sheet.xml.replace('</headerFooter>', '</headerFooter>' + rb);
+    else sheet.xml = sheet.xml.replace(/(<pageSetup[^>]*\/>)/, '$1' + rb);
+    sheet.xml = sheet.xml.replace(/(<dimension ref="[A-Z]+\d+:[A-Z]+)(\d+)"/, (all, a, n) => `${a}${Math.max(+n, last)}"`);
+    return last;
+  }
+
   function pageCase(slotCount) {
     // K62 מוצג כשיש משבצת 23, K116 כשיש משבצת 63
     if (slotCount >= 63) return 'C';
@@ -327,7 +382,7 @@
     });
 
     const placed = [];
-    let slots;
+    let slots, lastRow = 0;
     if (opts.embedPhotos) {
       // הנספח נבנה כאן: תמונה בכל משבצת לפי הסדר, רק בעמודות המודפסות K:N
       slots = Core.reportSlots(survey.trees).slice(0, Core.MAX_PRINTED);
@@ -337,14 +392,16 @@
       for (const st of SLOT_ROWS) for (const r of [st.label, st.num, st.path, st.copy, st.img]) {
         for (let c = COL_K; c < COL_K + 12; c++) sheet.setCell(colName(c) + r, emptyCell());
       }
+      const pages = extraPages(slots.length);
+      if (pages) lastRow = addAppendixPages(sheet, pages);
       const cellImgs = await openCellImages(zip);
       for (const slot of slots) {
-        const i = slot.index - 1;
-        const cell = { block: Math.floor(i / 4), col: COL_K + (i % 4), printed: true };
-        sheet.setCell(colName(cell.col) + SLOT_ROWS[cell.block].label, valueCell(strings, slot.label));
-        const data = await getPhoto(slot.photo.id);
+        const cell = appendixCell(slot.index - 1);
+        sheet.setCell(colName(cell.col) + (SLOT_ROWS[cell.block].label + cell.off), valueCell(strings, slot.label));
+        // התמונה נחתכת ליחס של התא, כדי שתמלא אותו כמו השאר
+        const data = await getPhoto(slot.photo.id, slotAspect(cell.block));
         if (!data) continue;
-        sheet.setCell(colName(cell.col) + SLOT_ROWS[cell.block].img, cellImgs.add(slot, data));
+        sheet.setCell(colName(cell.col) + (SLOT_ROWS[cell.block].img + cell.off), cellImgs.add(slot, data));
         placed.push({ index: slot.index, printed: true });
       }
       await cellImgs.save();
@@ -364,6 +421,8 @@
     // גיליון נתוני שטח
     zip.file('xl/worksheets/sheet2.xml', fieldSheetXml(survey, slots));
     let wb = await zip.file('xl/workbook.xml').async('string');
+    // אזור ההדפסה של הנספח מתארך כשנוספו עמודים
+    if (lastRow > PRINT_LAST_ROW) wb = wb.replace(/(Print_Area[^>]*>[^<]*\$K\$1:\$N\$)(\d+)/, (all, a, n) => a + Math.max(+n, lastRow));
     wb = wb.replace('</sheets>', '<sheet name="נתוני שטח" sheetId="2" r:id="rIdField"/></sheets>');
     zip.file('xl/workbook.xml', wb);
     let wbRels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
@@ -380,6 +439,6 @@
     return { bytes: out, slots, placed };
   }
 
-  const api = { buildWorkbook, slotCell, pageCase, dateSerial, SLOT_ROWS, PAGE2_ROWS, PAGE3_ROWS };
+  const api = { buildWorkbook, slotCell, pageCase, dateSerial, appendixCell, extraPages, slotAspect, SLOT_ROWS, PAGE2_ROWS, PAGE3_ROWS, EXTRA_SPAN };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.SurveyExcel = api;
 })(typeof self !== 'undefined' ? self : this);

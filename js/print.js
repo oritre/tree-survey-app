@@ -39,13 +39,30 @@
       v['D' + r] = Core.notesCell(t);
       v['I' + r] = Core.urgencyCell(t);
     });
+    putSlots(v, imgs, slots.slice(0, Core.BASE_PRINTED));
+    return { v, imgs, trees };
+  }
+  // תמונות הנספח לפי הסדר (i מ-0 בתוך העמודים), במשבצות של התבנית. imgs[תא] = מפתח התמונה (slotKey)
+  function putSlots(v, imgs, slots, firstBlock) {
     const SR = SurveyExcel.SLOT_ROWS;
     slots.forEach((slot, i) => {
-      const block = Math.floor(i / 4), col = colLetter(11 + (i % 4));
+      const block = (firstBlock || 0) + Math.floor(i / 4), col = colLetter(11 + (i % 4));
       v[col + SR[block].label] = slot.label;
-      imgs[col + SR[block].img] = slot.photo.id;
+      imgs[col + SR[block].img] = slotKey(slot);
     });
-    return { v, imgs, trees };
+  }
+  const slotKey = slot => 's' + slot.index;
+  // בלוק התבנית שבו תמונה (מ-0) מצוירת: 24 הראשונות בבלוקים 0-5, ומשם עמודים נוספים בתבנית של עמוד 3 (בלוקים 4-5)
+  const blockOf = i => i < Core.BASE_PRINTED ? Math.floor(i / 4) : 4 + Math.floor(((i - Core.BASE_PRINTED) % Core.PER_EXTRA_PAGE) / 4);
+  // יחס רוחב/גובה של תא התמונה בבלוק, כמו שהוא מצויר ב-renderArea (התמונה בתוך התא פחות 1.5 נק' מכל צד)
+  function boxAspect(L, block) {
+    const r0 = SurveyExcel.SLOT_ROWS[block].img;
+    const m = L.merges.find(mm => mm[0] === r0 && mm[1] === 11);
+    const r1 = m ? m[2] : r0;
+    let h = 0;
+    for (let r = r0; r <= r1; r++) h += L.rows[r][0];
+    const w = (L.cols[11] || 9.05) * PT_PER_CHAR;
+    return (w - 3) / (KY * h - 3);
   }
 
   // כמו בתוכנה במחשב: שורות צהובות לא מודפסות; עמוד 2/3 נפתחים לפי כמות העצים והתמונות (כמו באקסל)
@@ -282,6 +299,20 @@
     const shows = [visibleRows(L, vals.trees.length, 22, 62), visibleRows(L, slots.length, 8, 16)];
     const pages = [];
     L.areas.forEach((area, i) => { for (const inner of renderArea(L, area, shows[i], vals, photoUrls)) pages.push(pageHtml(L, inner)); });
+    // מעבר ל-24 תמונות: עוד עמודי נספח, כל אחד כמו עמוד 3 של הנספח (8 תמונות)
+    const extra = slots.slice(Core.BASE_PRINTED);
+    if (extra.length) {
+      const show3 = {};
+      const yellow = new Set(L.yellow);
+      for (let r = 1; r <= L.lastRow; r++) show3[r] = false;
+      SurveyExcel.PAGE3_ROWS.forEach(r => { show3[r] = !yellow.has(r); });
+      const area = L.areas[L.areas.length - 1];
+      for (let k = 0; k < extra.length; k += Core.PER_EXTRA_PAGE) {
+        const ev = { v: {}, imgs: {}, trees: vals.trees };
+        putSlots(ev.v, ev.imgs, extra.slice(k, k + Core.PER_EXTRA_PAGE), 4);
+        for (const inner of renderArea(L, area, show3, ev, photoUrls)) pages.push(pageHtml(L, inner));
+      }
+    }
     return pages;
   }
 
@@ -330,15 +361,21 @@
     return faces.map(([sub, w], i) => `@font-face{font-family:RepArial;src:url(${urls[i]}) format('woff2');font-weight:${w};unicode-range:${sub === 'hebrew' ? 'U+0590-05FF,U+200C-2010,U+20AA,U+25CC,U+FB1D-FB4F' : 'U+0000-00FF,U+2000-206F'}}`).join('');
   }
 
-  // תמונה קטנה יותר לדוח: התא בנספח ברוחב ~5 ס"מ, אין טעם לשמור 4000 פיקסלים
-  async function shrink(blob, maxSide) {
+  // תמונה קטנה יותר לדוח: התא בנספח ברוחב ~5 ס"מ, אין טעם לשמור 4000 פיקסלים.
+  // aspect (רוחב/גובה): התמונה נחתכת מהמרכז ליחס של התא, כדי שתמלא את כל התא כמו השאר
+  async function shrink(blob, maxSide, aspect, quality) {
     const bmp = await createImageBitmap(blob);
-    const k = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+    let sx = 0, sy = 0, sw = bmp.width, sh = bmp.height;
+    if (aspect > 0 && sw && sh) {
+      if (sw / sh > aspect * 1.01) { sw = Math.round(sh * aspect); sx = Math.round((bmp.width - sw) / 2); }
+      else if (sw / sh < aspect / 1.01) { sh = Math.round(sw / aspect); sy = Math.round((bmp.height - sh) / 2); }
+    }
+    const k = Math.min(1, maxSide / Math.max(sw, sh));
     const c = document.createElement('canvas');
-    c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
-    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    c.width = Math.max(1, Math.round(sw * k)); c.height = Math.max(1, Math.round(sh * k));
+    c.getContext('2d').drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
     bmp.close && bmp.close();
-    return new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new Promise(r => c.toBlob(r, 'image/jpeg', quality || 0.85));
   }
 
   function loadImg(src) {
@@ -395,19 +432,20 @@
   async function toPdf(survey, getPhotoBlob, onProgress) {
     const photoUrls = {};
     const slots = Core.reportSlots(survey.trees).slice(0, Core.MAX_PRINTED);
-    // התמונות מוקטנות 3 במקביל, ותמונה שכבר הוקטנה (אותו קובץ) לא מוקטנת שוב
-    const ids = [...new Set(slots.map(s => s.photo.id))];
+    const L = await getLayout();
+    // התמונות מוקטנות 3 במקביל, ותמונה שכבר הוקטנה (אותו קובץ ואותו יחס) לא מוקטנת שוב
     let n = 0, next = 0;
     const work = async () => {
-      while (next < ids.length) {
-        const id = ids[next++];
+      while (next < slots.length) {
+        const i = next++, slot = slots[i], id = slot.photo.id;
+        const aspect = boxAspect(L, blockOf(i));
         const b = await getPhotoBlob(id);
         if (b) {
-          const key = id + ':' + b.size;
-          if (!shrunk.has(key)) shrunk.set(key, shrink(b, 1100).then(blobToDataUrl));
-          photoUrls[id] = await shrunk.get(key);
+          const key = id + ':' + b.size + ':' + aspect.toFixed(3);
+          if (!shrunk.has(key)) shrunk.set(key, shrink(b, 1100, aspect).then(blobToDataUrl));
+          photoUrls[slotKey(slot)] = await shrunk.get(key);
         }
-        if (onProgress) onProgress(++n, ids.length + 1);
+        if (onProgress) onProgress(++n, slots.length + 1);
       }
     };
     await Promise.all([work(), work(), work()]);
@@ -497,5 +535,5 @@
     return PdfVec.fromHtml(pages, { rootId: 'printRoot', widthPt: W });
   }
 
-  root.ReportPrint = { photosPdf, toPdf, pdfPages, buildPages, preloadFonts, fileTitle, CSS, fontCss, pageToJpeg, makePdf };
+  root.ReportPrint = { photosPdf, toPdf, shrink, pdfPages, buildPages, preloadFonts, fileTitle, CSS, fontCss, pageToJpeg, makePdf };
 })(self);
