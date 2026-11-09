@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.70.0';
+  const APP_VERSION = '1.71.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1587,7 +1587,7 @@
       h('span', { class: 'badges' },
         Construction.isConstruction(cur) ? constructionBadge(t)
           : t.urgency ? h('span', { class: 'badge u-' + urgCls(t.urgency) }, t.urgency) : null,
-        t.ref ? h('span', { class: 'badge soft', title: 'לא להתייחסות: נשמר לגיבוי, ובהפקה שואלים אם לכלול' }, 'לא להתייחסות') : null,
+        t.ref ? h('span', { class: 'badge soft', title: 'לא להתייחסות: נשמר בסקר בלבד, לא נכנס לקבצים' }, 'לא להתייחסות') : null,
         pineMissing ? h('span', { class: 'badge alert', title: 'חסרה כמות אורנים' }, 'אורנים?') : null,
         (t.photos || []).length ? h('span', { class: 'badge soft', title: 'תמונות' }, icon('camera'), (t.photos || []).length) : null,
         t.lat != null ? h('span', { class: 'badge soft', title: 'יש נ"צ' }, icon('pin')) : null));
@@ -2709,7 +2709,6 @@
             const btn = e.currentTarget;
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
             if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
-            if (hasRef(cur)) toast('יש עצים "לא להתייחסות": יעלו שתי גרסאות, נקייה ו"כולל לא להתייחסות"', 4000);
             cur.finishPending = true; cur.finished = false;
             const sid = cur.id; Sync.preparing.add(sid);
             await saveNow(); Sync.now(); drawSync();
@@ -2743,7 +2742,7 @@
             await saveNow();
             status.textContent = 'מפיק PDF…';
             const s = cur;
-            // יש "לא להתייחסות": שני קבצים, הנקי (נפתח לצפייה) והמלא בשם עם " - כולל לא להתייחסות"
+            // רק הגרסה הנקייה (בלי "לא להתייחסות")
             const sets = refSets(s);
             const pdf = await buildPdf(sets[0][0], (i, n) => { status.textContent = `מפיק PDF… ${i}/${n}`; });
             let full = null;
@@ -2815,7 +2814,7 @@
       if (drive && !odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
       await saveNow();
       const say = m => { splitStatus.textContent = m; };
-      // יש "לא להתייחסות": שני קבצים נפרדים, נקי ומלא
+      // רק הגרסה הנקייה (בלי "לא להתייחסות")
       const files = [];
       for (const [v, suf] of refSets(cur)) {
         const f = kind === 'xlsx' ? await buildTablesFile(v, say) : await buildPhotosPdfFile(v, say);
@@ -2848,7 +2847,6 @@
           h('button', { class: 'btn primary big', onclick: async () => {
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
             if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
-            if (hasRef(cur)) toast('יש עצים "לא להתייחסות": יעלו שתי גרסאות, נקייה ו"כולל לא להתייחסות"', 4000);
             cur.finishPending = true; cur.finished = false;
             await saveNow(); Sync.finishNow(cur.id); go(`#/s/${cur.id}/export`);
             toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה לגוגל דרייב…', 3000);
@@ -2864,13 +2862,13 @@
             h('button', { class: 'btn primary big', onclick: e => busy(e.currentTarget, async () => {
               await saveNow();
               status.textContent = 'מכין את האקסל…';
-              // יש "לא להתייחסות": שני קבצים, נקי ומלא
+              // רק הגרסה הנקייה (בלי "לא להתייחסות")
               for (const [v, suf] of refSets(cur)) {
                 const withPhotos = Object.assign({}, v, { cset: Object.assign({}, Construction.settingsOf(cur), { embedPhotos: true }) });
                 const r = await buildReport(withPhotos);
                 await deliver(r.blob, suf ? refName(r.name) : r.name);
               }
-              status.textContent = hasRef(cur) ? '✓ הורדו שני קבצי אקסל עם התמונות: נקי, ו"כולל לא להתייחסות".' : '✓ האקסל עם התמונות הורד.';
+              status.textContent = '✓ האקסל עם התמונות הורד.';
               if (odOn) { status.textContent += ' מעלה לגוגל דרייב…'; await Sync.uploadReport(cur); status.textContent = '✓ האקסל עם התמונות הורד ונשמר גם בגוגל דרייב.'; }
             }) }, 'הורד אקסל עם התמונות')),
           status),
@@ -2951,17 +2949,18 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   }
 
-  // עצים ותחומים "לא להתייחסות": נשמרים בסקר לגיבוי. בהפקה יוצאות שתי גרסאות (s.inclRef רק על עותק)
+  // עצים ותחומים "לא להתייחסות": נשמרים בסקר לגיבוי. בהפקה יוצאת רק הגרסה הנקייה (v1.71.0)
   const hasRef = s => (s.trees || []).some(t => t.ref) || (s.planPolys || []).some(p => p.ref);
   function reportView(s) {
     if (!hasRef(s) || s.inclRef === true) return s;
     return Object.assign({}, s, { trees: s.trees.filter(t => !t.ref), planPolys: (s.planPolys || []).filter(p => !p.ref) });
   }
-  // גרסאות להפקה: תמיד הנקייה, ואם יש "לא להתייחסות" גם המלאה (קובץ נפרד עם REF_SUFFIX בשם)
+  // גרסה להפקה: רק הנקייה (עצים "לא להתייחסות" לא נכנסים לקבצים)
   function refName(name) { return name.replace(/(\.[^.]+)$/, ' - ' + REF_SUFFIX + '$1'); }
   function refSets(s) {
     const clean = [Object.assign({}, s, { inclRef: false }), ''];
-    return hasRef(s) ? [clean, [Object.assign({}, s, { inclRef: true }), ' - ' + REF_SUFFIX]] : [clean];
+    // ori (v1.71.0): רק הגרסה הנקייה. "לא להתייחסות" נשמרים בסקר באפליקציה בלבד, בלי קובץ "כולל לא להתייחסות"
+    return [clean];
   }
 
   // סקר לבנייה עם מדידה: קובץ המדידה המקורי וקובץ DXF של הסימונים, לתיקיית הסקר בגוגל דרייב ב"סיום סקר"
@@ -2970,11 +2969,10 @@
     const out = [];
     const o = await DB.getPhoto('plandwg:' + s.plan.id).catch(() => null);
     if (o && o.blob) out.push({ name: s.plan.file || o.name || 'מדידה.dwg', blob: o.blob });
-    // סימונים נקיים (בלי "לא להתייחסות"), ואם יש כאלה גם קובץ מלא שמסמן אותם בשכבה TREES_REF
+    // סימונים נקיים בלבד (בלי "לא להתייחסות")
     const dxf = (v, suffix) => { if (v.trees.some(t => t.px != null) || (v.planPolys || []).length || v.planBound)
       out.push({ name: fileBase(s) + ' - סימונים במדידה' + suffix + '.dxf', blob: new Blob([Plan.markupDxf(v)], { type: 'application/dxf' }) }); };
-    if (hasRef(s)) { dxf(reportView(Object.assign({}, s, { inclRef: false })), ''); dxf(s, ' - כולל לא להתייחסות'); }
-    else dxf(s, '');
+    dxf(reportView(Object.assign({}, s, { inclRef: false })), '');
     return out;
   }
 
