@@ -596,7 +596,7 @@
   // הגדרות משותפות לכל המכשירים (טוקן הטלגרם והצ'אט), בקובץ בתיקיית הגיבוי בגוגל דרייב.
   // מה שעודכן אחרון (בטאבלט או בענן) הוא שקובע
   const SETTINGS = 'הגדרות משותפות.json';
-  let settingsSynced = false;
+  let settingsSynced = false, settingsAt = 0; // נבדק שוב כל 3 דקות, כדי ששינוי במכשיר אחר יגיע גם בלי לפתוח מחדש
   async function syncSettings() {
     const r = await backupRoot();
     const cloud = (await OD.readJson(r, SETTINGS)) || {};
@@ -619,8 +619,41 @@
       if (!gu) await DB.setKV('geminiUpdated', at);
       await OD.upload(r, SETTINGS, new Blob([JSON.stringify(Object.assign(cloud, { geminiKey: gk, geminiUpdated: at }))], { type: 'application/json' }), true);
     }
+    await syncLists(r, cloud);
     await Sig.sync(r).catch(() => {}); // החתימה והחותמת, שלא נמצאות באתר הציבורי
-    settingsSynced = true;
+    settingsSynced = true; settingsAt = Date.now();
+  }
+
+  // רשימות הבחירה מההגדרות (מיני עצים, הערות בטיחות, הערות בנייה): אותן רשימות בכל המכשירים.
+  // מה שנשמר אחרון מנצח. מכשיר שעוד לא סונכרן אף פעם מאחד את הרשימות שלו עם הענן, כדי שלא יאבד כלום
+  const LIST_KEYS = ['species', 'phrases', 'constructionNotes'];
+  async function syncLists(r, cloud) {
+    const local = {};
+    for (const k of LIST_KEYS) local[k] = await DB.getKV(k, null);
+    const lu = await DB.getKV('listsUpdated', 0), cu = cloud.listsUpdated || 0, cl = cloud.lists || null;
+    const same = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+    let take = null, up = null;
+    if (cl && cu > lu) {
+      if (lu) take = cl;
+      else {
+        const merged = {};
+        for (const k of LIST_KEYS) merged[k] = cl[k] || local[k] ? [...new Set([...(cl[k] || []), ...(local[k] || [])])] : null;
+        take = merged;
+        if (LIST_KEYS.some(k => !same(merged[k], cl[k]))) up = merged;
+      }
+    } else if (lu > cu || (!cl && LIST_KEYS.some(k => local[k]))) up = local;
+    if (take) {
+      const changed = LIST_KEYS.some(k => !same(take[k], local[k]));
+      for (const k of LIST_KEYS) if (!same(take[k], local[k])) await DB.setKV(k, take[k]);
+      await DB.setKV('listsUpdated', up ? Date.now() : cu);
+      if (changed) { log('info', 'רשימות הבחירה (מינים והערות) עודכנו ממכשיר אחר'); if (root.App && root.App.listsUpdated) root.App.listsUpdated(); }
+    }
+    if (up) {
+      const at = take ? await DB.getKV('listsUpdated', Date.now()) : lu || Date.now();
+      if (!take && !lu) await DB.setKV('listsUpdated', at);
+      cloud.lists = up; cloud.listsUpdated = at;
+      await OD.upload(r, SETTINGS, new Blob([JSON.stringify(cloud)], { type: 'application/json' }), true);
+    }
   }
 
   // סקר מלא לפי רשומה באינדקס: מהטאבלט אם הוא שם, אחרת מגוגל דרייב
@@ -736,7 +769,7 @@
     running = true; again = false;
     state.busy = true; state.error = ''; state.offline = !navigator.onLine; emit();
     try {
-      if (!settingsSynced && !state.offline && (await OD.connected())) {
+      if ((!settingsSynced || Date.now() - settingsAt > 180000) && !state.offline && (await OD.connected())) {
         try { await syncSettings(); } catch (e) { if (e instanceof OD.AuthError) state.odNeedsLogin = true; }
       }
       const token = await DB.getKV('tgToken', ''), chat = await DB.getKV('tgChat', '');
@@ -848,6 +881,8 @@
     },
     // הגדרות הטלגרם השתנו בטאבלט: יישמרו בענן בגיבוי הבא
     geminiChanged() { settingsSynced = false; DB.setKV('geminiUpdated', Date.now()).then(() => schedule(0)); },
+    // רשימות הבחירה נשמרו בהגדרות: עולות לענן עכשיו
+    listsChanged() { settingsSynced = false; DB.setKV('listsUpdated', Date.now()).then(() => schedule(0)); },
     settingsChanged() { settingsSynced = false; DB.setKV('tgUpdated', Date.now()).then(() => schedule(0)); },
     pendingOf(s, tgOn, odOn) {
       const ph = s.trees.flatMap(t => t.photos || []);
