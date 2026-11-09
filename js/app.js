@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.69.0';
+  const APP_VERSION = '1.70.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -3438,7 +3438,25 @@
     for (const k of ['odAuth', 'odUser', 'importedSrc', 'importLog']) await DB.delKV(k);
     await DB.setKV('storage', 'gdrive');
   }
-  moveToGdrive().catch(() => {}).then(() => OD.handleRedirect()).then(r => {
+  // 40 ההערות הנפוצות בסקרי בטיחות 2026 (פעם אחת בכל מכשיר): נוספות לרשימה שבהגדרות, בלי למחוק מה שכבר שם.
+  // מכשיר שכבר סונכרן מסמן את הרשימה כחדשה כדי שתעלה לענן; מכשיר שעוד לא סונכרן מתאחד עם הענן בסנכרון הראשון
+  const TOP_SAFETY_NOTES = ['הפחתת משקלים', 'כריתה', 'עקירה', 'לא נדרש רישיון', 'מנוון', 'שיח רעיל', 'דילול פריצות', 'חידוש גיזום',
+    'עיצוב שלד', 'שלד לא תקין', 'רקבונות שלד', 'דילול ענפים', 'גיזום יבשים', 'קשירת ענפי שלד', 'שיח קוצני ורעיל', 'ניוון חלקי',
+    'צמצום נוף', 'גיזום קו גדר', 'דילול ענף מנוון/שבור', 'דילול גזע משני', 'הקצרת ענפים', 'עץ רעיל', 'פולשני', 'גיזום חלון לכבל חשמל',
+    'הרחקה מהגדר', 'דילול שמוטים', 'שבר בגזע המרכזי', 'עיצוב נוף נמוך', 'כריתה ע"י עירייה/בעלי השטח', 'חלופת תמיכה', 'קוצני',
+    'גיזום שמלה', 'נטיית גזע', 'סניטציה', 'פטריות גנודרמה', 'מגורדם', 'הנמכת נוף', 'ייעוץ קונסטרוקטור', 'גיזום לכיוון החצר', 'איזון משקלים'];
+  async function addTopSafetyNotes() {
+    if (await DB.getKV('topSafetyNotes2026', false)) return;
+    const cur = (await DB.getKV('phrases', null)) || [];
+    const next = [...new Set([...cur, ...TOP_SAFETY_NOTES])];
+    if (next.length !== cur.length) {
+      await DB.setKV('phrases', next);
+      if (await DB.getKV('listsUpdated', 0)) await DB.setKV('listsUpdated', Date.now());
+      refreshSuggestions();
+    }
+    await DB.setKV('topSafetyNotes2026', true);
+  }
+  addTopSafetyNotes().catch(() => {}).then(moveToGdrive).catch(() => {}).then(() => OD.handleRedirect()).then(r => {
     if (r) { toast(r.ok ? '✓ מחובר לגוגל דרייב' : 'החיבור לגוגל דרייב נכשל: ' + r.message, 4000); Sync.state.odNeedsLogin = false; }
     route();
     Sync.kick(true);
