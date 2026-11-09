@@ -140,6 +140,13 @@
       { page: k + 1, label: 68 + b, img: 69 + b, end: 85 + b, chain: [86 + b, 87 + b, 88 + b] });
   }
   const SLOT_CELLS = PHOTO_ROWS.flatMap((r, ri) => PHOTO_COLS.map(c => ({ row: ri, page: r.page, label: c + r.label, img: c + r.img, chain: r.chain.map(x => c + x) })));
+  // אקסל עם התמונות בתוך התאים: כל 12 תמונות הן "דף תמונות" שממשיך ימינה ולא למטה (1.72.0):
+  // BF:BK, אחר כך BL:BQ, BR:BW... תמיד בשורות של העמוד הראשון (תוויות 4/23, תמונות 8-22/24-40)
+  const PHOTO_COL0 = 58;   // BF
+  function embedCell(i) {
+    const blk = Math.floor(i / 12), j = i % 12, c = colName(PHOTO_COL0 + 6 * blk + j % 6), top = j < 6;
+    return { block: blk, label: c + (top ? 4 : 23), img: c + (top ? 8 : 24) };
+  }
   // שורות צהובות (שרשרת הנוסחאות של התמונות): תמיד מוסתרות
   const yellowRows = pages => [5, 6, 7, 41, 42, 43, ...Array.from({ length: pages }, (_, k) => [46, 47, 48, 86, 87, 88].map(r => r + 46 * k)).flat()];
   // תמונות שסומנו לדוח, לפי סדר העצים (כמו בסקר יציבות: פצל = משבצת לכל מספר בטווח)
@@ -164,8 +171,6 @@
     for (const t of trees) for (const p of t.photos || []) if (p.inReport && manualName(p)) for (const n of Core.expandNum(pictureName(manualName(p))) || []) set.add(n);
     return set;
   }
-  // דף התבנית שמכיל את משבצת i (0 = עמוד ראשון), כדי לפתוח את השורות המוסתרות
-  const photoPagesFor = n => n <= 12 ? 0 : Math.min(MAX_PAGES, Math.ceil((n - 12) / 12));
 
   // תמונות בתוך התא: בתבנית כבר יש 2 ערכי rich (שגיאות של FILTER), מוסיפים אחריהם
   const RD = 'http://schemas.microsoft.com/office/spreadsheetml/2017/richdata';
@@ -412,6 +417,42 @@
     return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
   }
 
+  // דפי תמונות נוספים מימין ל-BF:BK: העתק של העיצוב והמיזוגים של BF:BK בשורות 2-40 (בלי שרשרת הנוסחאות),
+  // רוחב עמודות זהה, ומימד הגיליון מתרחב
+  function addPhotoBlocks(sheet, blocks) {
+    if (blocks <= 1) return;
+    const last = PHOTO_COL0 + 6 * blocks - 1;
+    for (let r = 2; r <= 40; r++) {
+      if (sheet.idx.get(r) == null) continue;
+      const i = sheet.row(r);
+      const src = [];
+      // תאים מעבר ל-BK בשורות האלה (בתבנית רק BS9:BU9 ריקים) מוחלפים; spans לא מעודכן ולכן יורד
+      let row = sheet.rows[i].replace(/^<row [^>]*?>/, m => m.replace(/ spans="[^"]*"/, ''))
+        .replace(/<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g, (m, c, a) => {
+          const n = colNum(c);
+          if (n >= PHOTO_COL0 && n < PHOTO_COL0 + 6) { const st = / s="(\d+)"/.exec(a); src[n - PHOTO_COL0] = st ? st[1] : null; }
+          return n >= PHOTO_COL0 + 6 ? '' : m;
+        });
+      let add = '';
+      for (let b = 1; b < blocks; b++) for (let j = 0; j < 6; j++) {
+        const s = src[j];
+        add += `<c r="${colName(PHOTO_COL0 + 6 * b + j)}${r}"${s ? ` s="${s}"` : ''}/>`;
+      }
+      sheet.rows[i] = row.replace(/<\/row>$/, add + '</row>');
+    }
+    // מיזוגים: כותרת הנספח (שורה 2) ותאי התמונות
+    const merges = [];
+    for (let b = 1; b < blocks; b++) {
+      const c = j => colName(PHOTO_COL0 + 6 * b + j);
+      merges.push(`${c(0)}2:${c(5)}2`);
+      for (let j = 0; j < 6; j++) merges.push(`${c(j)}8:${c(j)}22`, `${c(j)}24:${c(j)}40`);
+    }
+    sheet.tail = sheet.tail.replace(/<mergeCells count="(\d+)">/, (m, n) => `<mergeCells count="${+n + merges.length}">` + merges.map(x => `<mergeCell ref="${x}"/>`).join(''));
+    sheet.head = sheet.head
+      .replace(/<col min="58" max="69"/, `<col min="58" max="${Math.max(69, last)}"`)
+      .replace(/(<dimension ref="A1:)([A-Z]+)(\d+)"/, (m, a, c, r) => a + colName(Math.max(colNum(c), last)) + r + '"');
+  }
+
   // getPhoto(id) -> Blob של התמונה (או null)
   async function buildWorkbook(templateBytes, survey, getPhoto) {
     const zip = await JSZip.loadAsync(templateBytes);
@@ -421,7 +462,9 @@
     const slots = photoSlots(survey.trees);
     const embed = !!st.embedPhotos;
     // עמודים פתוחים: לפי העצים, ובאקסל עם התמונות גם לפי התמונות
-    const pages = embed ? Math.max(pagesFor(trees.length), photoPagesFor(slots.length)) : pagesFor(trees.length);
+    // (באקסל עם התמונות הן ממשיכות ימינה, ולכן לא פותחות עמודים)
+    const pages = pagesFor(trees.length);
+    const blocks = embed ? Math.max(1, Math.ceil(slots.length / 12)) : 1;   // דפי תמונות (6 עמודות כל אחד)
     const extra = Math.max(0, pages - TPL_PAGES), off = 46 * extra;
     if (extra) {
       // עמודים נוספים: העתק של העמוד האחרון בתבנית (827-872) לפני שורה 873. הנוסחאות בגיליונות האחרים
@@ -486,10 +529,22 @@
     // ובלי — נשארות נוסחאות הנתיב של התבנית (C:\\Users\\origr\\Pictures\\<מספר>.jpg) למאקרו במחשב
     const images = [];
     const avail = TPL_PAGES + extra;   // עמודים שקיימים בקובץ
-    if (embed) for (const c of SLOT_CELLS) if (c.page <= avail) { for (const x of c.chain) sheet.set(x, null); sheet.set(c.img, null); }
+    if (embed) {
+      for (const c of SLOT_CELLS) if (c.page <= avail) { for (const x of c.chain) sheet.set(x, null); sheet.set(c.img, null); }
+      addPhotoBlocks(sheet, blocks);
+      // ליד עמודי העצים הנוספים אין יותר תמונות: המסגרות הריקות של BF:BK שם נמחקות, אחרת הן מודפסות כדפים ריקים
+      const rows = new Set();
+      for (let k = 0; k < pages; k++) for (let r = 45 + 46 * k; r <= 90 + 46 * k; r++) rows.add(r);
+      if (rows.size) {
+        sheet.clearAll(rows, PHOTO_COL0, PHOTO_COL0 + 5);
+        sheet.tail = sheet.tail.replace(/<mergeCell ref="([A-Z]+)(\d+):([A-Z]+)\d+"\/>/g, (m, c1, r1, c2) =>
+          rows.has(+r1) && colNum(c1) >= PHOTO_COL0 && colNum(c2) < PHOTO_COL0 + 6 ? '' : m);
+        sheet.tail = sheet.tail.replace(/<mergeCells count="\d+">/, () => `<mergeCells count="${(sheet.tail.match(/<mergeCell /g) || []).length}">`);
+      }
+    }
     for (const slot of slots) {
-      const c = SLOT_CELLS[slot.index - 1];
-      if (c.page > avail) break;
+      const c = embed ? embedCell(slot.index - 1) : SLOT_CELLS[slot.index - 1];
+      if (!embed && c.page > avail) break;
       sheet.set(c.label, numOrText(slot.label));
       if (!embed || !getPhoto) continue;
       const blob = await getPhoto(slot.photo.id);
@@ -500,7 +555,7 @@
     }
     await addCellImages(zip, images);
     // תוויות התמונות מיושרות תמיד לימין (בלי זה מספר נצמד לימין וטקסט כמו 2-5 לשמאל)
-    await alignRight(zip, sheet, SLOT_CELLS.filter(c => c.page <= avail).map(c => c.label));
+    await alignRight(zip, sheet, embed ? Array.from({ length: 12 * blocks }, (_, i) => embedCell(i).label) : SLOT_CELLS.filter(c => c.page <= avail).map(c => c.label));
 
     // מה מוצג: העמודים שצריך, בלי השורות הצהובות ובלי שורות מינים ריקות
     for (let k = 0; k < pages; k++) for (let r = 45 + 46 * k; r <= 90 + 46 * k; r++) sheet.unhide(r);
@@ -521,12 +576,14 @@
     for (let r = 885 + off + Math.max(1, species); r <= spLast; r++) sheet.hide(r);
     // אקסל בלי התמונות: מסתירים את עמודות הנספח BF:BK
     // מעברי עמוד: כל עמוד של הסקר בדף משלו, והטבלאות המסכמות בדף חדש
+    // אחרי עמוד העצים האחרון אין מעבר לפני הטבלאות המסכמות (882): השורות שביניהם מוסתרות, ומעבר שם יצר
+    // באקסל דף ריק (העמוד האחרון נגמר אוטומטית אחרי השורות המוצגות, והשורות המוסתרות נשארו לדף משלהן) (1.72.0)
     const breaks = [44, ...Array.from({ length: pages }, (_, k) => 90 + 46 * k)];
-    breaks[breaks.length - 1] = 882 + off;
     sheet.tail = sheet.tail.replace(/<rowBreaks[\s\S]*?<\/rowBreaks>/, '').replace(/<colBreaks[\s\S]*?<\/colBreaks>/, '').replace(/(<\/headerFooter>|<headerFooter\/>)/, '$1' +
       `<rowBreaks count="${breaks.length}" manualBreakCount="${breaks.length}">` + breaks.map(r => `<brk id="${r}" max="16383" man="1"/>`).join('') + '</rowBreaks>' +
       // מעבר עמוד קבוע לפני עמודת התמונות BF: אחרת אקסל מכניס את BF (תמונות 1, 8...) לעמוד של הטבלאות שלפניה (1.68.3)
-      '<colBreaks count="1" manualBreakCount="1"><brk id="57" max="1048575" man="1"/></colBreaks>');
+      // ובאקסל עם התמונות: מעבר עמוד גם לפני כל דף תמונות נוסף (BL, BR...)
+      `<colBreaks count="${blocks}" manualBreakCount="${blocks}">` + Array.from({ length: blocks }, (_, j) => `<brk id="${PHOTO_COL0 - 1 + 6 * j}" max="1048575" man="1"/>`).join('') + '</colBreaks>');
     // עמודות F-H הצהובות (גזע 1-3) מוסתרות תמיד. הנתונים נשארים בתאים והנוסחאות מחשבות מהם
     sheet.head = sheet.head.replace(/<col min="5" max="8"([^>]*?)\/>/, (m, a) => `<col min="5" max="5"${a}/><col min="6" max="8"${a.replace(/ hidden="1"/, '')} hidden="1"/>`);
     // שוליים: ימין 0.65", שמאל כמו בתבנית (0.236"). "שמור בשם PDF" של אקסל חותך תמונות בערך 0.57" מהקצה הימני
@@ -543,6 +600,11 @@
     if (root.Plan && survey.trees.some(t => t.px != null)) await root.Plan.addSheet(zip, survey);
     // חישוב מלא בפתיחה
     let wb = await zip.file('xl/workbook.xml').async('string');
+    // אזור הדפסה: הטבלאות (A:BE) ודפי התמונות בשורות 1-44 בלבד. בלי זה אקסל מדפיס דפים ריקים מתחת לתמונות
+    // (שורות הטבלאות המסכמות בעמודות BF והלאה) (1.72.0)
+    const area = `'${SHEET}'!$A$1:$BE$${spLast + 3}` + (embed ? `,'${SHEET}'!$BF$1:$${colName(PHOTO_COL0 + 6 * blocks - 1)}$44` : '');
+    wb = wb.replace(/<definedName name="_xlnm\.Print_Area" localSheetId="0"[^>]*>[^<]*<\/definedName>/, '')
+      .replace('<definedNames>', `<definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">${area}</definedName>`);
     wb = wb.replace(/<calcPr([^>]*?)\s*\/>/, (m, a) => `<calcPr${a.replace(/\sfullCalcOnLoad="\d"/, '')} fullCalcOnLoad="1"/>`);
     zip.file('xl/workbook.xml', wb);
     // calcChain של התבנית מצביע גם על תאים שהאפליקציה מחקה מהם נוסחה (שרשרת התמונות), ואז אקסל "מתקן" את הקובץ.
