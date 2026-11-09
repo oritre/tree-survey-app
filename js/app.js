@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.68.4';
+  const APP_VERSION = '1.69.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -278,6 +278,11 @@
 
   window.App = {
     live: id => (cur && cur.id === id ? cur : null),
+    // רשימות הבחירה הגיעו ממכשיר אחר
+    listsUpdated() {
+      refreshSuggestions();
+      if ((location.hash || '').startsWith('#/settings') && !(document.activeElement && document.activeElement.matches('textarea, input'))) renderSettings();
+    },
     onSynced: () => { if (cur && tab === 'trees') renderPhotos(); },
     // מכשיר אחר שינה סקר: לא ממזגים לתוך הסקר הפתוח בזמן הקלדה, צילום, דיבור או חלון פתוח (ננסה שוב בסבב הבא)
     isEditing: id => !!(cur && cur.id === id && (document.querySelector('.cam, .annot, .modal')
@@ -3322,7 +3327,7 @@
           field('הערות בסקר לבנייה (כפתורים מתחת להערות)', cNotesTa),
           h('button', { class: 'btn primary', onclick: async () => {
             const lines = ta => ta.value.split('\n').map(s => s.trim()).filter(Boolean);
-            await DB.setKV('species', lines(speciesTa)); await DB.setKV('phrases', lines(phrasesTa)); await DB.setKV('constructionNotes', lines(cNotesTa)); refreshSuggestions();
+            await DB.setKV('species', lines(speciesTa)); await DB.setKV('phrases', lines(phrasesTa)); await DB.setKV('constructionNotes', lines(cNotesTa)); refreshSuggestions(); Sync.listsChanged();
             toast('נשמר');
           } }, 'שמור רשימות')),
         h('div', { class: 'card stack' },
