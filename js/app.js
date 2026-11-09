@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.71.0';
+  const APP_VERSION = '1.72.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1501,7 +1501,7 @@
       h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
         h('label', { class: 'set-row' },
           h('input', { type: 'checkbox', checked: !!cur.cset.embedPhotos, onchange: e => { cur.cset.embedPhotos = e.target.checked; saveSoon(); } }),
-          h('span', {}, h('b', {}, 'לצרף את התמונות לאקסל'), h('div', { class: 'muted small' }, 'התמונות שסומנו לדוח נכנסות לנספח (עמודות BF:BK) ליד מספר העץ. בלי סימון: רק מספרי העצים, והתמונות מתיקיית Pictures במחשב.'))),
+          h('span', {}, h('b', {}, 'לצרף את התמונות לאקסל'), h('div', { class: 'muted small' }, 'התמונות שסומנו לדוח נכנסות לנספח (עמודות BF:BK, ומעבר ל-12 תמונות ממשיכות ימינה ב-BL:BQ וכן הלאה) ליד מספר העץ. בלי סימון: רק מספרי העצים, והתמונות מתיקיית Pictures במחשב.'))),
         h('h3', { style: 'margin:8px 0 0;font-size:18px' }, 'הגדרות הסקר'),
         h('div', { class: 'muted small' }, 'כמו בלשונית "חד גזעי" באקסל. חלות על כל העצים בסקר.'),
         Construction.SETTINGS.map(toggle), diam));
