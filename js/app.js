@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.72.1';
+  const APP_VERSION = '1.73.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1556,6 +1556,7 @@
     body.append(h('div', { class: 'split' }, listPane, edPane));
     renderTreeList(listPane);
     renderEditor(edPane);
+    swipeToClose(edPane);
   }
 
   function constructionBadge(t) {
@@ -1681,6 +1682,62 @@
   function refreshRow(t) {
     const old = $(`.tree-row[data-id="${t.id}"]`);
     if (old) { const r = treeRow(t); r.classList.toggle('hidden', old.classList.contains('hidden')); old.replaceWith(r); }
+  }
+
+  // החלקת אצבע כלפי מטה על כרטיס העץ סוגרת אותו וחוזרים לרשימה המלאה (ori). רק במסך צר
+  // (רשימה מעל הכרטיס), ורק כשראש הכרטיס על המסך, כדי לא להפריע לגלילה בתוך הכרטיס
+  function swipeToClose(pane) {
+    let st = null;
+    const reset = anim => {
+      pane.classList.remove('dragging');
+      pane.style.transition = anim ? 'transform .2s ease, opacity .2s ease' : '';
+      pane.style.transform = ''; pane.style.opacity = '';
+      if (anim) setTimeout(() => { pane.style.transition = ''; }, 220);
+    };
+    pane.addEventListener('touchstart', e => {
+      st = null;
+      if (window.innerWidth >= 900 || !curTreeId || e.touches.length !== 1 || selMode) return;
+      if (e.target.closest('input, textarea, select, canvas, video, [contenteditable], .no-swipe')) return;
+      const bar = $('.bar');
+      if (pane.getBoundingClientRect().top < (bar ? bar.getBoundingClientRect().bottom : 0) - 2) return;
+      for (let el = e.target; el && el !== pane; el = el.parentElement) if (el.scrollTop > 0) return;
+      st = { x: e.touches[0].clientX, y: e.touches[0].clientY, dy: 0, on: false };
+    }, { passive: true });
+    pane.addEventListener('touchmove', e => {
+      if (!st) return;
+      if (e.touches.length !== 1) { st = null; reset(true); return; }
+      const dx = e.touches[0].clientX - st.x, dy = e.touches[0].clientY - st.y;
+      if (!st.on) {
+        if (dy < -6 || (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy))) { st = null; return; }
+        if (dy < 14 || dy < Math.abs(dx) * 1.5) return;
+        st.on = true; pane.classList.add('dragging');
+      }
+      e.preventDefault();
+      st.dy = Math.max(0, dy);
+      pane.style.transform = `translateY(${Math.round(Math.min(st.dy, 500) * 0.7)}px)`;
+      pane.style.opacity = String(Math.max(0.4, 1 - st.dy / 500));
+    }, { passive: false });
+    const end = () => {
+      if (!st) return;
+      const go = st.on && st.dy > 110;
+      st = null;
+      if (go) { reset(false); closeTree(); } else reset(true);
+    };
+    pane.addEventListener('touchend', end);
+    pane.addEventListener('touchcancel', () => { st = null; reset(true); });
+  }
+
+  // סגירת כרטיס העץ: הרשימה נפתחת לכל הגובה, והעץ שנסגר מוצג באמצע המסך
+  function closeTree() {
+    const id = curTreeId;
+    if (!id) return;
+    saveNow();
+    curTreeId = null;
+    history.replaceState(null, '', `#/s/${cur.id}/trees`);
+    renderTreeList();
+    renderEditor();
+    const row = $(`.tree-row[data-id="${CSS.escape(id)}"]`);
+    if (row) row.scrollIntoView({ block: 'center' });
   }
 
   function selectTree(id) {
@@ -1880,6 +1937,7 @@
     pane = pane || $('.editor');
     if (!pane) return;
     const t = treeById(curTreeId);
+    if (pane.parentElement) pane.parentElement.classList.toggle('no-tree', !t);
     if (!t) {
       pane.replaceChildren(h('div', { class: 'card empty' }, 'לחץ על "עץ חדש" כדי להוסיף עץ, או בחר עץ מהרשימה.'));
       return;
