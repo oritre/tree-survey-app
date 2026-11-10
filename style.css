@@ -195,6 +195,13 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tree-search { min-height: 44px; font-size: 16px; padding: 6px 12px; border-radius: 10px; }
 .tree-list { display: flex; flex-direction: column; gap: 6px; overflow: auto; max-height: 34vh; padding: 2px; margin: -2px; overscroll-behavior: contain; }
 @media (min-width: 900px) { .tree-list { max-height: calc(100vh - var(--bar-h) - var(--tabs-h) - 150px); } }
+/* מסך צר: כרטיס העץ נסגר בהחלקה למטה. בלי עץ פתוח הרשימה בכל הגובה, ופס אחיזה מעל כרטיס פתוח */
+@media (max-width: 899.98px) {
+  .split.no-tree .tree-list { max-height: none; overflow: visible; }
+  .split.no-tree .editor { display: none; }
+  .split:not(.no-tree) .editor::before { content: ''; display: block; width: 48px; height: 5px; border-radius: 3px; background: var(--border); margin: 0 auto 8px; }
+  .editor.dragging { will-change: transform; }
+}
 .tree-row {
   display: grid; grid-template-columns: 48px 1fr auto; gap: 10px; align-items: center; text-align: start;
   padding: 8px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; width: 100%;
