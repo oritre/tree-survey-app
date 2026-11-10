@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.72.0';
+  const APP_VERSION = '1.72.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -444,7 +444,9 @@
   }
 
   // סקר חדש להיום על בסיס סקר קיים. withPhotos: התמונות מועתקות (בטאבלט, או קישור לקובץ שכבר בגוגל דרייב)
-  async function copySurvey(old, withPhotos) {
+  // save=false: הסקר לא נשמר כאן, והקורא שומר אותו כשהוא שלם. אחרת הגיבוי לענן יכול להתחיל לעבוד על הסקר החלקי
+  // (בלי התמונות מהאקסל) ולשמור אותו מעל הגרסה המלאה, וכך התמונות נעלמות מהסקר
+  async function copySurvey(old, withPhotos, save = true) {
     // גם המיקום על המדידה (סקר לבנייה): בלי זה הסקר החדש נפתח בלי המדידה ובלי סימוני העצים
     const keep = ['num', 'okNum', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS,
       'px', 'py', 'pref', 'pname', 'polyId'];
@@ -476,7 +478,7 @@
       if (old.planBound) s.planBound = JSON.parse(JSON.stringify(old.planBound));
     }
     s.site = composeSite(s);
-    await DB.putSurvey(s);
+    if (save) await DB.putSurvey(s);
     return s;
   }
 
@@ -944,7 +946,7 @@
       const yi = path.findIndex(n => /^\s*(19|20)\d\d\s*$/.test(n));
       const old = Object.assign({}, r.survey, { id: 'file', project: (yi >= 0 && path[yi + 1]) || path[path.length - 1] || '', date: r.survey.date || (f.lastModifiedDateTime || '').slice(0, 10) });
       old.trees = r.trees.map(t => Object.assign({ id: uid(), photos: [] }, t));
-      const s = await copySurvey(old, false);
+      const s = await copySurvey(old, false, false);
       if (keepDate) { delete s.prev; s.date = old.date || s.date; s.source = { file: f.name, fileId: f.id }; s.dateAskedDay = today(); } // בלי השאלה על עדכון התאריך
       else s.prev = { file: f.name, fileId: f.id, date: old.date };
       btn.textContent = 'מוסיף את התמונות…';
@@ -987,7 +989,7 @@
       const b = await OD.download(f.id);
       if (!b) throw new Error('הקובץ לא נמצא');
       const old = JSON.parse(await b.text());
-      const s = await copySurvey(old, true);
+      const s = await copySurvey(old, true, false);
       s.date = old.date || s.date; s.restoredFrom = { id: old.id, file: f.name }; s.dateAskedDay = today(); // בלי השאלה על עדכון התאריך
       await DB.putSurvey(s);
       toast(`הגרסה שוחזרה כסקר נפרד מ-${fmtDate(s.date)}. הסקר הנוכחי לא השתנה.`, 5000);
@@ -1221,7 +1223,7 @@
         go('#/s/' + old.id);
         return;
       }
-      const s = await copySurvey(old, true);
+      const s = await copySurvey(old, true, false);
       // סקר שיובא מאקסל ישן: התמונות נמצאות רק בתוך קובץ האקסל המקורי שבתיקיית הגיבוי
       if (old.imported && old.odFolderId && old.odSrcName && !s.trees.some(t => t.photos.length)) {
         btn.textContent = 'מוציא את התמונות מהאקסל…';
@@ -1231,6 +1233,7 @@
           if (b) await addOldPhotos(s, (await Importer.parse(await b.arrayBuffer(), old.odSrcName, { photos: true })).trees, old.date);
         } catch (err) { toast('התמונות מהאקסל הישן לא נקראו: ' + err.message, 5000); }
       }
+      await DB.putSurvey(s);
       toast(`נפתח סקר חדש על בסיס הסקר מ-${fmtDate(old.date)}, עם התמונות שלו. עדכן את העצים והוסף תמונות חדשות.`, 5000);
       go('#/s/' + s.id + '/details');
     } catch (err) { toast('נכשל: ' + err.message, 5000); }
