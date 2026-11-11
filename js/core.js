@@ -239,14 +239,22 @@
     return w;
   }
 
-  // שם המוסד (F9) וכתובת (D10) בדוח. סקר ישן עם שדה אתר אחד: הכול נכנס לשם
+  // שם המוסד (F9) וכתובת (D10) בדוח. head = תוספת לכותרת (אם יש) ואחריה שם המוסד, בשורת הכותרת אחרי "סקר בטיחות עצים". סקר ישן עם שדה אתר אחד: הכול נכנס לשם
   function placeOf(s) {
     const t = x => (x || '').trim();
-    if (s.siteName == null && s.street == null && s.city == null) return { name: t(s.site), address: '' };
-    return { name: t(s.siteName), address: [t(s.street), t(s.city)].filter(Boolean).join(', ') };
+    const extra = t(s.titleExtra);
+    const head = name => [extra, name].filter(Boolean).join(' ');
+    if (s.siteName == null && s.street == null && s.city == null) return { name: t(s.site), address: '', head: head(t(s.site)) };
+    const name = t(s.siteName);
+    return { name, address: [t(s.street), t(s.city)].filter(Boolean).join(', '), head: head(name) };
   }
 
-  const api = { placeOf, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, jValue, hasContent,
+  // עבודה בירושלים: העיר, הרחוב, שם המוסד או הפרויקט כוללים "ירושלים" (גם "ירושליים"). רק בהן קופץ "כמה אורנים?"
+  function isJerusalem(s) {
+    return [s.project, s.city, s.street, s.siteName, s.site].some(x => /ירושלי?ים|jerusalem/i.test(x || ''));
+  }
+
+  const api = { placeOf, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, jValue, hasContent,
     sortTrees, splitActive, slotsOf, photoForSlot, groupKey, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
     nextNum, warnings, OK, DEFAULT_URGENCY, isOk, urgencyCell, notesCell, setUrgency };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;

@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.73.0';
+  const APP_VERSION = '1.74.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -451,7 +451,7 @@
     const keep = ['num', 'okNum', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS,
       'px', 'py', 'pref', 'pname', 'polyId'];
     const s = { id: uid(), type: Construction.typeOf(old), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
-      code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', cset: old.cset ? Object.assign({}, old.cset) : undefined, warnGps: !!old.warnGps, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
+      titleExtra: old.titleExtra || '', code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', cset: old.cset ? Object.assign({}, old.cset) : undefined, warnGps: !!old.warnGps, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
     for (const t of old.trees || []) {
       const nt = Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, t[k]])));
       if (withPhotos) for (const p of t.photos || []) {
@@ -1468,6 +1468,7 @@
         Object.entries(Construction.TYPES).map(([k, v]) => h('option', { value: k, selected: Construction.typeOf(cur) === k ? '' : null }, v)))),
       field('פרויקט (למשל: ירושלים)', sugg('project', { placeholder: 'לניהול וסינון הסקרים, לא מופיע בדוח' })),
       build ? null : field('שם המוסד / האתר', inp('siteName', { placeholder: 'למשל: גן חצב' })),
+      build ? null : field('תוספת לשורת הכותרת (לא חובה)', inp('titleExtra', { placeholder: 'מופיע בכותרת אחרי "סקר בטיחות עצים", לפני שם המוסד' })),
       h('div', { class: 'row', style: 'align-items:stretch' },
         h('div', { style: 'flex:2;min-width:200px' }, field('רחוב ומספר', sugg('street', { placeholder: 'למשל: הנרקיס 5' }))),
         h('div', { style: 'flex:1;min-width:160px' }, field('עיר', sugg('city', { placeholder: 'למשל: ירושלים' })))),
@@ -1970,7 +1971,7 @@
     };
     // כשנכתב אורן (גם עם עוד מינים או בשגיאת כתיב) ואין כמות: שואל מיד "כמה אורנים?"
     const askPines = async () => {
-      if (Construction.isConstruction(cur)) return;
+      if (Construction.isConstruction(cur) || !Core.isJerusalem(cur)) return; // החלון רק בעבודות בירושלים (ori)
       if (!Core.isPine(t.species) || (t.pines != null && t.pines !== '') || t._askedPines === t.species) return;
       t._askedPines = t.species;
       const n = await askNumber('כמה אורנים?', `במין העץ "${t.species}" זוהה אורן`);
@@ -2421,7 +2422,7 @@
     // נ"צ לא נלקח אוטומטית במצב דיבור (ori), רק בכפתור במסך העץ
     const afterNew = () => {};
     const ask = t => {
-      askPinesFor = Core.isPine(t.species) && pinesOf(t) == null ? t : null;
+      askPinesFor = Core.isJerusalem(cur) && Core.isPine(t.species) && pinesOf(t) == null ? t : null;
       return askPinesFor ? ' כמה אורנים?' : '';
     };
 
