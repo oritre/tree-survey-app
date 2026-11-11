@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.75.0';
+  const APP_VERSION = '1.76.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -226,6 +226,7 @@
     if (hash.startsWith('#/summary')) return renderSummary();
     if (hash.startsWith('#/import')) return renderImport();
     if (hash.startsWith('#/settings')) return renderSettings();
+    if (hash.startsWith('#/multi')) { const a = hash.split('/')[2]; return renderMultiSend(a && a !== 'reopen' ? decodeURIComponent(a) : null, a === 'reopen'); }
     if (hash.startsWith('#/quotes')) return QuotesUI.render(hash);
     return renderHome();
   }
@@ -356,6 +357,7 @@
           h('button', { class: 'tile', onclick: () => go('#/cloud') }, icon('search'), 'חיפוש סקרים בענן'),
           h('button', { class: 'tile', onclick: () => go('#/summary') }, icon('tree'), 'אורנים ומפות'),
           h('button', { class: 'tile', onclick: () => go('#/quotes') }, icon('money'), 'הצעות מחיר')),
+        h('button', { class: 'btn block', onclick: () => go('#/multi') }, '✉ שליחת כמה סקרים במייל אחד'),
         h('div', { id: 'plannedBox' }),
         chips, list,
         hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} סקרים מימים קודמים שמורים בענן. `,
@@ -3104,13 +3106,23 @@
   // ---------- צפייה ב-PDF ושליחה ----------
   // מייל / וואטסאפ: אתר לא יכול לצרף קובץ ישירות למייל או לוואטסאפ, אז נפתח חלון השיתוף של אנדרואיד עם הקובץ מצורף,
   // ובוחרים בו את Gmail או את וואטסאפ. את הבחירה האחרונה אנדרואיד מציג ראשונה
-  async function sharePdf(s, pdf, via) {
-    const file = new File([pdf.blob], shareName(pdf.name), { type: 'application/pdf' });
-    // לפי ori: נושא = "סקר עצים <השנה שבה נשלח> <שם הגן> <כתובת> <עיר>", בגוף: שורה ריקה ואז "רצ"ב סקר עצים וחשבונית לתשלום"
+  // לפי ori: נושא = "סקר עצים <השנה שבה נשלח> <שם הגן> <כתובת> <עיר>", בגוף: שורה ריקה ואז "רצ"ב סקר עצים וחשבונית לתשלום".
+  // כמה סקרים: "סקרי עצים <שנה> <מקום>, <מקום>…", ובגוף רשימת המקומות
+  function whereOf(s) {
     const place = Core.placeOf(s);
-    const where = [s.siteName, s.street, s.city].filter(Boolean).join(' ') || [place.name, place.address].filter(Boolean).join(' ') || s.site || '';
-    const subject = `סקר עצים ${new Date().getFullYear()} ${where}`.trim();
-    const body = '\nרצ"ב סקר עצים וחשבונית לתשלום';
+    return [s.siteName, s.street, s.city].filter(Boolean).join(' ') || [place.name, place.address].filter(Boolean).join(' ') || s.site || '';
+  }
+  function mailText(surveys) {
+    const y = new Date().getFullYear();
+    if (surveys.length === 1) return { subject: `סקר עצים ${y} ${whereOf(surveys[0])}`.trim(), body: '\nרצ"ב סקר עצים וחשבונית לתשלום' };
+    const ws = surveys.map(whereOf).filter(Boolean);
+    const head = ws.length > 3 ? ws.slice(0, 2).join(', ') + ` ועוד ${ws.length - 2}` : ws.join(', ');
+    return { subject: `סקרי עצים ${y} ${head}`.trim(), body: '\nרצ"ב סקרי עצים וחשבוניות לתשלום:\n' + ws.map(w => '- ' + w).join('\n') };
+  }
+  async function sharePdf(s, pdf, via) {
+    if (via === 'mail') return composeMail([{ s, pdf }]);
+    const file = new File([pdf.blob], shareName(pdf.name), { type: 'application/pdf' });
+    const { subject, body } = mailText([s]);
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       // בוואטסאפ אין נושא, אז הנושא נכנס כשורה ראשונה בהודעה
       const data = { files: [file], title: subject, text: via === 'mail' ? body : subject + '\n' + body };
@@ -3122,6 +3134,181 @@
     if (via === 'mail') location.href = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
     toast('הקובץ הורד. צרף אותו מתיקיית ההורדות.', 5000);
   }
+  // שיתוף כמה קבצים יחד בחלון השיתוף של אנדרואיד (או הורדה, כשאין שיתוף קבצים)
+  async function shareFilesTogether(files, subject, body) {
+    if (navigator.canShare && navigator.canShare({ files })) {
+      try { await navigator.share({ files, title: subject, text: body }); return true; }
+      catch (e) { if (e.name === 'AbortError') return true; if (e.name !== 'NotAllowedError') throw e; return false; }
+    }
+    for (const f of files) downloadFile(f, f.name);
+    location.href = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    toast('הקבצים הורדו. צרף אותם מתיקיית ההורדות.', 5000);
+    return true;
+  }
+
+  // מייל חדש מתוך האפליקציה, מהכתובת שבהגדרות (oritrees@gmail.com): נמען, נושא, גוף והקבצים המצורפים.
+  // items = [{ s, pdf }]. draftIds: הסקרים, כדי לפתוח את המייל שוב אחרי ההתחברות לגוגל
+  async function composeMail(items, opts) {
+    opts = opts || {};
+    const from = await GM.from();
+    const files = items.map(it => new File([it.pdf.blob], shareName(it.pdf.name), { type: 'application/pdf' }));
+    const size = files.reduce((a, f) => a + f.size, 0);
+    const txt = mailText(items.map(it => it.s));
+    const past = await DB.getKV('mailRecipients', []);
+    const d = opts.draft || {};
+    const dl = h('datalist', { id: 'mailToList' }, past.map(a => h('option', { value: a })));
+    const to = h('input', { class: 'in', type: 'email', multiple: true, list: 'mailToList', dir: 'ltr', placeholder: 'כתובת הנמען (כמה כתובות: עם פסיק)', value: d.to || '' });
+    const subj = h('input', { class: 'in', value: d.subject != null ? d.subject : txt.subject });
+    const body = h('textarea', { class: 'in', rows: 5 }); body.value = d.body != null ? d.body : txt.body;
+    const status = h('div', { class: 'small', role: 'status' });
+    const ready = await GM.ready();
+    const close = () => ov.remove();
+    const big = size > GM.MAX_BYTES;
+    const sendBtn = h('button', { class: 'btn primary big', disabled: big, onclick: async () => {
+      const addr = to.value.split(/[,;\s]+/).map(a => a.trim()).filter(Boolean);
+      if (!addr.length || addr.some(a => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a))) { status.textContent = 'כתוב כתובת מייל תקינה לנמען'; to.focus(); return; }
+      if (!(await GM.ready())) {
+        // אחרי ההתחברות חוזרים למסך "שליחת כמה סקרים" והמייל נפתח שוב עם אותם סקרים ואותו טקסט
+        await DB.setKV('mailDraft', { ids: items.map(it => it.s.id), to: to.value, subject: subj.value, body: body.value, at: Date.now() });
+        try { await GM.beginLogin('#/multi/reopen'); } catch (e) { status.textContent = e.message; }
+        return;
+      }
+      sendBtn.disabled = true; status.textContent = 'שולח…';
+      try {
+        await GM.send({ to: addr.join(', '), subject: subj.value, body: body.value, files });
+        await DB.setKV('mailRecipients', [...new Set([...addr.map(a => a.toLowerCase()), ...past])].slice(0, 30));
+        await DB.delKV('mailDraft');
+        close(); toast(`✓ המייל נשלח מ-${from} אל ${addr.join(', ')} (${files.length} קבצים)`, 5000);
+        if (opts.onSent) opts.onSent();
+      } catch (e) {
+        console.error(e); sendBtn.disabled = false;
+        status.textContent = 'השליחה נכשלה: ' + e.message;
+        if (e instanceof GM.AuthError) { await GM.logout(); sendBtn.textContent = `התחבר ל-${from} ושלח`; }
+      }
+    } }, ready ? `✉ שלח מ-${from}` : `התחבר ל-${from} ושלח`);
+    document.querySelectorAll('.modal.mail-compose').forEach(m => m.remove());
+    const ov = h('div', { class: 'modal mail-compose', style: 'z-index:95' },
+      h('div', { class: 'card stack', style: 'max-width:560px;width:96%' },
+        h('h2', { style: 'margin:0;font-size:21px' }, items.length > 1 ? `מייל חדש עם ${items.length} סקרים` : 'מייל חדש'),
+        h('div', { class: 'muted small' }, 'מאת: ', h('b', { dir: 'ltr' }, from), ready ? '' : ' (בפעם הראשונה מתחברים לחשבון הזה בגוגל)'),
+        dl, field('אל', to), field('נושא', subj), field('תוכן', body),
+        h('div', { class: 'small' }, `קבצים מצורפים (${(size / 1048576).toFixed(1)}MB):`,
+          h('ul', { style: 'margin:4px 0;padding-inline-start:20px' }, files.map(f => h('li', {}, f.name)))),
+        big ? h('div', { class: 'small', style: 'color:var(--danger)' }, 'הקבצים גדולים מ-25MB, יותר ממה ש-Gmail מקבל במייל אחד. בחר פחות סקרים ושלח בשני מיילים.') : null,
+        status,
+        h('div', { class: 'row' }, sendBtn,
+          h('button', { class: 'btn', onclick: async () => { if (await shareFilesTogether(files, subj.value, body.value)) close(); } }, 'שלח דרך אפליקציה אחרת'),
+          h('button', { class: 'btn', onclick: close }, 'ביטול'))));
+    document.body.append(ov);
+    if (!to.value) to.focus();
+  }
+
+  // ה-PDF של סקר לשליחה: השמור בטאבלט אם הסקר לא השתנה, אחרת מגוגל דרייב, ואם אין שם, מפיקים מחדש
+  async function pdfForSend(s, say) {
+    const clean = refSets(s)[0][0];
+    const last = await DB.getKV('pdf:' + s.id, null);
+    if (last && last.blob && (last.hash === Sync.hashSurvey(clean) || last.hash === Sync.hashSurvey(s))) return last;
+    const name = fileBase(clean) + '.pdf';
+    say('מוריד מגוגל דרייב…');
+    const b = await Sync.cloudPdf(s, name);
+    if (b && b.size) return { blob: new Blob([b], { type: 'application/pdf' }), name };
+    return buildPdf(clean, (i, n) => say(`מפיק PDF… ${i}/${n}`));
+  }
+
+  // ---------- שליחת כמה סקרים במייל אחד ----------
+  async function renderMultiSend(pre, reopen) {
+    const app = $('#app');
+    const msg = h('div', { class: 'muted small', role: 'status' });
+    const status = h('div', { class: 'small', role: 'status' });
+    const q = h('input', { class: 'in', type: 'search', placeholder: 'סינון: סמל, שם, רחוב, עיר, פרויקט' });
+    const list = h('div', { class: 'stack' });
+    const picked = h('div', { class: 'small' });
+    const sel = new Set(pre ? [pre] : []);
+    let entries = [];
+    const btnMail = h('button', { class: 'btn primary big', disabled: true }, '✉ מייל חדש עם הסקרים');
+    const btnWa = h('button', { class: 'btn big', disabled: true }, 'וואטסאפ');
+    app.replaceChildren(bar('שליחת כמה סקרים', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
+      h('div', { class: 'card stack' },
+        h('div', { class: 'small' }, 'בחר את הסקרים ששולחים לאותו אדם. ה-PDF של כל סקר מצורף לאותו מייל (סקרי בנייה לא נכללים, יש בהם רק אקסל).'),
+        picked, h('div', { class: 'row' }, btnMail, btnWa), status),
+      q, msg, list));
+    const hay = e => [e.code, e.siteName, e.street, e.city, e.project, e.site].join(' ').toLowerCase();
+    const byId = new Map();
+    const upd = () => {
+      btnMail.disabled = btnWa.disabled = !sel.size;
+      picked.replaceChildren(...(sel.size ? [h('b', {}, `נבחרו ${sel.size}: `), [...sel].map(id => byId.get(id)).filter(Boolean).map(e => e.siteName || e.site || 'סקר ללא שם').join(' · ')] : ['עוד לא נבחרו סקרים']));
+    };
+    const LIMIT = 80;
+    const draw = () => {
+      const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const shown = entries.filter(e => sel.has(e.id) || words.every(w => hay(e).includes(w)));
+      const more = shown.length - LIMIT;
+      list.replaceChildren(...shown.slice(0, LIMIT).map(e => h('label', { class: 'card row', style: 'gap:12px;align-items:flex-start;cursor:pointer' },
+        h('input', { type: 'checkbox', checked: sel.has(e.id), style: 'width:24px;height:24px;flex:none', onchange: ev => { ev.target.checked ? sel.add(e.id) : sel.delete(e.id); upd(); } }),
+        h('span', {}, h('b', {}, e.siteName || e.site || 'סקר ללא שם'), h('br'),
+          h('span', { class: 'muted small' }, [e.project, e.code ? 'סמל ' + e.code : null, [e.street, e.city].filter(Boolean).join(', '), fmtDate(e.date), `${e.trees || 0} עצים`].filter(Boolean).join(' · '))))),
+        more > 0 ? h('div', { class: 'muted small', style: 'text-align:center' }, `ועוד ${more} סקרים. הקלד בסינון כדי למצוא סקר.`) : '');
+      upd();
+    };
+    q.addEventListener('input', draw);
+    msg.textContent = 'טוען…';
+    // הסקרים שבטאבלט, ובנוסף כל הסקרים שבענן
+    const local = await DB.allSurveys();
+    let cloud = [];
+    if (await OD.connected() && navigator.onLine) {
+      try { cloud = await Sync.cloudIndex(); } catch (e) { msg.textContent = 'הטעינה מהענן נכשלה (' + e.message + '). מוצגים רק הסקרים שבטאבלט.'; }
+    }
+    for (const e of cloud) if (!e.deleted) byId.set(e.id, e);
+    for (const s of local) {
+      if (s.deleted) { byId.delete(s.id); continue; }
+      byId.set(s.id, Object.assign({}, byId.get(s.id) || {}, { id: s.id, project: s.project, code: s.code, siteName: s.siteName || s.site, street: s.street, city: s.city, site: s.site, date: s.date, type: Construction.typeOf(s), trees: s.trees.filter(Core.hasContent).length, updated: s.updated }));
+    }
+    for (const [id, e] of byId) if (e.type === 'construction') byId.delete(id);
+    entries = [...byId.values()].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.updated || 0) - (a.updated || 0));
+    if (!/נכשלה/.test(msg.textContent)) msg.textContent = entries.length ? '' : 'אין סקרים.';
+    draw();
+
+    async function prepare() {
+      const out = [];
+      let i = 0;
+      for (const id of sel) {
+        const e = byId.get(id); i++;
+        const label = e.siteName || e.site || 'סקר';
+        const say = t => { status.textContent = `${i}/${sel.size} ${label}: ${t}`; };
+        say('טוען…');
+        const s = await Sync.loadSurvey(e);
+        if (!s) throw new Error(`הסקר "${label}" לא נמצא`);
+        try { out.push({ s, pdf: await pdfForSend(s, say) }); }
+        catch (err) { throw new Error(`ה-PDF של "${label}" לא הופק: ${err.message}`); }
+      }
+      status.textContent = `✓ ${out.length} קבצי PDF מוכנים.`;
+      return out;
+    }
+    const run = fn => async () => {
+      btnMail.disabled = btnWa.disabled = true;
+      try { await fn(await prepare()); } catch (err) { console.error(err); status.textContent = 'נכשל: ' + err.message; }
+      finally { upd(); }
+    };
+    btnMail.onclick = run(items => composeMail(items));
+    btnWa.onclick = run(async items => {
+      const files = items.map(it => new File([it.pdf.blob], shareName(it.pdf.name), { type: 'application/pdf' }));
+      const t = mailText(items.map(it => it.s));
+      // אחרי הכנה ארוכה הדפדפן לא מאפשר לפתוח שיתוף בלי לחיצה נוספת
+      if (!(await shareFilesTogether(files, t.subject, t.subject + '\n' + t.body))) {
+        const b = h('button', { class: 'btn primary big', onclick: async () => { b.remove(); await shareFilesTogether(files, t.subject, t.subject + '\n' + t.body); } }, 'לחץ לשליחה בוואטסאפ');
+        status.append(' ', b);
+      }
+    });
+    // חזרה מההתחברות לחשבון המייל: פותחים שוב את המייל שהתחיל
+    const draft = await DB.getKV('mailDraft', null);
+    if (reopen) history.replaceState(null, '', location.pathname + '#/multi');
+    if (draft && reopen && Date.now() - draft.at < 30 * 60000 && draft.ids.every(id => byId.has(id))) {
+      await DB.delKV('mailDraft');
+      draft.ids.forEach(id => sel.add(id)); draw();
+      try { const items = await prepare(); composeMail(items, { draft }); } catch (err) { status.textContent = 'נכשל: ' + err.message; }
+    }
+  }
+
   // בחירת תיקייה בגוגל דרייב לחיפוש בארכיון: נכנסים לתיקיות ובוחרים
   async function pickDriveFolder() {
     if (!navigator.onLine) { toast('אין קליטה'); return; }
@@ -3193,7 +3380,8 @@
         h('div', { class: 'row' },
           h('button', { class: 'btn primary', onclick: () => viewPdf(s, pdf) }, '👁 הצג PDF'),
           h('button', { class: 'btn', onclick: () => sharePdf(s, pdf, 'mail') }, '✉ שלח במייל'),
-          h('button', { class: 'btn', onclick: () => sharePdf(s, pdf, 'whatsapp') }, 'שלח בוואטסאפ')));
+          h('button', { class: 'btn', onclick: () => sharePdf(s, pdf, 'whatsapp') }, 'שלח בוואטסאפ'),
+          h('button', { class: 'btn', onclick: () => go('#/multi/' + encodeURIComponent(s.id)) }, '✉ שלח יחד עם סקרים נוספים')));
     };
     const onCh = id => { if (id === s.id) draw(); };
     pdfListeners.add(onCh);
@@ -3241,6 +3429,30 @@
   }
 
   // ---------- הגדרות וגיבוי ----------
+  // הגדרות שליחת מיילים: הכתובת שממנה נשלחים הדוחות, וחיבור לחשבון הזה בגוגל
+  async function mailSettingsCard() {
+    const from = await GM.from(), acc = await GM.account(), ok = await GM.ready();
+    const fromIn = h('input', { class: 'in', type: 'email', dir: 'ltr', value: from, placeholder: GM.DEFAULT_FROM });
+    const st = h('div', { class: 'small', role: 'status' }, ok ? `✓ מחובר: המיילים נשלחים מ-${acc}` : acc ? `מחובר ל-${acc}, לא לכתובת שלמעלה. התחבר שוב.` : 'לא מחובר עדיין. אפשר להתחבר כאן, או בשליחה הראשונה.');
+    const save = async () => { const v = fromIn.value.trim() || GM.DEFAULT_FROM; await DB.setKV('mailFrom', v === GM.DEFAULT_FROM ? '' : v); return v; };
+    return h('div', { class: 'card stack' },
+      h('h2', { style: 'margin:0;font-size:20px' }, 'שליחת מיילים'),
+      h('div', { class: 'muted small' }, 'כפתור "שלח במייל" פותח מייל חדש בתוך האפליקציה, ושולח אותו מהכתובת הזו (גם עם כמה סקרים יחד). המייל נשמר ב"דואר יוצא" של החשבון ב-Gmail.'),
+      field('השולח', fromIn), st,
+      h('div', { class: 'row' },
+        h('button', { class: 'btn primary', onclick: async () => {
+          await save();
+          if (!navigator.onLine) { st.textContent = 'צריך קליטה כדי להתחבר.'; return; }
+          try { await GM.beginLogin('#/settings'); } catch (e) { st.textContent = e.message; }
+        } }, ok ? 'התחבר מחדש' : 'התחבר לחשבון השולח'),
+        acc ? h('button', { class: 'btn', onclick: async () => { await GM.logout(); renderSettings(); } }, 'נתק') : null,
+        h('button', { class: 'btn', onclick: async () => { const v = await save(); toast('נשמר: ' + v); renderSettings(); } }, 'שמור')),
+      h('details', { class: 'small' }, h('summary', {}, 'הפעלה חד-פעמית בגוגל (אם השליחה כותבת "צריך להפעיל את Gmail API")'),
+        h('div', {}, 'במחשב, בחשבון שבו נוצר הפרויקט של האפליקציה בגוגל: לפתוח את ',
+          h('a', { href: 'https://console.cloud.google.com/apis/library/gmail.googleapis.com?project=tree-survey-511314', target: '_blank', rel: 'noopener' }, 'Gmail API בפרויקט tree-survey'),
+          ' וללחוץ Enable. אחר כך להתחבר כאן שוב.')));
+  }
+
   async function renderSettings() {
     const app = $('#app');
     const token = await DB.getKV('tgToken', '');
@@ -3351,6 +3563,7 @@
             } }, odConnected && !Sync.state.odNeedsLogin ? 'התחבר מחדש' : 'התחבר לגוגל דרייב'),
             odConnected ? h('button', { class: 'btn', onclick: async () => { await OD.logout(); renderSettings(); } }, 'נתק') : null,
             h('button', { class: 'btn', onclick: async () => { await DB.setKV('odRoot', odRootIn.value.trim() || 'סקרי עצים'); toast('נשמר'); } }, 'שמור תיקייה'))),
+        await mailSettingsCard(),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'חתימה וחותמת'),
           h('div', { class: 'muted small' }, 'נכנסת לדוחות ולהצעות המחיר. נשמרת רק במכשיר ובתיקיית הגיבוי בגוגל דרייב, לא באתר של האפליקציה. מכשיר שמתחבר לגוגל דרייב טוען אותה לבד. קובץ PNG עם רקע שקוף.'),
@@ -3515,7 +3728,9 @@
     }
     await DB.setKV('topSafetyNotes2026', true);
   }
-  addTopSafetyNotes().catch(() => {}).then(moveToGdrive).catch(() => {}).then(() => OD.handleRedirect()).then(r => {
+  addTopSafetyNotes().catch(() => {}).then(moveToGdrive).catch(() => {}).then(() => GM.handleRedirect()).then(g => {
+    if (g) toast(g.ok ? `✓ מחובר לשליחת מיילים מ-${g.email}` : 'החיבור לשליחת מיילים נכשל: ' + g.message, 5000);
+  }).catch(() => {}).then(() => OD.handleRedirect()).then(r => {
     if (r) { toast(r.ok ? '✓ מחובר לגוגל דרייב' : 'החיבור לגוגל דרייב נכשל: ' + r.message, 4000); Sync.state.odNeedsLogin = false; }
     route();
     Sync.kick(true);
