@@ -845,6 +845,12 @@
   setInterval(() => { if (!running) run(); }, 3 * 60 * 1000);
 
   root.Sync = { stop, importSurvey, flushImported, preparing,
+    // ה-PDF של הסקר מתיקיית הדוחות בגוגל דרייב, אם הועלה אחרי השינוי האחרון בסקר (אחרת null ובונים מחדש)
+    async cloudPdf(s, name) {
+      if (!s.odReportDir || !s.odPdfAt || s.odPdfAt < (s.updated || 0) || !navigator.onLine || !(await OD.connected())) return null;
+      const f = await OD.findFile(s.odReportDir, name).catch(() => null);
+      return f ? OD.download(f.id).catch(() => null) : null;
+    },
     holding: id => holding.get(id) || null,
     kick, state,
     now() { state.odNeedsLogin = false; schedule(0); },
