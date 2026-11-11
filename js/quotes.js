@@ -115,6 +115,7 @@
       case 'price': return priceText(b);
       case 'gush': return (b.gush || b.helka) ? `גוש ${b.gush || ''} חלקה ${b.helka || ''}`.replace(/\s+/g, ' ').trim() : '';
       case 'subject': return b.t || '';
+      case 'title': return (b.t || '') + ((b.extra || '').trim() ? ' ' + b.extra.trim() : ''); // תוספת לכותרת (ori: הצעת יציבות)
       case 'blank': return blankText(b);
       default: return b.t;
     }
@@ -192,7 +193,10 @@
   function autoName(q) {
     // ori: יציבות = שם המוסד; היתר בניה = הכתובת בלבד (בלי גוש/חלקה ובלי שם התבנית)
     const inst = q.blocks.find(b => b.inst && !b.del && b.kind === 'subject' && (b.t || '').trim());
-    if (inst) return inst.t.trim();
+    // תוספת לשורת הכותרת (אם מולאה) באה לפני שם המוסד
+    const tb = q.blocks.find(b => b.kind === 'title' && !b.del);
+    const extra = tb && q.blocks.some(b => b.inst && !b.del) ? (tb.extra || '').trim() : '';
+    if (inst || extra) return [extra, inst ? inst.t.trim() : ''].filter(Boolean).join(' ');
     // שורות הכותרת שבין "הצעת מחיר..." ל"בהמשך ל...". גם שורה שנערכה ב"עריכת כל המסמך" (הפכה לטקסט חופשי) או נוספה שם
     const ti = q.blocks.findIndex(b => b.kind === 'title' && !b.del);
     let end = q.blocks.findIndex((b, i) => i > ti && /בהמשך ל/.test(blockText(q, b) || ''));

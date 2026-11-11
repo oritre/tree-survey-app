@@ -55,7 +55,7 @@
     const place = Core.placeOf(survey);
     if (survey.code) v.B5 = survey.code; else v.A5 = ''; // בלי סמל מוסד / מנהל: גם הכותרת לא מודפסת
     if (survey.manager) v.B6 = survey.manager; else v.A6 = '';
-    if (place.head) v.F9 = place.head;
+    if (place.name) v.F9 = place.name;
     if (place.address) v.D10 = place.address;
     if (survey.date) { v.F2 = fmtDate(survey.date); v.B14 = fmtDate(survey.date); }
     const trees = Core.sortTrees(survey.trees).filter(Core.hasContent).slice(0, Core.MAX_TREES);
@@ -303,7 +303,7 @@
     let y = 156;
     if (survey.code) { parts.push(line('סמל מוסד: ' + survey.code, y - 13, { left: 300, width: 275.8, align: 'flex-start' })); y += 14; }
     if (survey.manager) parts.push(line('מנהל/ת: ' + survey.manager, y - 13, { left: 300, width: 275.8, align: 'flex-start' }));
-    parts.push(line(`סקר בטיחות עצים  ${place.head}`.trim(), 216 - 17, { sz: 17.3, b: 1, left: 20, width: 555.2 }));
+    parts.push(line(`סקר בטיחות עצים  ${place.name}`.trim(), 216 - 17, { sz: 17.3, b: 1, left: 20, width: 555.2 }));
     if (place.address) parts.push(line(place.address, 241 - 17, { sz: 17.3, b: 1, left: 20, width: 555.2 }));
     y = 258;
     const body = [t('C14').replace(/^\s+|\s+$/g, ''), t('E15')];
