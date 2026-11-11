@@ -265,7 +265,12 @@
     const fields = [];
     for (const b of q.blocks) {
       if (b.del) continue;
-      if (b.kind === 'gush') {
+      if (b.kind === 'title' && q.blocks.some(x => x.inst && !x.del)) {
+        // הצעת יציבות: תוספת חופשית בשורת הכותרת, אחרי "הצעת מחיר סקר יציבות עצים" (למשל שם המוסד). לא חובה
+        fields.push(field('תוספת לשורת הכותרת (לא חובה)',
+          h('input', { class: 'in', value: b.extra || '', placeholder: 'לדוגמה: גן שקט', oninput: e => { b.extra = e.target.value; changed(); } }),
+          `מופיע בכותרת אחרי "${(b.t || '').trim()}"`));
+      } else if (b.kind === 'gush') {
         fields.push(h('div', { class: 'grid2' },
           field('גוש', h('input', { class: 'in', inputmode: 'numeric', value: b.gush || '', oninput: e => { b.gush = e.target.value.trim(); changed(); } })),
           field('חלקה', h('input', { class: 'in', inputmode: 'numeric', value: b.helka || '', oninput: e => { b.helka = e.target.value.trim(); changed(); } }))));

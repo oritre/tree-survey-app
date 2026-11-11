@@ -239,14 +239,11 @@
     return w;
   }
 
-  // שם המוסד (F9) וכתובת (D10) בדוח. head = תוספת לכותרת (אם יש) ואחריה שם המוסד, בשורת הכותרת אחרי "סקר בטיחות עצים". סקר ישן עם שדה אתר אחד: הכול נכנס לשם
+  // שם המוסד (F9) וכתובת (D10) בדוח. סקר ישן עם שדה אתר אחד: הכול נכנס לשם
   function placeOf(s) {
     const t = x => (x || '').trim();
-    const extra = t(s.titleExtra);
-    const head = name => [extra, name].filter(Boolean).join(' ');
-    if (s.siteName == null && s.street == null && s.city == null) return { name: t(s.site), address: '', head: head(t(s.site)) };
-    const name = t(s.siteName);
-    return { name, address: [t(s.street), t(s.city)].filter(Boolean).join(', '), head: head(name) };
+    if (s.siteName == null && s.street == null && s.city == null) return { name: t(s.site), address: '' };
+    return { name: t(s.siteName), address: [t(s.street), t(s.city)].filter(Boolean).join(', ') };
   }
 
   // עבודה בירושלים: העיר, הרחוב, שם המוסד או הפרויקט כוללים "ירושלים" (גם "ירושליים"). רק בהן קופץ "כמה אורנים?"
