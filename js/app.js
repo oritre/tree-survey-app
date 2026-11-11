@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.77.0';
+  const APP_VERSION = '1.78.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -357,7 +357,6 @@
           h('button', { class: 'tile', onclick: () => go('#/cloud') }, icon('search'), 'חיפוש סקרים בענן'),
           h('button', { class: 'tile', onclick: () => go('#/summary') }, icon('tree'), 'אורנים ומפות'),
           h('button', { class: 'tile', onclick: () => go('#/quotes') }, icon('money'), 'הצעות מחיר')),
-        h('div', { style: 'display:flex;justify-content:flex-end' }, h('button', { class: 'btn', onclick: () => go('#/multi') }, '✉ כמה סקרים במייל אחד')),
         h('div', { id: 'plannedBox' }),
         chips, list,
         hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} סקרים מימים קודמים שמורים בענן. `,
@@ -3167,17 +3166,16 @@
     const picked = h('div', { class: 'small' });
     const sel = new Set(pre ? [pre] : []);
     let entries = [];
-    const btnMail = h('button', { class: 'btn primary big', disabled: true }, '✉ פתח מייל עם הסקרים');
-    const btnWa = h('button', { class: 'btn big', disabled: true }, 'וואטסאפ');
-    app.replaceChildren(bar('שליחת כמה סקרים', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
+    const btnMail = h('button', { class: 'btn primary big', disabled: true }, '✉ שליחה במייל');
+    app.replaceChildren(bar('שליחת כמה סקרים', pre ? '#/s/' + encodeURIComponent(pre) + '/export' : '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
         h('div', { class: 'small' }, 'בחר את הסקרים ששולחים לאותו אדם. ה-PDF של כל סקר מצורף לאותו מייל (סקרי בנייה לא נכללים, יש בהם רק אקסל).'),
-        picked, h('div', { class: 'row' }, btnMail, btnWa), status),
+        picked, h('div', { class: 'row' }, btnMail), status),
       q, msg, list));
     const hay = e => [e.code, e.siteName, e.street, e.city, e.project, e.site].join(' ').toLowerCase();
     const byId = new Map();
     const upd = () => {
-      btnMail.disabled = btnWa.disabled = !sel.size;
+      btnMail.disabled = !sel.size;
       picked.replaceChildren(...(sel.size ? [h('b', {}, `נבחרו ${sel.size}: `), [...sel].map(id => byId.get(id)).filter(Boolean).map(e => e.siteName || e.site || 'סקר ללא שם').join(' · ')] : ['עוד לא נבחרו סקרים']));
     };
     const LIMIT = 80;
@@ -3227,7 +3225,7 @@
       return out;
     }
     const run = fn => async () => {
-      btnMail.disabled = btnWa.disabled = true;
+      btnMail.disabled = true;
       try { await fn(await prepare()); } catch (err) { console.error(err); status.textContent = 'נכשל: ' + err.message; }
       finally { upd(); }
     };
@@ -3243,7 +3241,6 @@
       }
     });
     btnMail.onclick = shareAll('mail');
-    btnWa.onclick = shareAll('whatsapp');
   }
 
   // בחירת תיקייה בגוגל דרייב לחיפוש בארכיון: נכנסים לתיקיות ובוחרים
@@ -3294,8 +3291,7 @@
       h('div', { class: 'annot-bar' },
         h('button', { class: 'txt', onclick: close }, 'סגור'),
         h('span', { class: 'sp pdfv-title' }, `${pdf.pages} עמודים`),
-        h('button', { class: 'txt', onclick: () => sharePdf(s, pdf, 'mail') }, '✉ מייל'),
-        h('button', { class: 'txt', onclick: () => sharePdf(s, pdf, 'whatsapp') }, 'וואטסאפ'),
+        h('button', { class: 'txt', onclick: () => sharePdf(s, pdf, 'mail') }, '✉ שליחה'),
         h('button', { class: 'txt', title: 'הורדה', 'aria-label': 'הורדה', onclick: () => downloadFile(pdf.blob, pdf.name) }, '⬇')),
       view || h('div', { class: 'pdfv-pages' }, urls.map((u, i) => h('img', { src: u, alt: `עמוד ${i + 1}` }))));
     document.body.append(ov);
@@ -3309,16 +3305,18 @@
       if (drawn && !box.isConnected) { pdfListeners.delete(onCh); return; }
       drawn = true;
       const pdf = await DB.getKV('pdf:' + s.id, null);
-      if (!pdf || !pdf.blob) { box.replaceChildren(); return; }
+      // שליחה של כמה סקרים יחד: מופיעה בכל סקר, גם לפני שהופק לו PDF
+      const multi = h('button', { class: 'btn', onclick: () => go('#/multi/' + encodeURIComponent(s.id)) }, '✉ שליחת כמה סקרים ביחד');
+      if (!pdf || !pdf.blob) { box.replaceChildren(h('div', { class: 'row' }, multi)); return; }
       const hm = new Date(pdf.at).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
       const stale = pdf.hash !== Sync.hashSurvey(s);
       box.replaceChildren(
         h('div', { class: 'small' }, `PDF אחרון: ${hm}, ${pdf.pages} עמודים.`, stale ? h('span', { style: 'color:var(--danger)' }, ' הסקר השתנה מאז. לחץ "הפק PDF" כדי לעדכן.') : null),
         h('div', { class: 'row' },
           h('button', { class: 'btn primary', onclick: () => viewPdf(s, pdf) }, '👁 הצג PDF'),
-          h('button', { class: 'btn', onclick: () => sharePdf(s, pdf, 'mail') }, '✉ שלח במייל'),
-          h('button', { class: 'btn', onclick: () => sharePdf(s, pdf, 'whatsapp') }, 'שלח בוואטסאפ'),
-          h('button', { class: 'btn', onclick: () => go('#/multi/' + encodeURIComponent(s.id)) }, '✉ שלח יחד עם סקרים נוספים')));
+          // לפי ori: כפתור שליחה אחד. בחלון השיתוף בוחרים Gmail, וואטסאפ או כל אפליקציה אחרת
+          h('button', { class: 'btn', onclick: () => sharePdf(s, pdf, 'mail') }, '✉ שליחה במייל'),
+          multi));
     };
     const onCh = id => { if (id === s.id) draw(); };
     pdfListeners.add(onCh);
