@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.78.0';
+  const APP_VERSION = '1.79.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2823,14 +2823,14 @@
               status.textContent = `✓ ה-PDF מוכן (${pdf.pages} עמודים) ונשמר גם בגוגל דרייב.` + two;
             }
           }) }, 'הפק PDF'),
-          // לפי ori: דוח בלי עמודת ההערות, בלי למחוק אותן מהסקר. לא נשמר בטאבלט ולא עולה לגוגל דרייב,
+          // לפי ori: דוח תקינות (מכתב אישור בלי טבלה ובלי הערות), בלי למחוק דבר מהסקר. לא נשמר בטאבלט ולא עולה לגוגל דרייב,
           // כדי שבשנה הבאה אפשר יהיה לעבור על העצים מול ההערות של השנה הזו
-          cur.trees.some(t => (t.notes || '').trim()) ? h('button', { class: 'btn big', title: 'PDF בלי ההערות. ההערות נשארות בסקר, והקובץ לא נשמר באפליקציה ולא בגוגל דרייב', onclick: e => busy(e.currentTarget, async () => {
-            status.textContent = 'מפיק דוח נקי ללא הערות…';
-            const pdf = await buildCleanPdf(cur, (i, n) => { status.textContent = `מפיק דוח נקי ללא הערות… ${i}/${n}`; });
-            status.textContent = `✓ דוח נקי ללא הערות מוכן (${pdf.pages} עמודים). לא נשמר באפליקציה, ההערות נשארו בסקר.`;
+          cur.trees.some(Core.hasContent) ? h('button', { class: 'btn big', title: 'מכתב אישור תקינות של עמוד אחד, בלי טבלת העצים, ההערות והתמונות. הסקר לא משתנה, והקובץ לא נשמר באפליקציה ולא בגוגל דרייב', onclick: e => busy(e.currentTarget, async () => {
+            status.textContent = 'מפיק דוח תקינות…';
+            const pdf = await buildCleanPdf(cur);
+            status.textContent = '✓ דוח תקינות מוכן. לא נשמר באפליקציה, והסקר לא השתנה.';
             viewPdf(cur, pdf);
-          }) }, 'הפק דוח נקי ללא הערות') : null,
+          }) }, 'הפק דוח תקינות') : null,
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
         pdfBox(cur),
         status),
@@ -3091,13 +3091,12 @@
     if (!s.inclRef || !hasRef(s)) try { await DB.setKV('pdf:' + s.id, Object.assign({ at: Date.now(), hash: Sync.hashSurvey(s) }, pdf)); pdfChanged(s.id); } catch (_) {}
     return pdf;
   }
-  // דוח נקי ללא הערות: עותק של הסקר עם עמודת הערות ריקה (עץ תקין עדיין מקבל "תקין"), בלי "לא להתייחסות".
+  // דוח תקינות (לפי ori, 2026-11-12): מכתב אישור של עמוד אחד כמו באקסל "אישור תקינות" — בלי טבלת עצים, בלי מקרא ובלי נספח תמונות.
   // לא נשמר ב-'pdf:' ולא עולה לענן, והסקר עצמו לא משתנה
   async function buildCleanPdf(s, onProgress) {
     const v = reportView(Object.assign({}, s, { inclRef: false }));
-    const clean = Object.assign({}, v, { trees: v.trees.map(t => Object.assign({}, t, { notes: '' })) });
-    const r = await ReportPrint.toPdf(clean, id => photoBlob(s, id), onProgress);
-    return { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages, html: r.html };
+    const r = await ReportPrint.toPdf(Object.assign({}, v, { trees: [] }), id => photoBlob(s, id), onProgress);
+    return { blob: r.blob, name: fileBase(s) + ' - דוח תקינות.pdf', pages: r.pages, html: r.html };
   }
   const pdfListeners = new Set();
   function pdfChanged(id) { for (const f of [...pdfListeners]) f(id); }
