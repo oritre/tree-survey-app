@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.83.0';
+  const APP_VERSION = '1.84.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -900,6 +900,64 @@
     msg.textContent = 'טוען מהענן…';
     try { cloudCache = (await Sync.cloudIndex()).filter(e => !e.deleted); draw(); setTimeout(() => q.focus(), 50); }
     catch (e) { msg.textContent = (e instanceof OD.AuthError ? 'צריך להתחבר מחדש לגוגל דרייב בהגדרות. ' : 'הטעינה נכשלה: ') + e.message; }
+  }
+
+  // ---------- עותקי האקסל שהסקר לבנייה מסונכרן איתם (1.84.0) ----------
+  // ori מעביר את התיקייה (אקסל + קובצי BricsCAD) לשולחן העבודה או לתיקיית הלקוח ומשנה שמות: כאן רואים לאילו קבצים
+  // הייעוד נכתב, ובוחרים פעם אחת קובץ נוסף (למשל העותק בשולחן העבודה). הייעוד נכתב לכל העותקים ונקרא מכל עותק שהשתנה
+  function xlLinkCard(s) {
+    const list = h('div', { class: 'stack' }, h('div', { class: 'muted small' }, 'בודק בגוגל דרייב…'));
+    const found = h('div', { class: 'stack' });
+    const q = h('input', { type: 'search', placeholder: 'שם הקובץ, רחוב או פרויקט', value: s.street || s.project || '', style: 'flex:1;min-width:180px' });
+    const fileRow = (f, path, btn) => h('div', { class: 'row', style: 'align-items:center;gap:8px;flex-wrap:wrap' },
+      h('div', { style: 'flex:1;min-width:200px' },
+        h('div', { style: 'font-weight:600;overflow-wrap:anywhere' }, '📄 ' + f.name.replace(/\.xls[xm]$/i, '')),
+        h('div', { class: 'muted small' }, [path.join(' / '), f.lastModifiedDateTime ? 'עודכן ' + new Date(f.lastModifiedDateTime).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''].filter(Boolean).join(' · '))),
+      h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(f.id) + '/view', target: '_blank', rel: 'noopener' }, 'פתח'),
+      btn);
+    async function draw(search) {
+      try {
+        const files = await Sync.xlLinked(s, search);
+        const paths = await Promise.all(files.map(pathOf));
+        list.replaceChildren(...(files.length ? files.map((f, i) => fileRow(f, paths[i],
+          h('button', { class: 'btn', title: 'להפסיק לסנכרן עם הקובץ הזה', onclick: async ev => {
+            if (!confirm(`להפסיק לסנכרן את הייעוד עם "${f.name}"? הקובץ עצמו לא נמחק.`)) return;
+            ev.currentTarget.disabled = true; await Sync.xlUnpin(s, f.id); draw();
+          } }, 'הסר')))
+          : [h('div', { class: 'muted small' }, 'עדיין אין קובץ אקסל של הסקר בגוגל דרייב. הוא נוצר ב"סיום סקר", או בחר קובץ קיים למטה.')]));
+      } catch (e) { list.replaceChildren(h('div', { class: 'small' }, (e instanceof OD.AuthError ? 'צריך להתחבר מחדש לגוגל דרייב בהגדרות. ' : 'הבדיקה נכשלה: ') + e.message)); }
+    }
+    async function search(btn) {
+      const text = q.value.trim();
+      if (!text) { toast('כתוב חלק משם הקובץ'); return; }
+      btn.disabled = true; found.replaceChildren(h('div', { class: 'muted small' }, 'מחפש בכל הדרייב…'));
+      try {
+        const linked = new Set(s.xlIds || []);
+        const files = (await OD.searchExcel(text, null)).filter(f => /\.xls[xm]$/i.test(f.name) && !linked.has(f.id));
+        const paths = await Promise.all(files.map(pathOf));
+        const rows = files.map((f, i) => ({ f, path: paths[i] })).filter(r => !r.path.some(n => /^גיבוי אפליקציית סקרי עצים$/.test(n))).slice(0, 15);
+        found.replaceChildren(...(rows.length ? rows.map(({ f, path }) => fileRow(f, path,
+          h('button', { class: 'btn primary', onclick: async ev => {
+            const b = ev.currentTarget; b.disabled = true; b.textContent = 'מסנכרן…';
+            try {
+              const r = await Sync.xlPin(s, f.id);
+              toast(`✓ הסקר מסונכרן עכשיו גם עם "${f.name}"` + (r && r.pulled ? ` (ייעוד ${r.pulled} עצים נלקח מהקובץ)` : ''), 5000);
+              found.replaceChildren(); draw();
+            } catch (e) { toast('נכשל: ' + e.message, 5000); b.disabled = false; b.textContent = 'סנכרן עם הקובץ'; }
+          } }, 'סנכרן עם הקובץ')))
+          : [h('div', { class: 'muted small' }, 'לא נמצאו קבצים')]));
+      } catch (e) { found.replaceChildren(h('div', { class: 'small' }, 'החיפוש נכשל: ' + e.message)); }
+      finally { btn.disabled = false; }
+    }
+    const sbtn = h('button', { class: 'btn', onclick: ev => search(ev.currentTarget) }, 'חפש');
+    q.addEventListener('keydown', e => { if (e.key === 'Enter') search(sbtn); });
+    draw(false);
+    return h('div', { class: 'card stack' },
+      h('h2', { style: 'margin:0;font-size:20px' }, 'קובצי האקסל שהייעוד מסונכרן איתם'),
+      h('div', { class: 'muted small' }, 'הייעוד נכתב לכל הקבצים ברשימה, ושינוי בכל אחד מהם (באקסל או ב-BricsCAD) חוזר לאפליקציה. עותקים חדשים של הסקר נמצאים לבד גם אחרי העברה או שינוי שם. קובץ ישן (למשל בשולחן העבודה) מוסיפים פעם אחת:'),
+      list,
+      h('div', { class: 'row', style: 'gap:8px' }, q, sbtn, h('button', { class: 'btn', onclick: () => { list.replaceChildren(h('div', { class: 'muted small' }, 'מחפש עותקים…')); draw(true); } }, 'רענן')),
+      found);
   }
 
   // ---------- הארכיון בגוגל דרייב: כל קובצי האקסל של הסקרים (גם מהתוכנה במחשב) ----------
@@ -2936,7 +2994,8 @@
         h('div', {}, `סה"כ שווי עצים: ₪${Math.round(totalP).toLocaleString('he-IL')}`),
         (() => { const cnt = k => cur.trees.filter(t => Core.hasContent(t) && !t.ref && Construction.statusOf(t, Construction.settingsOf(cur)) === k).length;
           return h('div', {}, 'ייעוד: ' + Construction.STATUSES.map(x => `${x.key}: ${cnt(x.key)}`).concat(`בלי ייעוד: ${cnt('')}`).join(' · ')); })(),
-        h('div', { class: 'muted small' }, 'הייעוד נכתב לעמודה BC (סטטוס מוצע) באקסל שבגוגל דרייב, ומשם מתעדכנים אזור השורשים, הטבלה המסכמת והצבעים ב-BricsCAD. שינוי באקסל או ב-BricsCAD חוזר לאפליקציה אוטומטית (תוך כמה דקות, כשיש קליטה).')),
+        h('div', { class: 'muted small' }, 'הייעוד נכתב לעמודה BC (סטטוס מוצע) באקסל שבגוגל דרייב, ומשם מתעדכנים אזור השורשים, הטבלה המסכמת והצבעים ב-BricsCAD. שינוי באקסל או ב-BricsCAD חוזר לאפליקציה תוך כמה שניות כשהסקר פתוח.')),
+      odOn ? xlLinkCard(cur) : null,
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'סיום סקר'),
         noPhotoBox(cur),
