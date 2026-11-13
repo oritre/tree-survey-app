@@ -702,6 +702,11 @@
       xlSearchAt.set(s.id, Date.now());
       const lit = v => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
       const want = s.date ? root.Construction.dateSerial(s.date) : null;
+      // קודם לפי הסימון של הסקר שבתוך הקובץ (מאקסלים מ-1.82): נמצא גם אחרי שינוי שם
+      const XT = "mimeType = 'application/vnd.ms-excel.sheet.macroEnabled.12' or mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'";
+      const marked = await OD._list(`fullText contains ${lit(root.Construction.markOf(s))} and (${XT}) and trashed = false`, { orderBy: 'modifiedTime desc', pageSize: '10', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', fields: 'nextPageToken,files(id,name,modifiedTime,parents)' }, 1).catch(() => []);
+      for (const j of marked.filter(j => !(j.parents || []).includes(s.odFolderId)).slice(0, 2)) out.push(xlShape(j));
+      if (!out.length)
       for (const n of names) {
         const l = await OD._list(`name = ${lit(n)} and trashed = false`, { orderBy: 'modifiedTime desc', pageSize: '10', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', fields: 'nextPageToken,files(id,name,modifiedTime,parents)' }, 1).catch(() => []);
         for (const j of l.filter(j => !(j.parents || []).includes(s.odFolderId)).slice(0, 3)) {

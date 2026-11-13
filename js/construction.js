@@ -482,6 +482,7 @@
   }
 
   // getPhoto(id) -> Blob של התמונה (או null)
+  const markOf = s => 'TSID' + String(s.id).replace(/[^A-Za-z0-9]/g, '');
   async function buildWorkbook(templateBytes, survey, getPhoto) {
     const zip = await JSZip.loadAsync(templateBytes);
     const st = settingsOf(survey);
@@ -515,6 +516,10 @@
     sheet.set('B3', 'גוש' + (gush ? ' ' + gush + ' ' : '  ') + 'חלקה' + (helka ? ' ' + helka : ''));
     sheet.set('B7', survey.site || null);
     if (survey.date) sheet.set('Q1', dateSerial(survey.date));
+
+    // סימון הסקר (מחוץ לאזור ההדפסה): גוגל דרייב מאנדקס את הטקסט שבקובץ, וכך האפליקציה מוצאת את האקסל
+    // לסנכרון הייעוד גם אחרי ששינו את שמו או העבירו אותו (1.82.0)
+    if (survey.id) sheet.set('CA1', markOf(survey));
 
     // הגדרות הסקר
     for (const x of SETTINGS) params.set(x.cell, st[x.key] ? 'כן' : 'לא');
@@ -587,6 +592,8 @@
     // תוויות התמונות מיושרות תמיד לימין (בלי זה מספר נצמד לימין וטקסט כמו 2-5 לשמאל)
     await alignRight(zip, sheet, embed ? Array.from({ length: 12 * blocks }, (_, i) => embedCell(i).label) : SLOT_CELLS.filter(c => c.page <= avail).map(c => c.label));
 
+    // "סה"כ ערך חליפי" בטבלת הסטאטוס: סכום גדול לא נכנס לתא ואקסל מציג ### (ori). מתכווץ להתאים לתא (1.82.0)
+    { const r = 920 + off + moreSp; await alignCells(zip, sheet, ['AU', 'AW', 'AY', 'BB'].map(c => c + r), 'horizontal="center" shrinkToFit="1"'); }
     // מה מוצג: העמודים שצריך, בלי השורות הצהובות ובלי שורות מינים ריקות
     for (let k = 0; k < pages; k++) for (let r = 45 + 46 * k; r <= 90 + 46 * k; r++) sheet.unhide(r);
     for (const r of yellowRows(avail)) sheet.hide(r);
@@ -735,7 +742,7 @@
   }
 
   root.Construction = {
-    TYPES, typeOf, TRANSPLANT, transplantOf, STATUSES, statusOf, autoStatus, manualStatus, validStatus, readStatuses, patchStatuses, dateSerial, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
+    TYPES, typeOf, TRANSPLANT, transplantOf, STATUSES, statusOf, autoStatus, manualStatus, validStatus, readStatuses, patchStatuses, dateSerial, markOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
     compute, category, warnings, buildWorkbook, PHOTO_ASPECT, TREE_ROWS: TREE_ROWS.slice(0, MAX_TREES), MAX_TREES, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
   };
 })(this);
