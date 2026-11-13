@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.81.0';
+  const APP_VERSION = '1.82.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2909,6 +2909,20 @@
         h('div', {}, `✓ "${names}" נשמר בגוגל דרייב בתיקייה "${where.path}".`),
         h('a', { href: 'https://drive.google.com/drive/folders/' + where.folderId, target: '_blank', rel: 'noopener', class: 'btn' }, 'פתח את התיקייה בגוגל דרייב'));
     }, splitStatus);
+    const pdfStatus = h('div', { class: 'small muted', role: 'status' });
+    const fullPdfAction = (e, drive) => busy(e.currentTarget, async () => {
+      if (drive && !odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
+      await saveNow();
+      const say = m => { pdfStatus.textContent = m; };
+      say('בודק ייעוד באקסל שבגוגל דרייב…');
+      await Sync.pullStatus(cur).catch(() => null);
+      const f = await buildFullPdf(cur, say);
+      if (!drive) { await deliver(f.blob, f.name); say(`✓ הורד: "${f.name}" (${f.pages} עמודים)`); return; }
+      say('מעלה לגוגל דרייב…');
+      const where = await Sync.uploadFile(cur, f.name, f.blob);
+      pdfStatus.replaceChildren(h('div', {}, `✓ "${f.name}" נשמר בגוגל דרייב בתיקייה "${where.path}".`),
+        h('a', { href: 'https://drive.google.com/drive/folders/' + where.folderId, target: '_blank', rel: 'noopener', class: 'btn' }, 'פתח את התיקייה בגוגל דרייב'));
+    }, pdfStatus);
     const hm = t => new Date(t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     body.append(h('div', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
@@ -2965,6 +2979,14 @@
             h('button', { class: 'btn big', onclick: e => splitAction(e, 'xlsx', true) }, 'שמור אקסל בגוגל דרייב'),
             h('button', { class: 'btn big', onclick: e => splitAction(e, 'pdf', true) }, 'שמור PDF בגוגל דרייב')),
           splitStatus),
+        // אפשרות 3: דוח PDF מלא, כמו ה-PDF שמפיקים מהאקסל (1.82.0)
+        h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
+          h('b', {}, '3. דוח PDF מלא'),
+          h('div', { class: 'muted small' }, 'כמו ה-PDF מהאקסל: טבלת הסקר, ערכיות העצים, טבלת מידע מרכזת עם הייעוד, טבלת הסטאטוס, ונספח התמונות.'),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary big', onclick: e => fullPdfAction(e, false) }, 'הורד PDF מלא'),
+            h('button', { class: 'btn big', onclick: e => fullPdfAction(e, true) }, 'שמור PDF בגוגל דרייב')),
+          pdfStatus),
         h('div', { class: 'row' },
           h('button', { class: 'btn', onclick: () => exportZip(status) }, 'כל התמונות בקובץ ZIP'))),
       cur.plan || cur.trees.some(t => t.px != null) ? h('div', { class: 'card stack' },
@@ -3101,6 +3123,13 @@
     const pdf = await ReportPrint.photosPdf(items, id => photoBlob(s, id), (i, n) => say(`מכין PDF של התמונות… ${i}/${n}`));
     // שם הקובץ לפי ori: "תמונות" ושם הפרויקט (הכתובת של הסקר)
     return { name: safeName(`תמונות - ${s.site || s.project || 'סקר עצים לבנייה'}`) + '.pdf', blob: pdf };
+  }
+
+  // סקר לבנייה: דוח PDF מלא (טבלאות + נספח תמונות), באותו שם כמו האקסל
+  async function buildFullPdf(s, say) {
+    const v = reportView(Object.assign({}, s, { inclRef: false }));
+    const r = await ConstructionPdf.build(v, id => photoBlob(s, id), say);
+    return { blob: r.blob, name: fileBase(s) + '.pdf', pages: r.pages };
   }
 
   // דוח PDF (אותו שם כמו האקסל, כדי שיופיעו אחד ליד השני בגוגל דרייב)
