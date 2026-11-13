@@ -779,6 +779,32 @@
     return { pulled, pushed };
   }
 
+  // מיידי (ori, 1.83.0: עובדים מהאפליקציה, והאקסל הוא גיבוי שצריך להיות תמיד מעודכן):
+  // שינוי ייעוד באפליקציה נכתב לאקסל אחרי שנייה, ובסקר הפתוח בודקים כל 15 שניות אם האקסל השתנה (בקשה קטנה: רק זמן השינוי)
+  const hasXl = s => isBuild(s) && !!(s.odReportDir || (s.xlIds || []).length);
+  let xlPushT = null;
+  function statusChanged(s) {
+    clearTimeout(xlPushT);
+    xlPushT = setTimeout(async () => {
+      if (!hasXl(s) || !navigator.onLine || !(await OD.connected().catch(() => false))) return;
+      try { await locked(s.id, () => xlStatus(s)); }
+      catch (e) { log('error', 'כתיבת הייעוד לאקסל נכשלה: ' + e.message, s); }
+    }, 1000);
+  }
+  async function xlPoll() {
+    const s = root.App && root.App.current && root.App.current();
+    if (!s || !hasXl(s) || !navigator.onLine || document.hidden || xlBusy.has(s.id)) return;
+    if (!(await OD.connected().catch(() => false))) return;
+    let changed = !(s.xlIds || []).length;
+    for (const id of s.xlIds || []) {
+      const j = await OD.api('GET', `/files/${id}?fields=modifiedTime,trashed&supportsAllDrives=true`).catch(() => null);
+      if (!j || j.trashed || (Date.parse(j.modifiedTime) || 0) > (s.xlSeen || 0)) changed = true;
+    }
+    if (changed) { try { await locked(s.id, () => xlStatus(s)); } catch (_) {} }
+  }
+  setInterval(() => { xlPoll().catch(() => {}); }, 15000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) xlPoll().catch(() => {}); });
+
   // אקסל (ואם ביקשו גם PDF) לתיקיית הסקר בגוגל דרייב, באותו שם
   async function uploadReport(s, opts) {
     await syncFolders(s);
@@ -971,7 +997,7 @@
   setInterval(() => { if (!running) run(); }, 3 * 60 * 1000);
 
   root.Sync = { stop, importSurvey, flushImported, preparing,
-    _xlStatus: (s, push) => xlStatus(s, push),
+    _xlStatus: (s, push) => xlStatus(s, push), statusChanged,
     // ייעוד מהאקסל שבגוגל דרייב לפני הפקה במכשיר (בלי לחכות יותר מכמה שניות)
     async pullStatus(s) {
       if (!isBuild(s) || !(s.odReportDir || (s.xlIds || []).length) || !navigator.onLine || !(await OD.connected())) return null;

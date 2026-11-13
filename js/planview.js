@@ -817,6 +817,7 @@
             t.status = effSt(t) === x.key ? '' : x.key; t.statusAt = Date.now();
             undo.push({ what: 'ייעוד', run: () => { if (old === undefined) delete t.status; else t.status = old; t.statusAt = oldAt; } });
             changed(); renderSheet();
+            if (root.Sync && root.Sync.statusChanged) root.Sync.statusChanged(s);
           } }, x.key))) : null);
     }
     async function renumber(t) {

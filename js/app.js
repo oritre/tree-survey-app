@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.82.0';
+  const APP_VERSION = '1.83.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -279,6 +279,7 @@
 
   window.App = {
     live: id => (cur && cur.id === id ? cur : null),
+    current: () => cur,
     // רשימות הבחירה הגיעו ממכשיר אחר
     listsUpdated() {
       refreshSuggestions();
@@ -2212,14 +2213,18 @@
     // בלי בחירה ידנית: ייעוד אוטומטי (פטור בתכנית מגורים, קוטר קטן מהסף), מסומן כ"אוטומטי" (1.81.0)
     const stSeg = h('div', { class: 'seg status-seg', role: 'group', 'aria-label': 'ייעוד' });
     const stNote = h('div', { class: 'small muted' });
+    let lastEff;
     const drawSt = () => {
       const st = Construction.settingsOf(cur), eff = Construction.statusOf(t, st), auto = Construction.autoStatus(t, st), man = Construction.manualStatus(t);
+      // ייעוד אוטומטי שהשתנה (למשל אחרי הקלדת קוטר): גם הוא נכתב לאקסל מיד
+      if (lastEff !== undefined && lastEff !== eff) Sync.statusChanged(cur);
+      lastEff = eff;
       stSeg.replaceChildren(...Construction.STATUSES.map(x => h('button', { type: 'button', class: (eff === x.key ? 'on' : '') + (eff === x.key && !man ? ' auto' : ''),
         style: `--c:${x.color};--ci:${x.ink}`, onclick: () => {
-          t.status = Construction.statusOf(t, Construction.settingsOf(cur)) === x.key ? '' : x.key; t.statusAt = Date.now(); upd();
+          t.status = Construction.statusOf(t, Construction.settingsOf(cur)) === x.key ? '' : x.key; t.statusAt = Date.now(); upd(); saveNow(); Sync.statusChanged(cur);
         } }, x.key)));
       stNote.replaceChildren(...(!man && auto ? ['אוטומטי: ' + auto.why + '. אפשר לבחור ייעוד אחר.']
-        : man && auto && auto.status !== eff ? [h('button', { type: 'button', class: 'linkish', onclick: () => { delete t.status; t.statusAt = Date.now(); upd(); } }, `חזרה לייעוד האוטומטי (${auto.status})`)] : []));
+        : man && auto && auto.status !== eff ? [h('button', { type: 'button', class: 'linkish', onclick: () => { delete t.status; t.statusAt = Date.now(); upd(); saveNow(); Sync.statusChanged(cur); } }, `חזרה לייעוד האוטומטי (${auto.status})`)] : []));
     };
     drawSt();
     // מין העץ: כשנבחר שם מהרשימה, נשמר בדיוק כמו בתבנית
