@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.84.0';
+  const APP_VERSION = '1.84.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -933,13 +933,18 @@
       btn.disabled = true; found.replaceChildren(h('div', { class: 'muted small' }, 'מחפש בכל הדרייב…'));
       try {
         const linked = new Set(s.xlIds || []);
-        const files = (await OD.searchExcel(text, null)).filter(f => /\.xls[xm]$/i.test(f.name) && !linked.has(f.id));
+        const files = (await OD.searchExcel(text, null)).filter(f => /\.xlsm$/i.test(f.name) && !/^טעינת עצים/.test(f.name) && !linked.has(f.id));
         const paths = await Promise.all(files.map(pathOf));
         const rows = files.map((f, i) => ({ f, path: paths[i] })).filter(r => !r.path.some(n => /^גיבוי אפליקציית סקרי עצים$/.test(n))).slice(0, 15);
         found.replaceChildren(...(rows.length ? rows.map(({ f, path }) => fileRow(f, path,
           h('button', { class: 'btn primary', onclick: async ev => {
-            const b = ev.currentTarget; b.disabled = true; b.textContent = 'מסנכרן…';
+            const b = ev.currentTarget; b.disabled = true; b.textContent = 'בודק את הקובץ…';
             try {
+              const c = await Sync.xlCheck(s, f.id);
+              if (!c.survey) { toast('זה לא אקסל של סקר לבנייה (אין בו גיליון "סקר")', 5000); b.disabled = false; b.textContent = 'סנכרן עם הקובץ'; return; }
+              const warn = [!c.dateOk && 'התאריך בקובץ שונה מתאריך הסקר', c.total && c.matched < c.total / 2 && `רק ${c.matched} מתוך ${c.total} מספרי העצים נמצאים בקובץ`].filter(Boolean);
+              if (warn.length && !confirm(warn.join('. ') + '.\nייתכן שזה קובץ של סקר אחר, והייעוד ייכתב אליו. לסנכרן בכל זאת?')) { b.disabled = false; b.textContent = 'סנכרן עם הקובץ'; return; }
+              b.textContent = 'מסנכרן…';
               const r = await Sync.xlPin(s, f.id);
               toast(`✓ הסקר מסונכרן עכשיו גם עם "${f.name}"` + (r && r.pulled ? ` (ייעוד ${r.pulled} עצים נלקח מהקובץ)` : ''), 5000);
               found.replaceChildren(); draw();
