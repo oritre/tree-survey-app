@@ -698,8 +698,14 @@
     const zip = await JSZip.loadAsync(bytes);
     const sh = await surveySheet(zip);
     if (!sh || !zip.file(sh.path)) return null;
-    const rows = treeRowsOf(await zip.file(sh.path).async('string'), sh.strs, sh.unesc);
-    return new Map([...rows].map(([n, x]) => [n, x.v]));
+    const xml = await zip.file(sh.path).async('string');
+    const rows = treeRowsOf(xml, sh.strs, sh.unesc);
+    const m = new Map([...rows].map(([n, x]) => [n, x.v]));
+    // תאריך הסקר (Q1), לזיהוי הקובץ כשהוא הועבר בדרייב
+    const q1 = (/<c r="Q1"[^>]*?(?:\/>|>[\s\S]*?<\/c>)/.exec(xml) || [])[0];
+    const d = parseFloat(cellVal(q1, sh.strs, sh.unesc));
+    m.date = isNaN(d) ? null : d;
+    return m;
   }
   // כותב ייעוד (מספר עץ -> ערך) לעמודה BC בלבד, בלי לגעת בשאר הקובץ. מחזיר null אם אין מה לשנות
   async function patchStatuses(bytes, want) {
@@ -729,7 +735,7 @@
   }
 
   root.Construction = {
-    TYPES, typeOf, TRANSPLANT, transplantOf, STATUSES, statusOf, autoStatus, manualStatus, validStatus, readStatuses, patchStatuses, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
+    TYPES, typeOf, TRANSPLANT, transplantOf, STATUSES, statusOf, autoStatus, manualStatus, validStatus, readStatuses, patchStatuses, dateSerial, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
     compute, category, warnings, buildWorkbook, PHOTO_ASPECT, TREE_ROWS: TREE_ROWS.slice(0, MAX_TREES), MAX_TREES, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
   };
 })(this);

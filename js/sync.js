@@ -684,11 +684,41 @@
     xlBusy.set(s.id, p);
     return p;
   }
+  // האקסל של הסקר בגוגל דרייב. ori מעביר את קבצי הסקר מתיקיית "סקרי עצים" לתיקיות אחרות, ולכן:
+  // 1. לפי המזהה (נשאר אותו מזהה כשמעבירים קובץ בתוך גוגל דרייב)  2. בתיקיית הדוחות לפי השם
+  // 3. חיפוש בכל הדרייב לפי השם המדויק (לא יותר מפעם ב-10 דקות), רק קובץ שהתאריך בו (Q1) הוא תאריך הסקר,
+  //    כי לסקרים באותה כתובת יש אותו שם קובץ. לא העותק שבתיקיית הגיבוי של האפליקציה
+  const xlSearchAt = new Map();
+  const xlShape = j => ({ id: j.id, name: j.name, lastModifiedDateTime: j.modifiedTime });
+  async function xlFiles(s, base) {
+    const names = [base + '.xlsm', base + ' - טבלאות.xlsm'].map(n => OD.clean(n));
+    let out = [];
+    for (const id of s.xlIds || []) {
+      const j = await OD.api('GET', `/files/${id}?fields=id,name,modifiedTime,trashed&supportsAllDrives=true`).catch(() => null);
+      if (j && !j.trashed) out.push(xlShape(j));
+    }
+    if (!out.length && s.odReportDir) for (const n of names) { const f = await OD.findFile(s.odReportDir, n).catch(() => null); if (f) out.push(f); }
+    if (!out.length && Date.now() - (xlSearchAt.get(s.id) || 0) > 600000) {
+      xlSearchAt.set(s.id, Date.now());
+      const lit = v => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+      const want = s.date ? root.Construction.dateSerial(s.date) : null;
+      for (const n of names) {
+        const l = await OD._list(`name = ${lit(n)} and trashed = false`, { orderBy: 'modifiedTime desc', pageSize: '10', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', fields: 'nextPageToken,files(id,name,modifiedTime,parents)' }, 1).catch(() => []);
+        for (const j of l.filter(j => !(j.parents || []).includes(s.odFolderId)).slice(0, 3)) {
+          const b = await OD.download(j.id).catch(() => null);
+          const x = b && await root.Construction.readStatuses(new Uint8Array(await b.arrayBuffer())).catch(() => null);
+          if (x && (x.date == null || want == null || Math.floor(x.date) === want)) { out.push(xlShape(j)); break; }
+        }
+      }
+    }
+    out = out.filter((f, i) => out.findIndex(g => g.id === f.id) === i);
+    s.xlIds = out.map(f => f.id);
+    return out;
+  }
   async function xlStatusRun(s, push) {
-    if (!isBuild(s) || !s.odReportDir || !root.App || !root.App.fileBase) return false;
+    if (!isBuild(s) || !(s.odReportDir || (s.xlIds || []).length) || !root.App || !root.App.fileBase) return false;
     const C = root.Construction, st = C.settingsOf(s), base = root.App.fileBase(s);
-    const found = [];
-    for (const n of [base + '.xlsm', base + ' - טבלאות.xlsm']) { const f = await OD.findFile(s.odReportDir, n).catch(() => null); if (f) found.push(f); }
+    const found = await xlFiles(s, base);
     if (!found.length) return false;
     const modOf = f => Date.parse(f.lastModifiedDateTime) || 0;
     found.sort((a, b) => modOf(b) - modOf(a));
@@ -763,6 +793,7 @@
       s.xlSnap = Object.fromEntries(s.trees.filter(t => Core.hasContent(t) && !t.ref && String(t.num || '').trim())
         .map(t => [Core.normNum(String(t.num).trim()), root.Construction.statusOf(t, st)]));
       s.xlSeen = 0;
+      s.xlIds = [];   // האקסל החדש בתיקיית הדוחות (גם אם את הקודם העבירו למקום אחר)
     }
     DB.delKV('xlsm:' + s.id).catch(() => {});
     s.odReportHash = hashSurvey(s); s.odReportAt = Date.now();
@@ -888,7 +919,7 @@
           if (r === 'deleted' || r === 'busy') { if (r === 'busy') busy = true; holding.delete(s.id); continue; }
         }
         // סקר לבנייה עם אקסל בתיקיית הדוחות: ייעוד העצים לשני הכיוונים (הסקר הפתוח בכל סבב, השאר פעם ב-3 דקות, עד 90 יום)
-        if (odOn && !state.odNeedsLogin && isBuild(s) && s.odReportDir && !s.finishPending
+        if (odOn && !state.odNeedsLogin && isBuild(s) && (s.odReportDir || (s.xlIds || []).length) && !s.finishPending
           && (live(s) === s || (Date.now() - (s.updated || 0) < 90 * 864e5 && Date.now() - (xlAt.get(s.id) || 0) > 170000))) {
           xlAt.set(s.id, Date.now());
           try { await locked(s.id, () => xlStatus(s)); }
@@ -938,7 +969,7 @@
     _xlStatus: (s, push) => xlStatus(s, push),
     // ייעוד מהאקסל שבגוגל דרייב לפני הפקה במכשיר (בלי לחכות יותר מכמה שניות)
     async pullStatus(s) {
-      if (!isBuild(s) || !s.odReportDir || !navigator.onLine || !(await OD.connected())) return null;
+      if (!isBuild(s) || !(s.odReportDir || (s.xlIds || []).length) || !navigator.onLine || !(await OD.connected())) return null;
       return Promise.race([xlStatus(s, false).catch(() => null), new Promise(r => setTimeout(r, 6000))]);
     },
     // ה-PDF של הסקר מתיקיית הדוחות בגוגל דרייב, אם הועלה אחרי השינוי האחרון בסקר (אחרת null ובונים מחדש)
