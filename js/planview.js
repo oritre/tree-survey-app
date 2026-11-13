@@ -807,7 +807,15 @@
             const old = t.ref; t.ref = !t.ref || undefined; undo.push({ what: 'לא להתייחסות', run: () => { t.ref = old; } }); changed(); renderSheet();
           } }, t.ref ? '✓ לא להתייחסות' : 'לא להתייחסות'),
           h('button', { class: 'btn', onclick: () => removeTree(t) }, 'בטל סימון'),
-          h('button', { class: 'btn primary', onclick: () => close(t.id) }, 'פרטי העץ')));
+          h('button', { class: 'btn primary', onclick: () => close(t.id) }, 'פרטי העץ')),
+        // ייעוד (סטטוס מוצע) ישר מהמדידה: העץ נצבע מיד, ונכתב לאקסל בעמודה BC כמו מכרטיס העץ (1.80.0)
+        root.Construction ? h('div', { class: 'seg status-seg', role: 'group', 'aria-label': 'ייעוד' }, root.Construction.STATUSES.map(x =>
+          h('button', { type: 'button', class: root.Construction.statusOf(t) === x.key ? 'on' : '', style: `--c:${x.color};--ci:${x.ink}`, onclick: () => {
+            const old = t.status;
+            t.status = root.Construction.statusOf(t) === x.key ? '' : x.key;
+            undo.push({ what: 'ייעוד', run: () => { t.status = old; } });
+            changed(); renderSheet();
+          } }, x.key))) : null);
     }
     async function renumber(t) {
       const n = await ctx.askNumber(`מספר לעץ ${t.num || ''}`, t.pname ? `מספר המודד: ${t.pname}` : null);

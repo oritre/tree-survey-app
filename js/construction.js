@@ -1,5 +1,5 @@
 // סקר עצים להיתר בנייה: אותן נוסחאות כמו בתבנית "סקר עצים להיתר בניה" (גיליון סקר + הגדרות בגיליון חד גזעי),
-// ומילוי התבנית עצמה (template/construction.xltm) לקובץ אקסל. סטטוס מוצע (BC) ממולא ידנית באקסל אחר כך.
+// ומילוי התבנית עצמה (template/construction.xltm) לקובץ אקסל. סטטוס מוצע (BC) נבחר בכרטיס העץ (t.status) או ידנית באקסל.
 (function (root) {
   'use strict';
   const TYPES = { safety: 'סקר יציבות עצים', construction: 'סקר עצים לבנייה' };
@@ -41,7 +41,16 @@
   // היתכנות העתקה (Q): רק אחד מאלה, ברירת מחדל ריק
   const TRANSPLANT = ['נמוכה', 'בינונית', 'גבוהה', '-'];
   const transplantOf = t => TRANSPLANT.includes(t.transplant) ? t.transplant : '';
-  const FIELDS = MEASURES.map(m => m[0]).concat(SCORES.map(s => s[0]), ['transplant']);
+  // ייעוד = סטטוס מוצע (BC), הרשימה "יעוד עצים" בתבנית ('חד גזעי'!AB5:AB8), וריק. נכתב לאקסל, ומשם TREES ב-BricsCAD
+  // צובע את העצים (1.80.0). הצבעים כמו בעיצוב המותנה בתבנית
+  const STATUSES = [
+    { key: 'שימור', color: '#FF0000', ink: '#fff' },
+    { key: 'כריתה', color: '#FFFF00', ink: '#000' },
+    { key: 'העתקה', color: '#FFC000', ink: '#000' },
+    { key: 'לא נדרש ברישיון', color: '#0070C0', ink: '#fff' },
+  ];
+  const statusOf = t => { const v = String((t && t.status) || '').trim(); return STATUSES.some(x => x.key === v) ? v : ''; };
+  const FIELDS = MEASURES.map(m => m[0]).concat(SCORES.map(s => s[0]), ['transplant', 'status']);
 
   const num = v => (v == null || v === '' || isNaN(+v)) ? null : Number(v);
   const z = v => num(v) || 0; // תא ריק באקסל = 0
@@ -52,7 +61,7 @@
     return n > 16 ? 'גבוה מאוד' : n > 13 ? 'גבוה' : n > 6 ? 'בינונית' : 'נמוכה';
   }
 
-  // חישוב שורה, נוסחה אחר נוסחה כמו בגיליון "סקר" (BC = סטטוס מוצע ריק, כי ממלאים אותו אחר כך)
+  // חישוב שורה, נוסחה אחר נוסחה כמו בגיליון "סקר" (BC = סטטוס מוצע מהכרטיס, t.status)
   function compute(t, st) {
     st = st || settingsOf(null);
     const name = canonSpecies(t.species);
@@ -79,15 +88,16 @@
     else if (N === 0) P = 0;
     else if (!st.repl10) P = F > 19 ? W : 0;
     else P = F > 9 ? W : 0;
-    // אזור שורשים מוגן: כשאין שווי, רק לעץ בסטטוס שימור (נקבע באקסל), ולכן כאן 0
+    // אזור שורשים מוגן: כשאין שווי, רק לעץ בסטטוס שימור (BC="שימור" בדיוק, כמו בנוסחה T)
     const fac = st.openArea ? 0.15 : 0.1;
+    const base = st.columnar ? (COLUMNAR.has(name) ? E * 0.5 : I * fac) : (J === 0 ? 0 : I * fac);
+    const status = statusOf(t);
     let T;
     if (P == null) T = null;
-    else if (P === 0) T = 0;
-    else if (st.columnar) T = COLUMNAR.has(name) ? E * 0.5 : I * fac;
-    else T = J === 0 ? 0 : I * fac;
+    else if (P === 0) T = status === 'שימור' ? base : 0;
+    else T = base;
     const O = T == null ? null : st.root4 ? Math.min(T, 4) : T;
-    return { name, known: !!sp, I, L, N, O, P, palm: PALMS.has(name), exempt: ALWAYS_EXEMPT.has(name), columnar: COLUMNAR.has(name), cat: category(N) };
+    return { name, known: !!sp, I, L, N, O, P, palm: PALMS.has(name), exempt: ALWAYS_EXEMPT.has(name), columnar: COLUMNAR.has(name), cat: category(N), status };
   }
 
   function warnings(s) {
@@ -502,6 +512,8 @@
       for (const [k, , col] of SCORES) sheet.set(col + r, num(t[k]));
       sheet.set('Q' + r, transplantOf(t) || null);
       sheet.set('R' + r, (t.notes || '').trim() || null);
+      // סטטוס מוצע: מה שנבחר בכרטיס. ריק = התא נשאר ריק (אפשר למלא באקסל או בטבלת העצים ב-BricsCAD)
+      sheet.set('BC' + r, c.status || null);
       sheet.cached('I' + r, c.I); sheet.cached('L' + r, c.L); sheet.cached('N' + r, c.N);
       sheet.cached('O' + r, c.O); sheet.cached('P' + r, c.P);
     });
@@ -622,7 +634,7 @@
   }
 
   root.Construction = {
-    TYPES, typeOf, TRANSPLANT, transplantOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
+    TYPES, typeOf, TRANSPLANT, transplantOf, STATUSES, statusOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
     compute, category, warnings, buildWorkbook, PHOTO_ASPECT, TREE_ROWS: TREE_ROWS.slice(0, MAX_TREES), MAX_TREES, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
   };
 })(this);
