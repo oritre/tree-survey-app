@@ -91,9 +91,20 @@
     monoBtn.hidden = !hasStyle;
     function setMono(v) { mono = v; DB.setKV('planMono', v); monoBtn.textContent = mono ? 'צבעים' : 'צבע אחד'; monoBtn.classList.toggle('on', mono); redraw(); }
     if (mono) { monoBtn.textContent = 'צבעים'; monoBtn.classList.add('on'); }
+    // כמה קובצי מדידה בסקר: לחיצה על השם מחליפה את הקובץ הראשי
+    function planTitle() {
+      const st = 'font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      const plans = ctx.plans || [];
+      if (plans.length < 2 || !ctx.askChoice) return h('span', { class: 'sp', style: st }, s.plan.name || 'מדידה');
+      return h('button', { class: 'txt sp', style: st + ';text-align:right', title: 'החלפת קובץ המדידה הראשי', onclick: async () => {
+        const id = await ctx.askChoice('קובץ המדידה הראשי', 'העצים שסימנת נשארים באותן קואורדינטות',
+          plans.map(p => ({ value: p.id, label: p.label, primary: p.main, hint: p.main ? 'פתוח עכשיו' : null })));
+        if (id && !plans.find(p => p.id === id).main) close({ switchTo: id });
+      } }, (s.plan.name || 'מדידה') + ` ▾ (${plans.length})`);
+    }
     const ov = h('div', { class: 'annot map-ov plan-ov' },
       h('div', { class: 'annot-bar' },
-        h('span', { class: 'sp', style: 'font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, s.plan.name || 'מדידה'),
+        planTitle(),
         h('div', { class: 'grp' }, markBtn, areaBtn, xyBtn, distBtn),
         undoBtn, gpsBtn, monoBtn, layBtn, layersBtn,
         btn('סגור', null, () => close(), 'save')),
