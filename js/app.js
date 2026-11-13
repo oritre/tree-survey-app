@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.79.0';
+  const APP_VERSION = '1.80.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1562,7 +1562,9 @@
 
   function constructionBadge(t) {
     const c = Construction.compute(t, Construction.settingsOf(cur));
-    return c.N == null ? null : h('span', { class: 'badge val-' + (c.N > 13 ? 'hi' : c.N > 6 ? 'mid' : 'lo'), title: 'סך ערך' }, c.N + '/20');
+    const st = Construction.STATUSES.find(x => x.key === c.status);
+    return [c.N == null ? null : h('span', { class: 'badge val-' + (c.N > 13 ? 'hi' : c.N > 6 ? 'mid' : 'lo'), title: 'סך ערך' }, c.N + '/20'),
+      st ? h('span', { class: 'badge', title: 'ייעוד', style: `background:${st.color};color:${st.ink}` }, st.key) : null];
   }
 
   // גובה וקוטר לשורת העץ: "גובה 6 מ' · קוטר 30 ס"מ", ובכמה גזעים "גזע 1: 30 · גזע 2: 20 ס"מ"
@@ -2185,7 +2187,7 @@
         (t.species || '').trim() && !c.known ? h('div', { class: 'small', style: 'color:var(--danger)' }, 'המין לא ברשימת המינים של התבנית. בחר מהרשימה כדי שיחושבו ערך מין ושווי.') : null,
         c.exempt ? h('div', { class: 'small muted' }, 'מין פטור מרישיון: סך ערך 0.') : null,
         c.palm ? h('div', { class: 'small muted' }, cur.cset && cur.cset.resExempt === false ? 'דקל: השווי לפי הגובה.' : 'דקל: פטור בתכנית בייעוד מגורים (ניתן לשנות בפרטי הסקר).') : null,
-        c.P === 0 && c.N ? h('div', { class: 'small muted' }, 'שווי 0 (עץ מתחת ל-2 מ\' או קוטר קטן מהסף), ולכן אין אזור שורשים אלא אם יסומן שימור באקסל.') : null].filter(Boolean));
+        c.P === 0 && c.N ? h('div', { class: 'small muted' }, 'שווי 0 (עץ מתחת ל-2 מ\' או קוטר קטן מהסף), ולכן אין אזור שורשים אלא אם הייעוד שימור.') : null].filter(Boolean));
       autoBox.dataset.cat = c.cat;
     };
     showAuto();
@@ -2206,6 +2208,12 @@
         t.transplant = Construction.transplantOf(t) === v ? '' : v; changed();
         [...trSeg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget && !!t.transplant));
       } }, v)));
+    // ייעוד (סטטוס מוצע, עמודה BC באקסל): לחיצה שנייה על הנבחר מנקה. משם TREES ב-BricsCAD צובע את העץ
+    const stSeg = h('div', { class: 'seg status-seg', role: 'group', 'aria-label': 'ייעוד' }, Construction.STATUSES.map(x =>
+      h('button', { type: 'button', class: Construction.statusOf(t) === x.key ? 'on' : '', style: `--c:${x.color};--ci:${x.ink}`, onclick: e => {
+        t.status = Construction.statusOf(t) === x.key ? '' : x.key; upd();
+        [...stSeg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget && !!t.status));
+      } }, x.key)));
     // מין העץ: כשנבחר שם מהרשימה, נשמר בדיוק כמו בתבנית
     spIn.addEventListener('change', () => { const c = Construction.canonSpecies(t.species); if (c !== t.species) { t.species = c; spIn.value = c; changed(); } showAuto(); });
     constructionFields.refresh = showAuto;
@@ -2213,6 +2221,7 @@
       h('div', { class: 'grid4' }, Construction.MEASURES.map(measure)),
       h('div', { class: 'grid2 scores' }, Construction.SCORES.map(score)),
       field('היתכנות העתקה', trSeg),
+      field('ייעוד (סטטוס מוצע)', stSeg),
       autoBox);
   }
 
@@ -2898,7 +2907,9 @@
         h('h2', { style: 'margin:0;font-size:20px' }, 'סיכום'),
         h('div', {}, `${n} עצים · ` + ['גבוה מאוד', 'גבוה', 'בינונית', 'נמוכה'].map(k => `${k}: ${byCat(k)}`).join(' · ')),
         h('div', {}, `סה"כ שווי עצים: ₪${Math.round(totalP).toLocaleString('he-IL')}`),
-        h('div', { class: 'muted small' }, 'הסטטוס המוצע (שימור / כריתה / העתקה) ממולא ידנית באקסל, ואז מתעדכנים אזור השורשים והטבלה המסכמת.')),
+        (() => { const cnt = k => cur.trees.filter(t => Core.hasContent(t) && !t.ref && Construction.statusOf(t) === k).length;
+          return h('div', {}, 'ייעוד: ' + Construction.STATUSES.map(x => `${x.key}: ${cnt(x.key)}`).concat(`בלי ייעוד: ${cnt('')}`).join(' · ')); })(),
+        h('div', { class: 'muted small' }, 'הייעוד שנבחר בכרטיס העץ נכתב לעמודה BC (סטטוס מוצע) באקסל, ומשם מתעדכנים אזור השורשים, הטבלה המסכמת והצבעים ב-BricsCAD. אפשר גם לשנות אותו באקסל.')),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'סיום סקר'),
         noPhotoBox(cur),
@@ -2952,7 +2963,7 @@
         h('h2', { style: 'margin:0;font-size:20px' }, 'עדכון המדידה ב-BricsCAD'),
         h('div', { class: 'small' }, `${cur.trees.filter(t => t.px != null).length} עצים סומנו על המדידה${(cur.planPolys || []).length ? `, ${cur.planPolys.length} תחומים` : ''}. באקסל יש גיליון "מדידה" עם המיקום של כל עץ.`),
         h('ol', { class: 'small', style: 'margin:0;padding-inline-start:20px;line-height:1.7' },
-          h('li', {}, 'מורידים את האקסל (למעלה) וממלאים את הייעוד בעמודה BC, כרגיל. שומרים.'),
+          h('li', {}, 'בוחרים ייעוד בכרטיס של כל עץ (או ממלאים אותו באקסל בעמודה BC), ומורידים או שומרים את האקסל (למעלה).'),
           h('li', {}, 'ב-BricsCAD פותחים את קובץ המדידה (DWG), טוענים פעם אחת את הקובץ trees.lsp (APPLOAD), ומקלידים TREES.'),
           h('li', {}, 'בפעם הראשונה בוחרים את קובץ האקסל. העצים מצוירים בטבעת בצבע הייעוד עם המספר, בשכבות TREE-*. אחרי כל שינוי באקסל מקלידים TREES שוב.')),
         h('div', { class: 'row' },
