@@ -719,7 +719,7 @@
     for (const t of survey.trees || []) {
       if (t.px == null || t.polyId) continue;
       const [x, y] = W(t.px, t.py);
-      const lay = t.ref ? 'TREES_REF' : statusOf(t.status).layer;
+      const lay = t.ref ? 'TREES_REF' : statusOf(root.Construction ? root.Construction.statusOf(t, root.Construction.settingsOf(survey)) : t.status).layer;
       // "לא להתייחסות" לא באקסל, אז בלי זיהוי (אחרת TREES ימחק אותם)
       const num = String(t.num || '').trim(), id = r => num && !t.ref ? [num, r] : null;
       put(0, 'INSERT', 8, lay, 2, TREE_BLOCK, 10, f(x), 20, f(y), 30, 0); xd(id('ring'));

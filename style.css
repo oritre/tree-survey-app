@@ -525,3 +525,5 @@ textarea.doc-text.b { font-weight: 700; }
 /* ייעוד (סטטוס מוצע) בכרטיס העץ בסקר לבנייה: הנבחר בצבע של האקסל */
 .seg.status-seg button { font-size: 16px; min-height: 48px; padding: 0 4px; }
 .seg.status-seg button.on { background: var(--c); color: var(--ci); }
+.seg.status-seg button.on.auto { opacity: .8; box-shadow: inset 0 0 0 2px rgba(0,0,0,.35); }
+.linkish { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; font: inherit; cursor: pointer; }

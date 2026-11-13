@@ -49,7 +49,25 @@
     { key: 'העתקה', color: '#FFC000', ink: '#000' },
     { key: 'לא נדרש ברישיון', color: '#0070C0', ink: '#fff' },
   ];
-  const statusOf = t => { const v = String((t && t.status) || '').trim(); return STATUSES.some(x => x.key === v) ? v : ''; };
+  const validStatus = v => { v = String(v || '').trim(); return STATUSES.some(x => x.key === v) ? v : ''; };
+  // ייעוד אוטומטי (ori, 1.81.0), כל עוד לא נבחר ייעוד ידנית (t.status לא מוגדר):
+  // 1. "פטור מרישיון בתכנית בייעוד מגורים": המינים הפטורים, כל הדקלים, ויוקה דרומית/פילית -> לא נדרש ברישיון
+  // 2. גזע 1 קטן מ-20 ס"מ (עם "ערך חליפי מ-10 ס"מ": קטן מ-10) -> לא נדרש ברישיון, חוץ מזית אירופי וחרוב מצוי
+  const NOT_REQ = 'לא נדרש ברישיון';
+  const nkey = v => key(v).replace(/[-\u05be\u2010-\u2014]/g, ' ').replace(/\s+/g, ' ').trim();
+  const RES_EXEMPT = new Set([...D.ALWAYS_EXEMPT, ...Object.keys(D.PALMS), 'יוקה דרומית', 'יוקה פילית'].map(nkey));
+  function autoStatus(t, st) {
+    if (!t) return null;
+    st = st || settingsOf(null);
+    if (st.resExempt && (t.species || '').trim() && RES_EXEMPT.has(nkey(t.species))) return { status: NOT_REQ, why: 'פטור בתכנית בייעוד מגורים' };
+    const F = num(t.f1);
+    if (F == null || OLIVE_CAROB.includes(canonSpecies(t.species))) return null;
+    const lim = st.repl10 ? 10 : 20;
+    return F < lim ? { status: NOT_REQ, why: `גזע 1 קטן מ-${lim} ס"מ` } : null;
+  }
+  const manualStatus = t => !!t && t.status != null;
+  // הייעוד בפועל: ידני אם נבחר (גם ריק), אחרת האוטומטי. בלי הגדרות הסקר (st) רק הידני
+  const statusOf = (t, st) => manualStatus(t) ? validStatus(t.status) : st ? ((autoStatus(t, st) || {}).status || '') : '';
   const FIELDS = MEASURES.map(m => m[0]).concat(SCORES.map(s => s[0]), ['transplant', 'status']);
 
   const num = v => (v == null || v === '' || isNaN(+v)) ? null : Number(v);
@@ -91,7 +109,7 @@
     // אזור שורשים מוגן: כשאין שווי, רק לעץ בסטטוס שימור (BC="שימור" בדיוק, כמו בנוסחה T)
     const fac = st.openArea ? 0.15 : 0.1;
     const base = st.columnar ? (COLUMNAR.has(name) ? E * 0.5 : I * fac) : (J === 0 ? 0 : I * fac);
-    const status = statusOf(t);
+    const status = statusOf(t, st);
     let T;
     if (P == null) T = null;
     else if (P === 0) T = status === 'שימור' ? base : 0;
@@ -633,8 +651,85 @@
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.ms-excel.sheet.macroEnabled.12' });
   }
 
+  // ---------- סנכרון הייעוד עם האקסל שבגוגל דרייב (1.81.0) ----------
+  // האקסל אחרי שנשמר באקסל: הגיליון "סקר" לפי השם (לא בהכרח sheet1), מספרים כמספר או כמחרוזת משותפת
+  async function surveySheet(zip) {
+    const wb = await zip.file('xl/workbook.xml').async('string');
+    const rels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    const unesc = v => v.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    const sh = [...wb.matchAll(/<sheet\b[^>]*>/g)].map(m => m[0]).find(x => unesc((/name="([^"]*)"/.exec(x) || [])[1] || '') === SHEET);
+    if (!sh) return null;
+    const rid = (/r:id="([^"]*)"/.exec(sh) || [])[1];
+    const rel = [...rels.matchAll(/<Relationship\b[^>]*>/g)].map(m => m[0]).find(x => x.includes(`Id="${rid}"`));
+    if (!rel) return null;
+    let target = (/Target="([^"]*)"/.exec(rel) || [])[1] || '';
+    target = target.startsWith('/') ? target.slice(1) : 'xl/' + target;
+    let strs = [];
+    const ss = zip.file('xl/sharedStrings.xml');
+    if (ss) strs = [...(await ss.async('string')).matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => unesc([...m[1].matchAll(/<t[^>]*>([^<]*)<\/t>/g)].map(x => x[1]).join('')));
+    return { path: target, strs, unesc };
+  }
+  function cellVal(c, strs, unesc) {
+    if (!c) return '';
+    const t = (/^<c\b[^>]*\st="([^"]*)"/.exec(c) || [])[1];
+    if (t === 'inlineStr') return unesc([...c.matchAll(/<t[^>]*>([^<]*)<\/t>/g)].map(x => x[1]).join(''));
+    const v = (/<v>([^<]*)<\/v>/.exec(c) || [])[1];
+    if (v == null) return '';
+    if (t === 's') return strs[+v] || '';
+    if (t === 'e') return '';
+    return unesc(v);
+  }
+  // שורות העצים: מספר (B) -> שורה, מתחת לכותרת (שורה 11 והלאה)
+  function treeRowsOf(xml, strs, unesc) {
+    const out = new Map();
+    for (const m of xml.matchAll(/<row\b[^>]*\br="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)) {
+      const r = +m[1];
+      if (r < 11) continue;
+      const cB = (new RegExp(`<c r="B${r}"[^>]*?(?:/>|>[\\s\\S]*?</c>)`).exec(m[2]) || [])[0];
+      const n = Core.normNum(String(cellVal(cB, strs, unesc)).trim());
+      if (!n || n === '0' || out.has(n)) continue;
+      const cBC = (new RegExp(`<c r="BC${r}"[^>]*?(?:/>|>[\\s\\S]*?</c>)`).exec(m[2]) || [])[0];
+      out.set(n, { r, v: validStatus(cellVal(cBC, strs, unesc)) });
+    }
+    return out;
+  }
+  // מספר עץ -> הייעוד בעמודה BC
+  async function readStatuses(bytes) {
+    const zip = await JSZip.loadAsync(bytes);
+    const sh = await surveySheet(zip);
+    if (!sh || !zip.file(sh.path)) return null;
+    const rows = treeRowsOf(await zip.file(sh.path).async('string'), sh.strs, sh.unesc);
+    return new Map([...rows].map(([n, x]) => [n, x.v]));
+  }
+  // כותב ייעוד (מספר עץ -> ערך) לעמודה BC בלבד, בלי לגעת בשאר הקובץ. מחזיר null אם אין מה לשנות
+  async function patchStatuses(bytes, want) {
+    const zip = await JSZip.loadAsync(bytes);
+    const sh = await surveySheet(zip);
+    if (!sh || !zip.file(sh.path)) return null;
+    let xml = await zip.file(sh.path).async('string');
+    const rows = treeRowsOf(xml, sh.strs, sh.unesc);
+    const fix = new Map();
+    for (const [n, v] of want) { const x = rows.get(n); if (x && x.v !== v) fix.set(x.r, v); }
+    if (!fix.size) return null;
+    xml = xml.replace(/<row\b[^>]*\br="(\d+)"[^>]*>[\s\S]*?<\/row>/g, (row, r) => {
+      if (!fix.has(+r)) return row;
+      const ref = 'BC' + r, v = fix.get(+r);
+      const old = new RegExp(`<c r="${ref}"([^>]*?)(?:/>|>[\\s\\S]*?</c>)`).exec(row);
+      const s = old ? (/\ss="(\d+)"/.exec(old[1]) || [])[1] : null;
+      const cell = `<c r="${ref}"${s ? ` s="${s}"` : ''}` + (v ? ` t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>` : '/>');
+      if (old) return row.replace(old[0], cell);
+      const after = [...row.matchAll(/<c r="([A-Z]+)\d+"/g)].find(c => colNum(c[1]) > colNum('BC'));
+      return after ? row.slice(0, after.index) + cell + row.slice(after.index) : row.replace('</row>', cell + '</row>');
+    });
+    zip.file(sh.path, xml);
+    let wb = await zip.file('xl/workbook.xml').async('string');
+    wb = /<calcPr\b/.test(wb) ? wb.replace(/<calcPr([^>]*?)\s*\/>/, (m, a) => `<calcPr${a.replace(/\sfullCalcOnLoad="\d"/, '')} fullCalcOnLoad="1"/>`) : wb;
+    zip.file('xl/workbook.xml', wb);
+    return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.ms-excel.sheet.macroEnabled.12' });
+  }
+
   root.Construction = {
-    TYPES, typeOf, TRANSPLANT, transplantOf, STATUSES, statusOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
+    TYPES, typeOf, TRANSPLANT, transplantOf, STATUSES, statusOf, autoStatus, manualStatus, validStatus, readStatuses, patchStatuses, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
     compute, category, warnings, buildWorkbook, PHOTO_ASPECT, TREE_ROWS: TREE_ROWS.slice(0, MAX_TREES), MAX_TREES, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
   };
 })(this);

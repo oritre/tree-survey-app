@@ -41,6 +41,8 @@
     // מספרי המודד: בקובץ עם תכונות גלויות הם כבר בשרטוט עצמו
     let showSurv = await DB.getKV('planShowSurv', !hasStyle);
     const undo = [];
+    // הייעוד בפועל (ידני, או אוטומטי לפי הגדרות הסקר) לצבע העץ
+    const effSt = t => root.Construction ? root.Construction.statusOf(t, root.Construction.settingsOf(s)) : (t.status || '');
     let gpsWatch = null, gpsPos = null;
 
     // ---------- מסך ----------
@@ -348,8 +350,8 @@
         const p = P(llOf('t', t.px, t.py));
         myPts.push({ t, p });
         if (!inView(p)) continue;
-        const st = root.Plan.statusOf(t.status);
-        const col = t.status ? st.color : MY;
+        const st = root.Plan.statusOf(effSt(t));
+        const col = effSt(t) ? st.color : MY;
         // עץ "לא להתייחסות": שקוף למחצה עם טבעת מקווקוות
         cx.globalAlpha = t.ref ? 0.45 : 1;
         cx.beginPath(); cx.arc(p.x, p.y, rM, 0, 7); cx.fillStyle = col; cx.fill();
@@ -381,14 +383,14 @@
         const spot = place(p, w, hh, t.pref ? rM : rM + 9, occ.concat(placed), k < 4);
         if (!spot) { hidden++; continue; }
         placed.push(spot.b);
-        const st = root.Plan.statusOf(t.status);
+        const st = root.Plan.statusOf(effSt(t));
         if (spot.lead) {
           const e = edgePoint(spot.b, p);
           cx.beginPath(); cx.moveTo(p.x, p.y); cx.lineTo(e.x, e.y); cx.lineWidth = 1.5; cx.strokeStyle = '#111'; cx.stroke();
         }
         rounded(cx, spot.b.x, spot.b.y, w, hh, 5);
         cx.fillStyle = t.id === selId ? '#fff59d' : '#fff'; cx.fill();
-        cx.lineWidth = 2; cx.strokeStyle = t.status ? st.color : MY; cx.stroke();
+        cx.lineWidth = 2; cx.strokeStyle = effSt(t) ? st.color : MY; cx.stroke();
         cx.fillStyle = '#111'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
         cx.fillText(txt, spot.b.x + w / 2, spot.b.y + hh / 2 + 1);
         boxes.push({ id: t.id, b: spot.b });
@@ -786,13 +788,13 @@
       if (!t) { sheet.classList.add('hidden'); hint.textContent = moving ? '' : 'נגיעה בעץ של המודד מסמנת אותו. נגיעה במקום ריק מוסיפה עץ. עץ שהוספת אפשר לגרור.'; hint.classList.toggle('hidden', false); return; }
       hint.textContent = moving ? 'גע במיקום החדש של העץ' : '';
       hint.classList.toggle('hidden', !moving);
-      const st = t.status ? root.Plan.statusOf(t.status) : null;
+      const st = effSt(t) ? root.Plan.statusOf(effSt(t)) : null;
       sheet.classList.remove('hidden');
       sheet.replaceChildren(
         h('div', { class: 'plan-sheet-head' },
           h('b', { style: 'font-size:20px' }, 'עץ ' + (t.num || '—')),
           t.pref ? h('span', { class: 'muted small' }, 'עץ של המודד' + (t.pname ? ' ' + t.pname : '') + ' · נעול במקום') : h('span', { class: 'muted small' }, 'עץ שהוספתי'),
-          st ? h('span', { class: 'plan-chip', style: `--c:${st.color}` }, t.status) : null,
+          st ? h('span', { class: 'plan-chip', style: `--c:${st.color}` }, effSt(t)) : null,
           (t.species || '').trim() && !t.speciesAuto ? h('span', { class: 'muted small' }, t.species) : null,
           (w => w ? h('span', { class: 'muted small', style: 'direction:ltr;unicode-bidi:isolate' }, `X ${fmt(w[0])}  Y ${fmt(w[1])}`) : null)(itmXY(t.px, t.py)),
           h('button', { class: 'icon-btn plan-x', 'aria-label': 'סגור', onclick: () => { selId = null; moving = false; renderSheet(); redraw(); } }, '✕')),
@@ -810,10 +812,10 @@
           h('button', { class: 'btn primary', onclick: () => close(t.id) }, 'פרטי העץ')),
         // ייעוד (סטטוס מוצע) ישר מהמדידה: העץ נצבע מיד, ונכתב לאקסל בעמודה BC כמו מכרטיס העץ (1.80.0)
         root.Construction ? h('div', { class: 'seg status-seg', role: 'group', 'aria-label': 'ייעוד' }, root.Construction.STATUSES.map(x =>
-          h('button', { type: 'button', class: root.Construction.statusOf(t) === x.key ? 'on' : '', style: `--c:${x.color};--ci:${x.ink}`, onclick: () => {
-            const old = t.status;
-            t.status = root.Construction.statusOf(t) === x.key ? '' : x.key;
-            undo.push({ what: 'ייעוד', run: () => { t.status = old; } });
+          h('button', { type: 'button', class: effSt(t) === x.key ? 'on' + (root.Construction.manualStatus(t) ? '' : ' auto') : '', style: `--c:${x.color};--ci:${x.ink}`, onclick: () => {
+            const old = t.status, oldAt = t.statusAt;
+            t.status = effSt(t) === x.key ? '' : x.key; t.statusAt = Date.now();
+            undo.push({ what: 'ייעוד', run: () => { if (old === undefined) delete t.status; else t.status = old; t.statusAt = oldAt; } });
             changed(); renderSheet();
           } }, x.key))) : null);
     }
@@ -1271,7 +1273,7 @@
     }
 
     function legendHtml() {
-      const used = new Set(myTrees().map(t => t.status ? root.Plan.statusOf(t.status).key : ''));
+      const used = new Set(myTrees().map(t => effSt(t) ? root.Plan.statusOf(effSt(t)).key : ''));
       const items = root.Plan.STATUSES.filter(x => used.has(x.key)).map(x => [x.color, x.key]);
       if (used.has('')) items.push([MY, 'עץ מסומן']);
       items.push(['#fff', 'עץ של המודד']);

@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.80.0';
+  const APP_VERSION = '1.81.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -288,16 +288,16 @@
     // מכשיר אחר שינה סקר: לא ממזגים לתוך הסקר הפתוח בזמן הקלדה, צילום, דיבור או חלון פתוח (ננסה שוב בסבב הבא)
     isEditing: id => !!(cur && cur.id === id && (document.querySelector('.cam, .annot, .modal')
       || (document.activeElement && document.activeElement.matches('input, textarea, select, [contenteditable]')))),
-    remoteUpdated(id, deleted) {
+    remoteUpdated(id, deleted, msg) {
       if (cur && cur.id === id) {
         if (deleted) { cur = null; toast('הסקר נמחק במכשיר אחר', 4000); go('#/'); return; }
         thumbUrls.clear();
         if (!cur.trees.find(t => t.id === curTreeId)) curTreeId = (Core.sortTrees(cur.trees)[0] || {}).id || null;
         renderSurvey();
-        toast('הסקר עודכן ממכשיר אחר', 2500);
+        toast(msg || 'הסקר עודכן ממכשיר אחר', 2500);
       } else if (!cur && /^#\/?$/.test(location.hash || '#/')) renderHome();
     },
-    buildReport, buildPdf, planFiles, hasRef: s => hasRef(s), REF_SUFFIX, refName,
+    buildReport, buildPdf, planFiles, hasRef: s => hasRef(s), REF_SUFFIX, refName, fileBase: s => fileBase(s),
     // שם תת-התיקייה של סקר לבנייה בתיקיית הדוחות: כתובת - תאריך (כמו לפני 1.66, כדי שתיקיות קיימות לא ישנו שם)
     reportDirName: s => safeName(`${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${(s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : ''}`),
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
@@ -1562,7 +1562,7 @@
 
   function constructionBadge(t) {
     const c = Construction.compute(t, Construction.settingsOf(cur));
-    const st = Construction.STATUSES.find(x => x.key === c.status);
+    const st = Construction.STATUSES.find(x => x.key === c.status);   // c.status = הייעוד בפועל (ידני או אוטומטי)
     return [c.N == null ? null : h('span', { class: 'badge val-' + (c.N > 13 ? 'hi' : c.N > 6 ? 'mid' : 'lo'), title: 'סך ערך' }, c.N + '/20'),
       st ? h('span', { class: 'badge', title: 'ייעוד', style: `background:${st.color};color:${st.ink}` }, st.key) : null];
   }
@@ -2191,7 +2191,7 @@
       autoBox.dataset.cat = c.cat;
     };
     showAuto();
-    const upd = () => { changed(); showAuto(); };
+    const upd = () => { changed(); showAuto(); drawSt(); };
     const measure = ([k, label]) => field(label, h('input', { class: 'in', inputmode: 'decimal', value: t[k] == null ? '' : t[k],
       oninput: e => { t[k] = e.target.value.trim(); upd(); } }));
     const score = ([k, label]) => {
@@ -2208,20 +2208,28 @@
         t.transplant = Construction.transplantOf(t) === v ? '' : v; changed();
         [...trSeg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget && !!t.transplant));
       } }, v)));
-    // ייעוד (סטטוס מוצע, עמודה BC באקסל): לחיצה שנייה על הנבחר מנקה. משם TREES ב-BricsCAD צובע את העץ
-    const stSeg = h('div', { class: 'seg status-seg', role: 'group', 'aria-label': 'ייעוד' }, Construction.STATUSES.map(x =>
-      h('button', { type: 'button', class: Construction.statusOf(t) === x.key ? 'on' : '', style: `--c:${x.color};--ci:${x.ink}`, onclick: e => {
-        t.status = Construction.statusOf(t) === x.key ? '' : x.key; upd();
-        [...stSeg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget && !!t.status));
-      } }, x.key)));
+    // ייעוד (סטטוס מוצע, עמודה BC באקסל): לחיצה על הנבחר מנקה. משם TREES ב-BricsCAD צובע את העץ.
+    // בלי בחירה ידנית: ייעוד אוטומטי (פטור בתכנית מגורים, קוטר קטן מהסף), מסומן כ"אוטומטי" (1.81.0)
+    const stSeg = h('div', { class: 'seg status-seg', role: 'group', 'aria-label': 'ייעוד' });
+    const stNote = h('div', { class: 'small muted' });
+    const drawSt = () => {
+      const st = Construction.settingsOf(cur), eff = Construction.statusOf(t, st), auto = Construction.autoStatus(t, st), man = Construction.manualStatus(t);
+      stSeg.replaceChildren(...Construction.STATUSES.map(x => h('button', { type: 'button', class: (eff === x.key ? 'on' : '') + (eff === x.key && !man ? ' auto' : ''),
+        style: `--c:${x.color};--ci:${x.ink}`, onclick: () => {
+          t.status = Construction.statusOf(t, Construction.settingsOf(cur)) === x.key ? '' : x.key; t.statusAt = Date.now(); upd();
+        } }, x.key)));
+      stNote.replaceChildren(...(!man && auto ? ['אוטומטי: ' + auto.why + '. אפשר לבחור ייעוד אחר.']
+        : man && auto && auto.status !== eff ? [h('button', { type: 'button', class: 'linkish', onclick: () => { delete t.status; t.statusAt = Date.now(); upd(); } }, `חזרה לייעוד האוטומטי (${auto.status})`)] : []));
+    };
+    drawSt();
     // מין העץ: כשנבחר שם מהרשימה, נשמר בדיוק כמו בתבנית
-    spIn.addEventListener('change', () => { const c = Construction.canonSpecies(t.species); if (c !== t.species) { t.species = c; spIn.value = c; changed(); } showAuto(); });
+    spIn.addEventListener('change', () => { const c = Construction.canonSpecies(t.species); if (c !== t.species) { t.species = c; spIn.value = c; changed(); } showAuto(); drawSt(); });
     constructionFields.refresh = showAuto;
     return h('div', { class: 'stack' },
       h('div', { class: 'grid4' }, Construction.MEASURES.map(measure)),
       h('div', { class: 'grid2 scores' }, Construction.SCORES.map(score)),
       field('היתכנות העתקה', trSeg),
-      field('ייעוד (סטטוס מוצע)', stSeg),
+      field('ייעוד (סטטוס מוצע)', h('div', { class: 'stack', style: 'gap:4px' }, stSeg, stNote)),
       autoBox);
   }
 
@@ -2907,9 +2915,9 @@
         h('h2', { style: 'margin:0;font-size:20px' }, 'סיכום'),
         h('div', {}, `${n} עצים · ` + ['גבוה מאוד', 'גבוה', 'בינונית', 'נמוכה'].map(k => `${k}: ${byCat(k)}`).join(' · ')),
         h('div', {}, `סה"כ שווי עצים: ₪${Math.round(totalP).toLocaleString('he-IL')}`),
-        (() => { const cnt = k => cur.trees.filter(t => Core.hasContent(t) && !t.ref && Construction.statusOf(t) === k).length;
+        (() => { const cnt = k => cur.trees.filter(t => Core.hasContent(t) && !t.ref && Construction.statusOf(t, Construction.settingsOf(cur)) === k).length;
           return h('div', {}, 'ייעוד: ' + Construction.STATUSES.map(x => `${x.key}: ${cnt(x.key)}`).concat(`בלי ייעוד: ${cnt('')}`).join(' · ')); })(),
-        h('div', { class: 'muted small' }, 'הייעוד שנבחר בכרטיס העץ נכתב לעמודה BC (סטטוס מוצע) באקסל, ומשם מתעדכנים אזור השורשים, הטבלה המסכמת והצבעים ב-BricsCAD. אפשר גם לשנות אותו באקסל.')),
+        h('div', { class: 'muted small' }, 'הייעוד נכתב לעמודה BC (סטטוס מוצע) באקסל שבגוגל דרייב, ומשם מתעדכנים אזור השורשים, הטבלה המסכמת והצבעים ב-BricsCAD. שינוי באקסל או ב-BricsCAD חוזר לאפליקציה אוטומטית (תוך כמה דקות, כשיש קליטה).')),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'סיום סקר'),
         noPhotoBox(cur),
@@ -3051,6 +3059,8 @@
 
   // בונה את קובץ האקסל של סקר (משמש גם להורדה וגם לגוגל דרייב)
   async function buildReport(s) {
+    // סקר לבנייה: קודם הייעוד שאולי שונה באקסל שבגוגל דרייב או ב-BricsCAD (עד כמה שניות)
+    if (Construction.isConstruction(s) && s.id) { const live = (cur && cur.id === s.id) ? cur : s; await Sync.pullStatus(live).catch(() => null); }
     s = reportView(s);
     if (Construction.isConstruction(s)) {
       const res = await fetch('template/construction.xltm');
