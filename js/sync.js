@@ -684,32 +684,36 @@
     xlBusy.set(s.id, p);
     return p;
   }
-  // האקסל של הסקר בגוגל דרייב. ori מעביר את קבצי הסקר מתיקיית "סקרי עצים" לתיקיות אחרות, ולכן:
-  // 1. לפי המזהה (נשאר אותו מזהה כשמעבירים קובץ בתוך גוגל דרייב)  2. בתיקיית הדוחות לפי השם
-  // 3. חיפוש בכל הדרייב לפי השם המדויק (לא יותר מפעם ב-10 דקות), רק קובץ שהתאריך בו (Q1) הוא תאריך הסקר,
-  //    כי לסקרים באותה כתובת יש אותו שם קובץ. לא העותק שבתיקיית הגיבוי של האפליקציה
+  // האקסל של הסקר בגוגל דרייב. ori מעביר את קבצי הסקר מתיקיית "סקרי עצים" לתיקיות אחרות, משנה שמות ועובד גם משולחן העבודה, ולכן:
+  // 1. לפי המזהים (נשאר אותו מזהה כשמעבירים קובץ בתוך גוגל דרייב), כולל קבצים שבחרו ידנית (s.xlPin)  2. בתיקיית הדוחות לפי השם
+  // 3. כל 10 דקות: כל העותקים שמסומנים בסימון של הסקר (CA1, מאקסלים מ-1.82), בכל שם ובכל תיקייה. אם אין אף קובץ:
+  //    חיפוש לפי השם המדויק, רק קובץ שהתאריך בו (Q1) הוא תאריך הסקר (לסקרים באותה כתובת יש אותו שם קובץ).
+  // לא העותק שבתיקיית הגיבוי של האפליקציה, ולא קבצים שהוסרו ידנית (s.xlSkip)
   const xlSearchAt = new Map();
-  const xlShape = j => ({ id: j.id, name: j.name, lastModifiedDateTime: j.modifiedTime });
+  const xlShape = j => ({ id: j.id, name: j.name, lastModifiedDateTime: j.modifiedTime, parents: j.parents });
+  const XL_FIELDS = 'id,name,modifiedTime,trashed,parents';
   async function xlFiles(s, base) {
     const names = [base + '.xlsm', base + ' - טבלאות.xlsm'].map(n => OD.clean(n));
+    const skip = new Set(s.xlSkip || []);
     let out = [];
-    for (const id of s.xlIds || []) {
-      const j = await OD.api('GET', `/files/${id}?fields=id,name,modifiedTime,trashed&supportsAllDrives=true`).catch(() => null);
+    for (const id of new Set([...(s.xlPin || []), ...(s.xlIds || [])])) {
+      if (skip.has(id)) continue;
+      const j = await OD.api('GET', `/files/${id}?fields=${XL_FIELDS}&supportsAllDrives=true`).catch(() => null);
       if (j && !j.trashed) out.push(xlShape(j));
     }
-    if (!out.length && s.odReportDir) for (const n of names) { const f = await OD.findFile(s.odReportDir, n).catch(() => null); if (f) out.push(f); }
-    if (!out.length && Date.now() - (xlSearchAt.get(s.id) || 0) > 600000) {
+    if (!out.length && s.odReportDir) for (const n of names) { const f = await OD.findFile(s.odReportDir, n).catch(() => null); if (f && !skip.has(f.id)) out.push(f); }
+    if (Date.now() - (xlSearchAt.get(s.id) || 0) > (out.length ? 600000 : 120000)) {
       xlSearchAt.set(s.id, Date.now());
       const lit = v => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
       const want = s.date ? root.Construction.dateSerial(s.date) : null;
-      // קודם לפי הסימון של הסקר שבתוך הקובץ (מאקסלים מ-1.82): נמצא גם אחרי שינוי שם
+      const ok = j => !(j.parents || []).includes(s.odFolderId) && !skip.has(j.id);
       const XT = "mimeType = 'application/vnd.ms-excel.sheet.macroEnabled.12' or mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'";
       const marked = await OD._list(`fullText contains ${lit(root.Construction.markOf(s))} and (${XT}) and trashed = false`, { orderBy: 'modifiedTime desc', pageSize: '10', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', fields: 'nextPageToken,files(id,name,modifiedTime,parents)' }, 1).catch(() => []);
-      for (const j of marked.filter(j => !(j.parents || []).includes(s.odFolderId)).slice(0, 2)) out.push(xlShape(j));
+      for (const j of marked.filter(ok).slice(0, 4)) out.push(xlShape(j));
       if (!out.length)
       for (const n of names) {
         const l = await OD._list(`name = ${lit(n)} and trashed = false`, { orderBy: 'modifiedTime desc', pageSize: '10', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', fields: 'nextPageToken,files(id,name,modifiedTime,parents)' }, 1).catch(() => []);
-        for (const j of l.filter(j => !(j.parents || []).includes(s.odFolderId)).slice(0, 3)) {
+        for (const j of l.filter(ok).slice(0, 3)) {
           const b = await OD.download(j.id).catch(() => null);
           const x = b && await root.Construction.readStatuses(new Uint8Array(await b.arrayBuffer())).catch(() => null);
           if (x && (x.date == null || want == null || Math.floor(x.date) === want)) { out.push(xlShape(j)); break; }
@@ -720,68 +724,76 @@
     s.xlIds = out.map(f => f.id);
     return out;
   }
+  // כמה עותקים של האקסל (תיקיית הדוחות, שולחן העבודה, תיקיית הלקוח): קוראים כל עותק שהשתנה מאז הפעם האחרונה
+  // (מהישן לחדש, כך שהשינוי האחרון גובר), ואז כותבים את אותו ייעוד לכל העותקים.
+  // s.xlOk: מזהה קובץ -> זמן השינוי שלו כשהיה מעודכן אצלנו. s.xlDirty: יש עותקים שאולי לא מעודכנים
   async function xlStatusRun(s, push) {
-    if (!isBuild(s) || !(s.odReportDir || (s.xlIds || []).length) || !root.App || !root.App.fileBase) return false;
+    if (!hasXl(s) || !root.App || !root.App.fileBase) return false;
     const C = root.Construction, st = C.settingsOf(s), base = root.App.fileBase(s);
     const found = await xlFiles(s, base);
     if (!found.length) return false;
     const modOf = f => Date.parse(f.lastModifiedDateTime) || 0;
-    found.sort((a, b) => modOf(b) - modOf(a));
     const trees = s.trees.filter(t => Core.hasContent(t) && !t.ref && String(t.num || '').trim());
     const key = t => Core.normNum(String(t.num).trim());
-    const top = found[0], mod = modOf(top);
+    const before = JSON.stringify([s.xlIds, s.xlOk, s.xlSnap, s.xlDirty]);
+    const ok = s.xlOk = s.xlOk || {};
     const got = new Map();   // file id -> bytes שכבר הורדו
-    let pulled = 0, pushed = 0;
-    if (!s.xlSeen || mod > s.xlSeen) {
-      const blob = await OD.download(top.id);
-      if (!blob) return false;
+    const snap = s.xlSnap;
+    const keys = new Set(Object.keys(snap || {}));
+    let pulled = 0, pushed = 0, read = 0;
+    const toRead = found.filter(f => ok[f.id] !== modOf(f)).sort((a, b) => modOf(a) - modOf(b));
+    for (const f of toRead) {
+      const blob = await OD.download(f.id).catch(() => null);
+      if (!blob) continue;
       const bytes = new Uint8Array(await blob.arrayBuffer());
-      got.set(top.id, bytes);
-      const xl = await C.readStatuses(bytes);
-      if (!xl) return false;
-      const snap = s.xlSnap;
+      got.set(f.id, bytes);
+      const xl = await C.readStatuses(bytes).catch(() => null);
+      ok[f.id] = modOf(f);
+      if (!xl) continue;
+      read++;
+      const mod = modOf(f);
       for (const t of trees) {
         const k = key(t);
         if (!xl.has(k)) continue;
+        keys.add(k);
         const v = xl.get(k);
         if (v === C.statusOf(t, st)) continue;
-        // בלי תמונת מצב קודמת (אקסל ממולא לפני 1.81): לוקחים רק תאים שמולאו באקסל
-        const inExcel = snap ? snap[k] !== v : !!v;
+        // שונה באקסל מאז שכתבנו אליו. בלי תמונת מצב (אקסל ממולא לפני 1.81, או עץ שלא היה בה): רק תאים שמולאו
+        const inExcel = snap && k in snap ? snap[k] !== v : !!v;
         if (inExcel && (t.statusAt || 0) < mod) { t.status = v; t.statusAt = mod; pulled++; }
       }
-      s.xlSnap = Object.fromEntries(trees.filter(t => xl.has(key(t))).map(t => [key(t), xl.get(key(t))]));
-      s.xlSeen = mod;
     }
-    if (push && s.xlSnap) {
-      const want = new Map(trees.map(t => [key(t), C.statusOf(t, st)]).filter(([k, v]) => k in s.xlSnap && s.xlSnap[k] !== v));
-      if (want.size) {
-        let seen = s.xlSeen;
-        for (const f of found) {
-          let b = got.get(f.id);
-          if (!b) { const x = await OD.download(f.id); if (!x) continue; b = new Uint8Array(await x.arrayBuffer()); }
-          const out = await C.patchStatuses(b, want);
-          if (!out) continue;
-          await OD.replaceContent(f.id, new Blob([out], { type: XL_TYPE }));
-          const meta = await OD.api('GET', `/files/${f.id}?fields=modifiedTime&supportsAllDrives=true`).catch(() => null);
-          seen = Math.max(seen || 0, (meta && Date.parse(meta.modifiedTime)) || Date.now());
-          pushed++;
-        }
-        for (const [k, v] of want) s.xlSnap[k] = v;
-        s.xlSeen = seen;
+    const full = new Map(trees.filter(t => keys.has(key(t))).map(t => [key(t), C.statusOf(t, st)]));
+    const diff = !snap || [...full].some(([k, v]) => snap[k] !== v);
+    if (read || diff) s.xlDirty = true;
+    if (push && s.xlDirty && full.size) {
+      let all = true;
+      for (const f of found) {
+        let b = got.get(f.id);
+        if (!b) { const x = await OD.download(f.id).catch(() => null); if (!x) { all = false; continue; } b = new Uint8Array(await x.arrayBuffer()); }
+        const out = await C.patchStatuses(b, full);
+        if (!out) continue;
+        try { await OD.replaceContent(f.id, new Blob([out], { type: XL_TYPE })); }
+        catch (e) { all = false; log('error', `כתיבת הייעוד ל"${f.name}" נכשלה: ${e.message}`, s); continue; }
+        const meta = await OD.api('GET', `/files/${f.id}?fields=modifiedTime&supportsAllDrives=true`).catch(() => null);
+        ok[f.id] = (meta && Date.parse(meta.modifiedTime)) || 0;
+        pushed++;
       }
+      if (all) s.xlDirty = false;
     }
-    if (pulled || pushed) {
-      await DB.putSurvey(s, !!pulled);
-      if (pulled) log('ok', `ייעוד ${pulled} עצים עודכן מהאקסל`, s);
-      if (pushed) log('ok', 'הייעוד נכתב לאקסל בגוגל דרייב', s);
-      if (pulled && root.App && root.App.remoteUpdated) root.App.remoteUpdated(s.id, false, `ייעוד ${pulled} עצים עודכן מהאקסל`);
-    }
+    if (full.size) s.xlSnap = Object.fromEntries(full);
+    s.xlSeen = Math.max(0, ...found.map(f => ok[f.id] || 0));
+    for (const id of Object.keys(ok)) if (!s.xlIds.includes(id)) delete ok[id];
+    if (pulled || JSON.stringify([s.xlIds, s.xlOk, s.xlSnap, s.xlDirty]) !== before) await DB.putSurvey(s, !!pulled);
+    if (pulled) log('ok', `ייעוד ${pulled} עצים עודכן מהאקסל`, s);
+    if (pushed) log('ok', pushed > 1 ? `הייעוד נכתב ל-${pushed} עותקי האקסל בגוגל דרייב` : 'הייעוד נכתב לאקסל בגוגל דרייב', s);
+    if (pulled && root.App && root.App.remoteUpdated) root.App.remoteUpdated(s.id, false, `ייעוד ${pulled} עצים עודכן מהאקסל`);
     return { pulled, pushed };
   }
 
   // מיידי (ori, 1.83.0: עובדים מהאפליקציה, והאקסל הוא גיבוי שצריך להיות תמיד מעודכן):
   // שינוי ייעוד באפליקציה נכתב לאקסל אחרי שנייה, ובסקר הפתוח בודקים כל 15 שניות אם האקסל השתנה (בקשה קטנה: רק זמן השינוי)
-  const hasXl = s => isBuild(s) && !!(s.odReportDir || (s.xlIds || []).length);
+  const hasXl = s => isBuild(s) && !!(s.odReportDir || (s.xlIds || []).length || (s.xlPin || []).length);
   let xlPushT = null;
   function statusChanged(s) {
     clearTimeout(xlPushT);
@@ -795,10 +807,11 @@
     const s = root.App && root.App.current && root.App.current();
     if (!s || !hasXl(s) || !navigator.onLine || document.hidden || xlBusy.has(s.id)) return;
     if (!(await OD.connected().catch(() => false))) return;
-    let changed = !(s.xlIds || []).length;
+    let changed = !(s.xlIds || []).length || !!s.xlDirty;
+    const ok = s.xlOk || {};
     for (const id of s.xlIds || []) {
       const j = await OD.api('GET', `/files/${id}?fields=modifiedTime,trashed&supportsAllDrives=true`).catch(() => null);
-      if (!j || j.trashed || (Date.parse(j.modifiedTime) || 0) > (s.xlSeen || 0)) changed = true;
+      if (!j || j.trashed || (Date.parse(j.modifiedTime) || 0) !== ok[id]) changed = true;
     }
     if (changed) { try { await locked(s.id, () => xlStatus(s)); } catch (_) {} }
   }
@@ -818,13 +831,16 @@
     const ready = await DB.getKV('xlsm:' + s.id, null);
     const r = !twoSets && ready && ready.hash === hash && ready.blob ? ready : await root.App.buildReport(clean);
     await putReportFile(s, r.name, r.blob);
-    // הייעוד שבאקסל עכשיו = מה שבאפליקציה. האקסל ייקרא שוב בסבב הבא (אחרי ההעלאה הוא חדש יותר מ-xlSeen)
+    // הייעוד שבאקסל עכשיו = מה שבאפליקציה
     if (isBuild(s)) {
       const st = root.Construction.settingsOf(s);
       s.xlSnap = Object.fromEntries(s.trees.filter(t => Core.hasContent(t) && !t.ref && String(t.num || '').trim())
         .map(t => [Core.normNum(String(t.num).trim()), root.Construction.statusOf(t, st)]));
-      s.xlSeen = 0;
-      s.xlIds = [];   // האקסל החדש בתיקיית הדוחות (גם אם את הקודם העבירו למקום אחר)
+      // האקסל החדש בתיקיית הדוחות כבר מעודכן. שאר העותקים (שולחן העבודה, עותקים שהועברו) יעודכנו בסבב הבא
+      const fresh = s.odReportDir ? await OD.findFile(s.odReportDir, OD.clean(r.name)).catch(() => null) : null;
+      s.xlIds = [...new Set([...(fresh ? [fresh.id] : []), ...(s.xlIds || [])])].filter(id => !(s.xlSkip || []).includes(id));
+      s.xlOk = fresh ? { [fresh.id]: Date.parse(fresh.lastModifiedDateTime) || 0 } : {};
+      s.xlDirty = true;
     }
     DB.delKV('xlsm:' + s.id).catch(() => {});
     s.odReportHash = hashSurvey(s); s.odReportAt = Date.now();
@@ -950,7 +966,7 @@
           if (r === 'deleted' || r === 'busy') { if (r === 'busy') busy = true; holding.delete(s.id); continue; }
         }
         // סקר לבנייה עם אקסל בתיקיית הדוחות: ייעוד העצים לשני הכיוונים (הסקר הפתוח בכל סבב, השאר פעם ב-3 דקות, עד 90 יום)
-        if (odOn && !state.odNeedsLogin && isBuild(s) && (s.odReportDir || (s.xlIds || []).length) && !s.finishPending
+        if (odOn && !state.odNeedsLogin && hasXl(s) && !s.finishPending
           && (live(s) === s || (Date.now() - (s.updated || 0) < 90 * 864e5 && Date.now() - (xlAt.get(s.id) || 0) > 170000))) {
           xlAt.set(s.id, Date.now());
           try { await locked(s.id, () => xlStatus(s)); }
@@ -998,9 +1014,32 @@
 
   root.Sync = { stop, importSurvey, flushImported, preparing,
     _xlStatus: (s, push) => xlStatus(s, push), statusChanged,
+    // עותקי האקסל שהסקר מסונכרן איתם (לתצוגה בלשונית ההפקה). search: לחפש עכשיו גם עותקים מסומנים בכל הדרייב
+    async xlLinked(s, search) {
+      if (!hasXl(s) || !root.App || !root.App.fileBase) return [];
+      if (search) xlSearchAt.delete(s.id);
+      return locked(s.id, async () => { const l = await xlFiles(s, root.App.fileBase(s)); await DB.putSurvey(s, false); return l; });
+    },
+    // ori בוחר קובץ אקסל (למשל העותק בשולחן העבודה ש-BricsCAD עובד איתו): מעכשיו האפליקציה קוראת וכותבת גם אליו
+    async xlPin(s, id) {
+      s.xlPin = [...new Set([id, ...(s.xlPin || [])])];
+      s.xlSkip = (s.xlSkip || []).filter(x => x !== id);
+      s.xlIds = [...new Set([id, ...(s.xlIds || [])])];
+      if (s.xlOk) delete s.xlOk[id];   // נקרא פעם אחת (שינויים שנעשו בו ב-BricsCAD), ואז מקבל את הייעוד של האפליקציה
+      s.xlDirty = true;
+      await DB.putSurvey(s, false);
+      return locked(s.id, () => xlStatus(s));
+    },
+    async xlUnpin(s, id) {
+      s.xlPin = (s.xlPin || []).filter(x => x !== id);
+      s.xlSkip = [...new Set([id, ...(s.xlSkip || [])])];
+      s.xlIds = (s.xlIds || []).filter(x => x !== id);
+      if (s.xlOk) delete s.xlOk[id];
+      await DB.putSurvey(s, false);
+    },
     // ייעוד מהאקסל שבגוגל דרייב לפני הפקה במכשיר (בלי לחכות יותר מכמה שניות)
     async pullStatus(s) {
-      if (!isBuild(s) || !(s.odReportDir || (s.xlIds || []).length) || !navigator.onLine || !(await OD.connected())) return null;
+      if (!hasXl(s) || !navigator.onLine || !(await OD.connected())) return null;
       return Promise.race([xlStatus(s, false).catch(() => null), new Promise(r => setTimeout(r, 6000))]);
     },
     // ה-PDF של הסקר מתיקיית הדוחות בגוגל דרייב, אם הועלה אחרי השינוי האחרון בסקר (אחרת null ובונים מחדש)
