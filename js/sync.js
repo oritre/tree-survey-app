@@ -707,8 +707,8 @@
       const lit = v => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
       const want = s.date ? root.Construction.dateSerial(s.date) : null;
       const ok = j => !(j.parents || []).includes(s.odFolderId) && !skip.has(j.id);
-      const XT = "mimeType = 'application/vnd.ms-excel.sheet.macroEnabled.12' or mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'";
-      const marked = await OD._list(`fullText contains ${lit(root.Construction.markOf(s))} and (${XT}) and trashed = false`, { orderBy: 'modifiedTime desc', pageSize: '10', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', fields: 'nextPageToken,files(id,name,modifiedTime,parents)' }, 1).catch(() => []);
+      // רק xlsm (קובצי "טעינת עצים ... .xlsx" ל"יעלה" הם לא הסקר)
+      const marked = await OD._list(`fullText contains ${lit(root.Construction.markOf(s))} and mimeType = '${XL_TYPE}' and trashed = false`, { orderBy: 'modifiedTime desc', pageSize: '10', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', fields: 'nextPageToken,files(id,name,modifiedTime,parents)' }, 1).catch(() => []);
       for (const j of marked.filter(ok).slice(0, 4)) out.push(xlShape(j));
       if (!out.length)
       for (const n of names) {
@@ -748,10 +748,13 @@
       const bytes = new Uint8Array(await blob.arrayBuffer());
       got.set(f.id, bytes);
       const xl = await C.readStatuses(bytes).catch(() => null);
+      const fresh = f.id in ok;
       ok[f.id] = modOf(f);
       if (!xl) continue;
       read++;
       const mod = modOf(f);
+      // עותק שעוד לא סונכרן (נמצא עכשיו או נבחר ידנית) וישן מהסנכרון האחרון: לא לוקחים ממנו (ערכים ישנים), רק כותבים אליו
+      if (!fresh && mod <= (s.xlSeen || 0)) { for (const t of trees) if (xl.has(key(t))) keys.add(key(t)); continue; }
       for (const t of trees) {
         const k = key(t);
         if (!xl.has(k)) continue;
@@ -1029,6 +1032,16 @@
       s.xlDirty = true;
       await DB.putSurvey(s, false);
       return locked(s.id, () => xlStatus(s));
+    },
+    // לפני שמחברים קובץ: האם זה באמת אקסל של הסקר הזה (גיליון "סקר", תאריך, כמה ממספרי העצים קיימים בו)
+    async xlCheck(s, id) {
+      const b = await OD.download(id);
+      const xl = b && await root.Construction.readStatuses(new Uint8Array(await b.arrayBuffer())).catch(() => null);
+      if (!xl) return { survey: false };
+      const nums = s.trees.filter(t => Core.hasContent(t) && !t.ref && String(t.num || '').trim()).map(t => Core.normNum(String(t.num).trim()));
+      const want = s.date ? root.Construction.dateSerial(s.date) : null;
+      return { survey: true, dateOk: xl.date == null || want == null || Math.floor(xl.date) === want,
+        matched: nums.filter(n => xl.has(n)).length, total: nums.length };
     },
     async xlUnpin(s, id) {
       s.xlPin = (s.xlPin || []).filter(x => x !== id);
