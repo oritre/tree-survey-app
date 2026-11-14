@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.89.0';
+  const APP_VERSION = '1.90.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2427,6 +2427,7 @@
     if (!navigator.geolocation) { toast('אין GPS בדפדפן הזה'); return; }
     t._gpsBusy = true; renderGps(t);
     let best = null, done = false;
+    const started = Date.now();
     const finish = () => {
       if (done) return; done = true;
       navigator.geolocation.clearWatch(wid);
@@ -2438,15 +2439,25 @@
       renderGps(t);
     };
     const wid = navigator.geolocation.watchPosition(pos => {
+      const first = !best;
       if (!best || pos.coords.accuracy < best.coords.accuracy) best = pos;
       if (best.coords.accuracy <= 8) finish();
+      // המיקום הראשון הגיע אחרי 6 שניות: עוד 2 שניות לשיפור הדיוק ומסיימים
+      else if (first && Date.now() - started > 6000) setTimeout(finish, 2000);
     }, err => {
       if (!best) {
         t._gpsBusy = false; renderGps(t); done = true; navigator.geolocation.clearWatch(wid);
         if (!quiet || err.code === 1) toast(err.code === 1 ? 'צריך לאשר גישה למיקום בדפדפן' : 'לא הצלחתי לקבל מיקום. נסה שוב בשטח פתוח.');
       }
     }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
-    setTimeout(finish, 6000);
+    // אחרי 6 שניות לוקחים את המיקום הטוב ביותר שהתקבל. אם עוד אין אף מיקום (GPS שרק נדלק), ממשיכים לחכות
+    // לראשון במקום לוותר בשקט, עד 30 שניות
+    setTimeout(() => { if (best) finish(); }, 6000);
+    setTimeout(() => {
+      if (done) return;
+      if (!best && !quiet) toast('לא הצלחתי לקבל מיקום. נסה שוב בשטח פתוח.');
+      finish();
+    }, 30000);
   }
 
   // ---------- תמונות ----------
@@ -2975,12 +2986,13 @@
             btn.disabled = true;
             try {
               const s = refSets(cur)[0][0];
+              // קודם ה-PDF, שנפתח מיד לצפייה ולשליחה, והאקסל נבנה אחריו (בזמן שמסתכלים על ה-PDF)
+              const pdf = await buildPdf(s, (i, n) => { status.textContent = `מכין PDF… עמוד ${i} מתוך ${n}`; });
+              if (pdf) viewPdf(s, pdf);
               status.textContent = 'מכין אקסל…';
               const x = await buildReport(s);
               await DB.setKV('xlsm:' + s.id, { hash: Sync.hashSurvey(s), blob: x.blob, name: x.name });
-              const pdf = await buildPdf(s, (i, n) => { status.textContent = `מכין PDF… עמוד ${i} מתוך ${n}`; });
               status.textContent = Sync.state.offline ? '✓ האקסל וה-PDF מוכנים. יעלו לגוגל דרייב כשהקליטה תחזור.' : '✓ האקסל וה-PDF מוכנים, ועולים עכשיו לגוגל דרייב יחד עם התמונות.';
-              if (pdf) viewPdf(s, pdf);
             } catch (err) { console.error(err); status.textContent = 'הכנת הקבצים נכשלה, הם יוכנו בזמן ההעלאה: ' + err.message; }
             finally { Sync.preparing.delete(sid); Sync.finishNow(sid); btn.disabled = false; drawSync(); }
           } }, cur.finished ? '✔ סיים שוב (אחרי עריכה)' : '✔ סיום סקר'),
@@ -3868,6 +3880,23 @@
   }
   applyOrientation();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  // גרסה חדשה באתר: האפליקציה בטאבלט פתוחה לפעמים כל היום ולא מתעדכנת עד שפותחים אותה מחדש.
+  // כשחוזרים אליה (ולכל היותר פעם ב-10 דקות) בודקים את מספר הגרסה באתר, ומציעים לעדכן בלחיצה
+  let verCheckedAt = 0;
+  const newer = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number);
+    for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+  async function checkUpdate() {
+    if (navigator.onLine === false || location.protocol === 'file:' || Date.now() - verCheckedAt < 10 * 60e3) return;
+    verCheckedAt = Date.now();
+    try {
+      const txt = await (await fetch('sw.js', { cache: 'no-store' })).text();
+      const m = /tree-survey-v(\d+\.\d+\.\d+)/.exec(txt);
+      if (!m || !newer(m[1], APP_VERSION)) return;
+      toast(`יש גרסה חדשה של האפליקציה (${m[1]})`, 15000, 'עדכן עכשיו', async () => { await saveNow(); location.reload(); });
+    } catch (_) {}
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
+  setTimeout(checkUpdate, 20000);
   // מעבר מ-OneDrive לגוגל דרייב (פעם אחת): מזהי הקבצים של OneDrive לא תקפים בדרייב, אז הסקרים שבטאבלט יעלו מחדש לדרייב.
   // מה שכבר ב-OneDrive נשאר שם ולא נמחק
   async function moveToGdrive() {

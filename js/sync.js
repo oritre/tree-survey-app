@@ -57,7 +57,9 @@
 
   // טביעת אצבע לתוכן הסקר (בלי שדות הסנכרון), כדי לדעת אם צריך להעלות שוב
   function hashSurvey(s) {
-    const strip = JSON.stringify(s, (k, v) => (k.startsWith('tg') || k.startsWith('od') || k === 'updated' || k.startsWith('_')) ? undefined : v);
+    // inclRef: סימון של עותק ההפקה (refSets), לא שינוי בסקר. בלי זה האקסל וה-PDF שהוכנו בלחיצה על "סיום סקר"
+    // לא זוהו כעדכניים, ונבנו שוב מאפס בזמן ההעלאה
+    const strip = JSON.stringify(s, (k, v) => (k.startsWith('tg') || k.startsWith('od') || k === 'updated' || k === 'inclRef' || k.startsWith('_')) ? undefined : v);
     let h = 5381;
     for (let i = 0; i < strip.length; i++) h = ((h << 5) + h + strip.charCodeAt(i)) | 0;
     return String(h >>> 0) + ':' + strip.length;
@@ -836,6 +838,15 @@
     const hash = hashSurvey(s);
     const ready = await DB.getKV('xlsm:' + s.id, null);
     const r = !twoSets && ready && ready.hash === hash && ready.blob ? ready : await root.App.buildReport(clean);
+    // ה-PDF מוכן לפני ההעלאה, כדי שהאקסל וה-PDF יעלו לגוגל דרייב ביחד ולא אחד אחרי השני
+    let pdf = null;
+    if (opts && opts.pdf) {
+      const last = await DB.getKV('pdf:' + s.id, null);
+      pdf = !twoSets && last && last.hash === hash && last.blob ? last : await root.App.buildPdf(clean);
+    }
+    await reportFolder(s); // פעם אחת לפני ההעלאות המקבילות, כדי שלא תיווצר תיקייה כפולה
+    const pdfUp = pdf ? uploadPdf(s, pdf) : null;
+    if (pdfUp) pdfUp.catch(() => {});
     await putReportFile(s, r.name, r.blob);
     // הייעוד שבאקסל עכשיו = מה שבאפליקציה
     if (isBuild(s)) {
@@ -855,12 +866,7 @@
     try {
       for (const f of await root.App.planFiles(s)) await putReportFile(s, f.name, f.blob);
     } catch (e) { log('error', 'קובץ המדידה לא עלה: ' + e.message, s); }
-    let pdf = null;
-    if (opts && opts.pdf) {
-      const last = await DB.getKV('pdf:' + s.id, null);
-      pdf = !twoSets && last && last.hash === hash && last.blob ? last : await root.App.buildPdf(clean);
-    }
-    if (pdf) await uploadPdf(s, pdf);
+    if (pdfUp) await pdfUp;
     await DB.putSurvey(s, false);
   }
   async function uploadPdf(s, pdf) {
