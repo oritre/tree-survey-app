@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.88.0';
+  const APP_VERSION = '1.89.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2539,7 +2539,7 @@
         await Camera.open(async (blob, extra) => {
           const r = await addPhoto(t, blob, annotate, annotate, true, Object.assign({ more: true }, extra));
           return r === true ? 'close' : r === 'more' ? true : r;
-        }, { title: `עץ ${t.num || ''} ${t.species || ''}`.trim(), doneLabel: 'סגור', review: !annotate, instant: annotate, maxSide: await DB.getKV('photoMax', 2000), onError: m => toast(m, 2500) });
+        }, { title: `עץ ${t.num || ''} ${t.species || ''}`.trim(), doneLabel: 'סגור', review: !annotate, instant: annotate, fast: await DB.getKV('camFast', true), maxSide: await DB.getKV('photoMax', 2000), onError: m => toast(m, 2500) });
         return;
       } catch (e) {
         toast('המצלמה של האפליקציה לא זמינה (' + e.message + '), פותח את מצלמת המכשיר', 3000);
@@ -3640,6 +3640,8 @@
     annotateAfter.firstChild.checked = await DB.getKV('annotateAfter', true);
     const inAppCamera = chk('inAppCamera', true, 'מצלמה מהירה בתוך האפליקציה (צילום ברצף). כבוי = אפליקציית המצלמה של המכשיר');
     inAppCamera.firstChild.checked = await DB.getKV('inAppCamera', true);
+    const camFast = chk('camFast', true, 'צילום מיידי: התמונה נלקחת ברגע הלחיצה (הפריים החד ביותר מהמצלמה). כבוי = הצילום של המצלמה עצמה, שלוקח כמה שניות');
+    camFast.firstChild.checked = await DB.getKV('camFast', true);
     const curOrient = await DB.getKV('orientLock', 'start');
     const orientSel = h('select', { class: 'in', onchange: async e => { await DB.setKV('orientLock', e.target.value); applyOrientation(); toast('נשמר'); } },
       [['start', 'נעול בכיוון שבו האפליקציה נפתחה'], ['portrait', 'תמיד לאורך'], ['landscape', 'תמיד לרוחב'], ['any', 'מסתובב עם הטאבלט']]
@@ -3763,7 +3765,7 @@
           geminiStatus),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'עבודה בשטח'),
-          inAppCamera, annotateAfter, shareFiles, field('כיוון המסך באפליקציה', orientSel)),
+          inAppCamera, camFast, annotateAfter, shareFiles, field('כיוון המסך באפליקציה', orientSel)),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'רשימות בחירה'),
           h('div', { class: 'muted small' }, 'שורה לכל פריט. ההערות מתחת לשדה ההערות הן רק מה שכתוב כאן (בלי למידה מהסקרים). למיני העצים האפליקציה מוסיפה גם מינים שכבר כתבת בסקרי בטיחות.'),
