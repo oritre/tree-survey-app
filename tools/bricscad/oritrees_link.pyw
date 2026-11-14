@@ -26,6 +26,7 @@ import urllib.parse
 
 SCHEME = 'oritrees'
 PORT = 47613
+ORIGINS = ('https://oritre.github.io',)   # only the survey app may call the helper
 RUN_NAME = 'OriTreesLink'
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(os.environ.get('TEMP', HERE), 'oritrees_link.log')
@@ -168,7 +169,8 @@ def serve():
     class H(BaseHTTPRequestHandler):
         def cors(self, code):
             self.send_response(code)
-            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Origin', self.headers.get('Origin') if self.headers.get('Origin') in ORIGINS else ORIGINS[0])
+            self.send_header('Vary', 'Origin')
             self.send_header('Access-Control-Allow-Private-Network', 'true')
             self.send_header('Access-Control-Allow-Methods', 'GET')
             self.send_header('Cache-Control', 'no-store')
@@ -179,6 +181,13 @@ def serve():
 
         def do_GET(self):
             parts = [urllib.parse.unquote(p) for p in self.path.split('?')[0].split('/') if p]
+            origin = self.headers.get('Origin')
+            # /go only from the app's own site (a browser always sends Origin on fetch); /quit only from this PC's
+            # uninstall (no Origin). Anything else: 403
+            if not ((parts[:1] == ['go'] and origin in ORIGINS) or (parts[:1] == ['quit'] and origin is None and not self.headers.get('Referer'))):
+                self.cors(403)
+                self.end_headers()
+                return
             msg = 'ok'
             if parts[:1] == ['go'] and len(parts) > 1 and clean_num(parts[1]):
                 msg = go(clean_num(parts[1]), box=False) or 'ok'
