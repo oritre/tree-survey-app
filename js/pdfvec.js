@@ -153,6 +153,7 @@
     const bmp = await createImageBitmap(blob);
     const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
     c.getContext('2d').drawImage(bmp, 0, 0);
+    if (bmp.close) bmp.close();
     return { png: new Uint8Array(await (await new Promise(r => c.toBlob(r, 'image/png'))).arrayBuffer()) };
   }
 

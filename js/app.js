@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.87.0';
+  const APP_VERSION = '1.87.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2730,7 +2730,9 @@
     let src;
     try { src = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
     catch (_) {
-      src = await new Promise((res, rej) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => rej(new Error('קובץ תמונה לא נתמך')); img.src = URL.createObjectURL(file); });
+      const url = URL.createObjectURL(file);
+      try { src = await new Promise((res, rej) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => rej(new Error('קובץ תמונה לא נתמך')); img.src = url; }); }
+      finally { URL.revokeObjectURL(url); }
     }
     const sw = src.width, sh = src.height;
     const draw = (max, q) => {
@@ -2738,10 +2740,13 @@
       const c = document.createElement('canvas');
       c.width = Math.round(sw * s); c.height = Math.round(sh * s);
       c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
-      return new Promise(r => c.toBlob(b => r({ blob: b, w: c.width, h: c.height }), 'image/jpeg', q));
+      return new Promise(r => c.toBlob(b => { const o = { blob: b, w: c.width, h: c.height }; c.width = c.height = 0; r(o); }, 'image/jpeg', q));
     };
-    const big = await draw(maxSide, 0.85);
-    const th = await draw(320, 0.7);
+    // התמונה מהמצלמה בגודל מלא תופסת עשרות מגה בזיכרון: משחררים אותה מיד ולא מחכים לדפדפן,
+    // כדי שהטאבלט לא ייתקע או יסגור את האפליקציה אחרי הרבה תמונות ברצף
+    let big, th;
+    try { big = await draw(maxSide, 0.85); th = await draw(320, 0.7); }
+    finally { if (src.close) src.close(); }
     return { id: uid(), blob: big.blob, thumb: th.blob, w: big.w, h: big.h };
   }
 
@@ -2751,7 +2756,8 @@
     const c = document.createElement('canvas');
     c.width = Math.round(src.width * s); c.height = Math.round(src.height * s);
     c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
-    return new Promise(r => c.toBlob(r, 'image/jpeg', 0.7));
+    if (src.close) src.close();
+    return new Promise(r => c.toBlob(b => { c.width = c.height = 0; r(b); }, 'image/jpeg', 0.7));
   }
 
   // שומר את המקור בצד, ומחליף את התמונה בגרסה עם הסימונים (זו שנכנסת לדוח, לטלגרם ולגוגל דרייב)
