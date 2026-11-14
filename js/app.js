@@ -58,6 +58,7 @@
     copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
     hide: 'M3 7h18v4H3zM5 11v9h14v-9M10 15h4',
     mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3',
+    target: 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zM12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8zM12 1v4M12 19v4M1 12h4M19 12h4',
   };
   function icon(name, cls) {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -1701,13 +1702,29 @@
     return parts.join(' · ');
   }
 
+  // קפיצה לעץ ב-BricsCAD (1.86.0): קישור oritrees://go/<מספר> מפעיל במחשב את oritrees_link.pyw, ששולח ל-BricsCAD
+  // את (ts:xlgo "<מספר>") כמו לחיצה כפולה על מספר עץ באקסל. אותו עץ שוב = העותק הבא של בלוק trees.
+  // רק במחשב (עכבר), רק בסקר לבנייה
+  const cadOk = () => Construction.isConstruction(cur) && !!(window.matchMedia && matchMedia('(any-pointer: fine)').matches);
+  function cadGo(t) {
+    const num = String(t.num || '').trim();
+    if (!num) { toast('לעץ אין מספר'); return; }
+    const a = h('a', { href: 'oritrees://go/' + encodeURIComponent(num), style: 'display:none' });
+    document.body.append(a); a.click(); a.remove();
+    toast(`עץ ${num} נשלח ל-BricsCAD. לחיצה נוספת = העותק הבא בשרטוט`, 3500);
+  }
+  function cadBtn(t) {
+    return h('button', { type: 'button', class: 'btn small cad-go', title: 'הצג את העץ ב-BricsCAD (גם: לחיצה כפולה על העץ ברשימה)', onclick: () => cadGo(t) }, icon('target'), 'הצג ב-BricsCAD');
+  }
+
   function treeRow(t) {
     const pineMissing = !Construction.isConstruction(cur) && Core.isPine(t.species) && (t.pines == null || t.pines === '');
     const urgCls = v => v === Core.OK ? 'ok' : v;
     const urg = !Construction.isConstruction(cur) && t.urgency ? ' u-' + urgCls(t.urgency) : '';
     const picked = selMode && selIds.has(t.id);
     return h('button', { class: 'tree-row' + (!selMode && t.id === curTreeId ? ' on' : '') + (selMode ? ' pick' : '') + (picked ? ' picked' : '') + urg, 'data-id': t.id, 'data-search': `${t.num || ''} ${t.species || ''} ${t.notes || ''}`.toLowerCase(),
-      'aria-pressed': selMode ? String(picked) : null, onclick: () => selMode ? togglePick(t.id) : selectTree(t.id) },
+      'aria-pressed': selMode ? String(picked) : null, onclick: () => selMode ? togglePick(t.id) : selectTree(t.id),
+      ondblclick: () => { if (!selMode && cadOk()) cadGo(t); } },
       h('span', { class: 'n' }, selMode ? h('span', { class: 'pick-box' }, picked ? icon('check') : null) : null, t.num || '—'),
       h('span', { style: 'min-width:0' },
         h('div', { class: 'sp' }, t.species || 'ללא מין', treeDims(t) ? h('span', { class: 'dims' }, ' · ' + treeDims(t)) : null),
@@ -2354,7 +2371,7 @@
       h('div', { class: 'grid4' }, Construction.MEASURES.map(measure)),
       h('div', { class: 'grid2 scores' }, Construction.SCORES.map(score)),
       field('היתכנות העתקה', trSeg),
-      field('ייעוד (סטטוס מוצע)', h('div', { class: 'stack', style: 'gap:4px' }, stSeg, stNote)),
+      field('ייעוד (סטטוס מוצע)', h('div', { class: 'stack', style: 'gap:4px' }, cadOk() ? h('div', { class: 'row cad-row' }, stSeg, cadBtn(t)) : stSeg, stNote)),
       autoBox);
   }
 
