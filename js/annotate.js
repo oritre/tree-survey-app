@@ -256,6 +256,8 @@
         closed = true;
         window.removeEventListener('resize', layout);
         ov.remove();
+        // התמונה המפוענחת בגודל מלא (עשרות מגה): משחררים מיד, לא מחכים לדפדפן
+        if (img && img.close) img.close();
         if (release) release();
         resolve(result);
       }
@@ -290,17 +292,18 @@
         opts.upgrade.then(async b => {
           if (closed || !b) return;
           const nimg = await createImageBitmap(b);
-          if (closed) return;
+          if (closed) { if (nimg.close) nimg.close(); return; }
           const a0 = img.width / img.height, a1 = nimg.width / nimg.height;
           if (Math.abs(a0 / a1 - 1) > 0.02) {
             // כיוון אחר (לאורך/לרוחב) עם סימונים: לא מחליפים, כדי לא להזיז את הסימונים
-            if ((a0 > 1) !== (a1 > 1) && (list.length || redo.length || cur)) return;
+            if ((a0 > 1) !== (a1 > 1) && (list.length || redo.length || cur)) { if (nimg.close) nimg.close(); return; }
             if ((a0 > 1) === (a1 > 1)) {
               list = list.map(x => remap(x, a0, a1));
               for (let i = 0; i < redo.length; i++) redo[i] = remap(redo[i], a0, a1);
               if (cur) cur = remap(cur, a0, a1);
             }
           }
+          if (img && img.close) img.close();
           img = nimg;
           if (opts.onImage) opts.onImage(b);
           layout();
