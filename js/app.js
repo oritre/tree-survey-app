@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.87.1';
+  const APP_VERSION = '1.88.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2887,14 +2887,46 @@
     }
     return out;
   }
+  // בדיקת שלמות לפני סיום סקר: קבוצות של עצים שחסר בהם משהו, כל עץ כפתור שפותח אותו
+  function treeLabel(t) {
+    const name = t.num || (Core.isOk(t) ? 'תקין' : '');
+    return [name, (t.species || '').trim()].filter(Boolean).join(' · ') || 'עץ בלי מספר';
+  }
+  function completenessGroups(s) {
+    const build = Construction.isConstruction(s);
+    const trees = Core.sortTrees(s.trees.filter(t => Core.hasContent(t) && !t.ref));
+    const groups = [];
+    const add = (icn, one, many, list) => { if (list.length) groups.push({ icn, title: list.length === 1 ? one : many.replace('#', list.length), list }); };
+    add('camera', 'עץ אחד בלי תמונה:', '# עצים בלי תמונה:', treesWithoutPhoto(s).filter(x => !x.t.ref));
+    // מספר שמופיע ביותר מעץ אחד (גם בתוך טווח כמו 7-9)
+    const byNum = new Map();
+    for (const t of trees) for (const n of new Set(Core.expandNum(t.num) || [])) { if (!byNum.has(n)) byNum.set(n, []); byNum.get(n).push(t); }
+    const dupNums = [...byNum.entries()].filter(([, ts]) => ts.length > 1).sort((a, b) => a[0] - b[0]);
+    const dup = [];
+    for (const [n, ts] of dupNums) for (const t of ts) dup.push({ t, label: String(t.num).trim() === String(n) ? treeLabel(t) : [`${n} (מתוך ${t.num})`, (t.species || '').trim()].filter(Boolean).join(' · ') });
+    add('copy', 'מספר כפול:', 'מספרים כפולים:', dup);
+    const plain = list => list.map(t => ({ t, label: treeLabel(t) }));
+    if (build) {
+      add('list', 'עץ אחד בלי גובה או קוטר:', '# עצים בלי גובה או קוטר:',
+        plain(trees.filter(t => !String(t.height || '').trim() || !String(t.f1 || '').trim())));
+    } else {
+      const notOk = trees.filter(t => !Core.isOk(t));
+      add('list', 'עץ אחד בלי מספר:', '# עצים בלי מספר:', plain(notOk.filter(t => !String(t.num || '').trim())));
+      add('tree', 'עץ אחד בלי מין:', '# עצים בלי מין:', plain(trees.filter(t => !String(t.species || '').trim())));
+      add('info', 'עץ אחד בלי דחיפות:', '# עצים בלי דחיפות:', plain(notOk.filter(t => !String(t.urgency || '').trim())));
+      add('file', 'עץ אחד בלי טיפול או הערה:', '# עצים בלי טיפול או הערה:', plain(notOk.filter(t => !String(t.notes || '').trim())));
+    }
+    return groups;
+  }
   function noPhotoBox(s) {
-    const list = treesWithoutPhoto(s);
-    if (!list.length) return h('div', { class: 'okbox' }, '📷 לכל העצים יש תמונה.');
+    const groups = completenessGroups(s);
+    if (!groups.length) return h('div', { class: 'okbox' }, '✓ כל העצים מלאים: יש תמונה, מספר' + (Construction.isConstruction(s) ? ', גובה וקוטר.' : ', מין, דחיפות וטיפול.'));
     return h('div', { class: 'nophoto-box', role: 'alert' },
-      h('div', { class: 'nophoto-title' }, icon('camera'), list.length === 1 ? 'עץ אחד בלי תמונה:' : `${list.length} עצים בלי תמונה:`),
-      h('div', { class: 'chips' }, list.map(({ t, label }) => h('button', { class: 'chip nophoto-chip', type: 'button', title: 'פתח את העץ',
-        onclick: () => { curTreeId = t.id; go(`#/s/${s.id}/trees/t/${encodeURIComponent(t.id)}`); } }, label))),
-      h('div', { class: 'small muted' }, 'לחיצה על עץ פותחת אותו לצילום. אם לא צילמת בכוונה, אפשר לסיים בכל זאת.'));
+      groups.map(g => h('div', { class: 'stack', style: 'gap:6px' },
+        h('div', { class: 'nophoto-title' }, icon(g.icn), g.title),
+        h('div', { class: 'chips' }, g.list.map(({ t, label }) => h('button', { class: 'chip nophoto-chip', type: 'button', title: 'פתח את העץ',
+          onclick: () => { curTreeId = t.id; go(`#/s/${s.id}/trees/t/${encodeURIComponent(t.id)}`); } }, label))))),
+      h('div', { class: 'small muted' }, 'לחיצה על עץ פותחת אותו להשלמה. אם זה בכוונה, אפשר לסיים בכל זאת.'));
   }
   const NO_SIG = 'אין במכשיר הזה חתימה וחותמת, והדוח ייצא בלעדיהן. מוסיפים בהגדרות, או מתחברים לגוגל דרייב והיא תיטען משם.';
   async function renderExport(body) {
@@ -2935,7 +2967,7 @@
           h('button', { class: 'btn primary big', onclick: async e => {
             const btn = e.currentTarget;
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
-            if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
+            if ((warns.length || completenessGroups(cur).length) && !confirm('יש פרטים חסרים (ראה בתיבה האדומה וב"בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
             cur.finishPending = true; cur.finished = false;
             const sid = cur.id; Sync.preparing.add(sid);
             await saveNow(); Sync.now(); drawSync();
@@ -3106,7 +3138,7 @@
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', onclick: async () => {
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
-            if (warns.length && !confirm('יש פרטים חסרים (ראה "בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
+            if ((warns.length || completenessGroups(cur).length) && !confirm('יש פרטים חסרים (ראה בתיבה האדומה וב"בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
             cur.finishPending = true; cur.finished = false;
             await saveNow(); Sync.finishNow(cur.id); go(`#/s/${cur.id}/export`);
             toast(Sync.state.offline ? 'אין קליטה. יעלה לבד כשהקליטה תחזור' : 'מעלה לגוגל דרייב…', 3000);
