@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.85.0';
+  const APP_VERSION = '1.86.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -3048,6 +3048,22 @@
       pdfStatus.replaceChildren(h('div', {}, `✓ "${f.name}" נשמר בגוגל דרייב בתיקייה "${where.path}".`),
         h('a', { href: 'https://drive.google.com/drive/folders/' + where.folderId, target: '_blank', rel: 'noopener', class: 'btn' }, 'פתח את התיקייה בגוגל דרייב'));
     }, pdfStatus);
+    const yaalaStatus = h('div', { class: 'small muted', role: 'status' });
+    const yaalaAction = (e, drive) => busy(e.currentTarget, async () => {
+      if (drive && !odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
+      await saveNow();
+      const say = m => { yaalaStatus.textContent = m; };
+      say('בודק ייעוד באקסל שבגוגל דרייב…');
+      await Sync.pullStatus(cur).catch(() => null);
+      say('מכין את האקסל ליעלה…');
+      const f = await buildYaalaFile(cur);
+      const skip = f.skipped ? ` ${f.skipped} עצים בלי מין לא נכנסו.` : '';
+      if (!drive) { await deliver(f.blob, f.name); say(`✓ הורד: "${f.name}" (${f.count} עצים).` + skip); return; }
+      say('מעלה לגוגל דרייב…');
+      const where = await Sync.uploadFile(cur, f.name, f.blob);
+      yaalaStatus.replaceChildren(h('div', {}, `✓ "${f.name}" (${f.count} עצים) נשמר בגוגל דרייב בתיקייה "${where.path}".` + skip),
+        h('a', { href: 'https://drive.google.com/drive/folders/' + where.folderId, target: '_blank', rel: 'noopener', class: 'btn' }, 'פתח את התיקייה בגוגל דרייב'));
+    }, yaalaStatus);
     const hm = t => new Date(t).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     body.append(h('div', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
@@ -3113,6 +3129,14 @@
             h('button', { class: 'btn primary big', onclick: e => fullPdfAction(e, false) }, 'הורד PDF מלא'),
             h('button', { class: 'btn big', onclick: e => fullPdfAction(e, true) }, 'שמור PDF בגוגל דרייב')),
           pdfStatus),
+        // אפשרות 4: אקסל לטעינת העצים במערכת יעלה, כמו "טעינת עצים למערכת יעלה" בתוכנה במחשב (1.86.0)
+        h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
+          h('b', {}, '4. אקסל למערכת יעלה'),
+          h('div', { class: 'muted small' }, 'תבנית הטעינה של מערכת יעלה ("טבלת סקר עצים - גרסה 12.25") עם כל העצים: מספר, כמות, מין, גובה, גזעים, ניקוד, אזור שורשים, הערות וייעוד. כמו "טעינת עצים למערכת יעלה" בתוכנה במחשב.'),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary big', onclick: e => yaalaAction(e, false) }, 'הורד אקסל ליעלה'),
+            h('button', { class: 'btn big', onclick: e => yaalaAction(e, true) }, 'שמור בגוגל דרייב')),
+          yaalaStatus),
         h('div', { class: 'row' },
           h('button', { class: 'btn', onclick: () => exportZip(status) }, 'כל התמונות בקובץ ZIP'))),
       cur.plan || cur.trees.some(t => t.px != null) ? h('div', { class: 'card stack' },
@@ -3249,6 +3273,15 @@
     const pdf = await ReportPrint.photosPdf(items, id => photoBlob(s, id), (i, n) => say(`מכין PDF של התמונות… ${i}/${n}`));
     // שם הקובץ לפי ori: "תמונות" ושם הפרויקט (הכתובת של הסקר)
     return { name: safeName(`תמונות - ${s.site || s.project || 'סקר עצים לבנייה'}`) + '.pdf', blob: pdf };
+  }
+
+  // סקר לבנייה: אקסל לטעינה במערכת יעלה (בלי "לא להתייחסות"). השם כמו בתוכנה במחשב: "טעינת עצים <שם הסקר>.xlsx"
+  async function buildYaalaFile(s) {
+    const v = reportView(Object.assign({}, s, { inclRef: false }));
+    const res = await fetch('template/yaala.xlsx');
+    if (!res.ok) throw new Error('לא נמצאה תבנית יעלה');
+    const r = await Construction.buildYaala(new Uint8Array(await res.arrayBuffer()), v);
+    return { blob: new Blob([r.bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), name: 'טעינת עצים ' + fileBase(s) + '.xlsx', count: r.count, skipped: r.skipped };
   }
 
   // סקר לבנייה: דוח PDF מלא (טבלאות + נספח תמונות), באותו שם כמו האקסל

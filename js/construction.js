@@ -658,6 +658,62 @@
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.ms-excel.sheet.macroEnabled.12' });
   }
 
+  // ---------- אקסל לטעינה במערכת יעלה (1.86.0) ----------
+  // כמו "טעינת עצים למערכת יעלה" בתוכנה במחשב (tree_loader.py): הערכים של גיליון "טעינת עצים" (נוסחאות מול גיליון "סקר")
+  // נכתבים לתבנית יעלה (template/yaala.xlsx), גיליון "טבלת סקר עצים - גרסה 12.25", החל משורה 3 (שורה 2 היא שורת ההנחיה).
+  // העמודות: A→A B→B C→C D→E G→G H→H I→I J→J L→L M→M N→N P→P R→R S→S. עץ בלי מין לא נכנס (בתוכנה במחשב הוא עוצר את ההעתקה)
+  const YAALA_SHEET = 'טבלת סקר עצים - גרסה 12.25';
+  const YAALA_FIRST = 3, YAALA_LAST = 1500;
+  function yaalaRow(t, st) {
+    const c = compute(t, st);
+    const qty = z(t.qty);
+    const B = numOrText(t.num);
+    // B2>0 באקסל: מספר חיובי, או טקסט (טקסט תמיד "גדול" ממספר)
+    const bpos = typeof B === 'number' ? B > 0 : B != null;
+    const one = v => (z(v) === 0 ? 1 : Number(v));
+    return {
+      A: qty < 2 ? 'עץ' : 'פוליגון',
+      B,
+      C: qty < 2 ? 1 : qty,
+      E: c.name.trim() ? c.name : null,
+      G: bpos ? one(t.height) : 0,
+      H: bpos ? one(t.f1) : 0,
+      I: z(t.f2), J: z(t.f3),
+      L: one(t.canopy), M: z(t.health), N: one(t.loc),
+      P: !bpos ? 0 : c.O == null ? null : c.O <= 1 ? 1 : c.O,
+      R: (t.notes || '').trim() || null,
+      S: c.status || null,
+    };
+  }
+  function yaalaTrees(survey) {
+    return Core.sortTrees(survey.trees).filter(Core.hasContent);
+  }
+  async function buildYaala(templateBytes, survey) {
+    const zip = await JSZip.loadAsync(templateBytes);
+    const st = settingsOf(survey);
+    // הגיליון לפי השם (לא בהנחה שהוא sheet1)
+    const wbXml = await zip.file('xl/workbook.xml').async('string');
+    const rels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    const sm = new RegExp('<sheet [^>]*name="' + esc(YAALA_SHEET).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*r:id="([^"]+)"').exec(wbXml);
+    if (!sm) throw new Error('בתבנית יעלה אין את הגיליון "' + YAALA_SHEET + '"');
+    const target = new RegExp('<Relationship [^>]*Id="' + sm[1] + '"[^>]*Target="([^"]+)"').exec(rels) || new RegExp('<Relationship [^>]*Target="([^"]+)"[^>]*Id="' + sm[1] + '"').exec(rels);
+    const path = 'xl/' + target[1].replace(/^\/?xl\//, '');
+    const sheet = new RowSheet(await zip.file(path).async('string'));
+    const all = yaalaTrees(survey);
+    const trees = all.filter(t => (t.species || '').trim());
+    const max = YAALA_LAST - YAALA_FIRST + 1;
+    if (trees.length > max) throw new Error(`יש ${trees.length} עצים, ובתבנית יעלה יש מקום ל-${max} בלבד`);
+    trees.forEach((t, i) => {
+      const r = YAALA_FIRST + i, v = yaalaRow(t, st);
+      for (const col of Object.keys(v)) sheet.set(col + r, v[col]);
+    });
+    zip.file(path, sheet.toXml());
+    // חישוב מלא בפתיחה: מין לועזי, ערכיות ושווי בתבנית מחושבים מהערכים שנכתבו
+    zip.file('xl/workbook.xml', wbXml.replace(/<calcPr([^>]*?)\s*\/>/, (m, a) => `<calcPr${a.replace(/\sfullCalcOnLoad="\d"/, '')} fullCalcOnLoad="1"/>`));
+    const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    return { bytes, count: trees.length, skipped: all.length - trees.length };
+  }
+
   // ---------- סנכרון הייעוד עם האקסל שבגוגל דרייב (1.81.0) ----------
   // האקסל אחרי שנשמר באקסל: הגיליון "סקר" לפי השם (לא בהכרח sheet1), מספרים כמספר או כמחרוזת משותפת
   async function surveySheet(zip) {
@@ -743,6 +799,6 @@
 
   root.Construction = {
     TYPES, typeOf, TRANSPLANT, transplantOf, STATUSES, statusOf, autoStatus, manualStatus, validStatus, readStatuses, patchStatuses, dateSerial, markOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
-    compute, category, warnings, buildWorkbook, PHOTO_ASPECT, TREE_ROWS: TREE_ROWS.slice(0, MAX_TREES), MAX_TREES, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
+    compute, category, warnings, buildWorkbook, buildYaala, yaalaRow, PHOTO_ASPECT, TREE_ROWS: TREE_ROWS.slice(0, MAX_TREES), MAX_TREES, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
   };
 })(this);
