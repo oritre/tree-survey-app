@@ -614,14 +614,19 @@
     } catch (_) { return []; }
   }
   // הגיליון עצמו (XML). עמודה G = הייעוד מעמודה BC בגיליון "סקר" לפי מספר העץ, כך שהפקודה ב-BricsCAD קוראת גיליון אחד
-  async function sheetXml(survey) {
+  // עצים (עם מיקום ומספר) ותחומים בקואורדינטות של המדידה (שרטוט על דף: לפי קנה המידה או הכיול), ומקום המספר של כל עץ.
+  // משותף לגיליון "מדידה" ולקובץ הנתונים של BricsCAD (1.95.0)
+  async function placed(survey, keep) {
     const W = (x, y) => world(survey.plan, x, y);
-    // עצים ותחומים בקואורדינטות של המדידה (שרטוט על דף: לפי קנה המידה או הכיול)
-    const trees = root.Core.sortTrees(survey.trees.filter(t => t.px != null && String(t.num || '').trim()))
-      .map(t => { const w = W(t.px, t.py); return Object.assign({}, t, { px: w[0], py: w[1] }); });
+    const trees = root.Core.sortTrees(survey.trees.filter(t => t.px != null && String(t.num || '').trim() && (!keep || keep(t))))
+      .map(t => { const w = W(t.px, t.py); return Object.assign({}, t, { px: w[0], py: w[1], src: t }); });
     const polys = (survey.planPolys || []).filter(p => p.pts && p.pts.length >= 3).map(p => Object.assign({}, p, { pts: p.pts.map(q => W(q[0], q[1])) }));
+    const lab = trees.length ? layoutLabels(trees, await othersFor(survey)) : new Map();
+    return { trees, polys, lab };
+  }
+  async function sheetXml(survey) {
+    const { trees, polys, lab } = await placed(survey);
     if (!trees.length && !polys.length) return null;
-    const lab = layoutLabels(trees, await othersFor(survey));
     const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const col = i => String.fromCharCode(65 + i);
     const tcell = (c, r, v) => v ? `<c r="${c}${r}" t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>` : '';
@@ -743,5 +748,5 @@
     return out.join('\r\n') + '\r\n';
   }
 
-  root.Plan = { markupDxf, ITM, STATUSES, NO_STATUS, statusOf, parseFile, extract, FORMATS, world, fromWorld, upm, calibrate, itmOf, isPaper, surveyorTrees, decodeHeb, ACI, toLL, fromLL, layoutLabels, sheetXml, addSheet, centroid, inside, loadLib };
+  root.Plan = { markupDxf, ITM, STATUSES, NO_STATUS, statusOf, parseFile, extract, FORMATS, world, fromWorld, upm, calibrate, itmOf, isPaper, surveyorTrees, decodeHeb, ACI, toLL, fromLL, layoutLabels, placed, sheetXml, addSheet, centroid, inside, loadLib };
 })(typeof self !== 'undefined' ? self : globalThis);
