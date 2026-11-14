@@ -1702,24 +1702,16 @@
     return parts.join(' · ');
   }
 
-  // קפיצה לעץ ב-BricsCAD (1.87.0): עוזר קטן במחשב (tools/bricscad/oritrees_link.pyw) שולח ל-BricsCAD את
-  // (ts:xlgo "<מספר>") כמו לחיצה כפולה על מספר עץ באקסל. אותו עץ שוב = העותק הבא של בלוק trees.
-  // קודם http://127.0.0.1:47613 (העוזר רץ ברקע, מיידי), ואם הוא לא רץ: הקישור oritrees://go/<מספר>, שמפעיל אותו
-  // (כשנייה) ומשאיר אותו רץ לפעם הבאה. רק במחשב (עכבר), רק בסקר לבנייה
+  // קפיצה לעץ ב-BricsCAD (1.87.0): הקישור oritrees://go/<מספר> מפעיל במחשב את tools/bricscad/oritrees_link.pyw
+  // (נרשם פעם אחת עם --install), ששולח ל-BricsCAD את (ts:xlgo "<מספר>") כמו לחיצה כפולה על מספר עץ באקסל.
+  // אותו עץ שוב = העותק הבא של בלוק trees. כשנייה ללחיצה. רק במחשב (עכבר), רק בסקר לבנייה
   const cadOk = () => Construction.isConstruction(cur) && !!(window.matchMedia && matchMedia('(any-pointer: fine)').matches);
-  async function cadGo(t) {
+  function cadGo(t) {
     const num = String(t.num || '').trim();
     if (!num) { toast('לעץ אין מספר'); return; }
-    const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 8000);
-    try {
-      const r = await fetch('http://127.0.0.1:47613/go/' + encodeURIComponent(num), { cache: 'no-store', signal: ctl.signal, targetAddressSpace: 'loopback' });
-      clearTimeout(tm);
-      if (r.ok) { toast(`עץ ${num} ב-BricsCAD. לחיצה נוספת = העותק הבא בשרטוט`, 2500); return; }
-      toast('BricsCAD לא פתוח'); return;
-    } catch (e) { clearTimeout(tm); }
     const a = h('a', { href: 'oritrees://go/' + encodeURIComponent(num), style: 'display:none' });
     document.body.append(a); a.click(); a.remove();
-    toast(`עץ ${num} נשלח ל-BricsCAD`, 2500);
+    toast(`עץ ${num} נשלח ל-BricsCAD. לחיצה נוספת = העותק הבא בשרטוט`, 2500);
   }
   function cadBtn(t) {
     return h('button', { type: 'button', class: 'btn small cad-go', title: 'הצג את העץ ב-BricsCAD (גם: לחיצה כפולה על העץ ברשימה)', onclick: () => cadGo(t) }, icon('target'), 'הצג ב-BricsCAD');

@@ -5,15 +5,13 @@ tree in the list). This script sends BricsCAD the same thing a double-click on a
 (ts:xlgo "<num>") as a WM_COPYDATA message (BricsCAD has no COM registration on this PC, and unsigned exe/dll files
 are blocked, so the bridge is pythonw). The same tree again = the next copy of the "trees" block (ts:xlgo does that).
 
-Two ways in, the fast one first:
-  1. a small helper that stays running and listens on http://127.0.0.1:47613/go/<num> (instant). It starts at
-     Windows sign-in (HKCU Run) and also by itself after the first link click.
-  2. the link oritrees://go/<num>: Windows starts this script (about 1 s on this PC: starting a process is slow),
-     which jumps and then stays running as the helper, so the next click is instant.
-
-Install once (copies itself to %LOCALAPPDATA%\\OriTrees, registers the link and the sign-in start for this Windows
-user, no admin, and starts the helper):
+Default: the link oritrees://go/<num>. Windows starts this script for each click (about 1 s on this PC: starting
+a process is slow). Install once (copies itself to %LOCALAPPDATA%\\OriTrees and registers the link for this Windows
+user, no admin):
     python.exe oritrees_link.pyw --install
+Optional, for instant jumps (ori chose not to, 2026-11-14): --install --helper also starts a small helper at every
+Windows sign-in, listening on http://127.0.0.1:47613/go/<num> (answers only https://oritre.github.io). The app
+does not call it yet.
 Remove:
     python.exe oritrees_link.pyw --uninstall
 """
@@ -53,7 +51,7 @@ def pythonw():
     return exe[:-10] + 'pythonw.exe' if exe.lower().endswith('python.exe') else exe
 
 
-def install():
+def install(helper=False):
     import shutil
     import winreg
     dst_dir = os.path.join(os.environ['LOCALAPPDATA'], 'OriTrees')
@@ -68,14 +66,16 @@ def install():
         winreg.SetValueEx(k, 'URL Protocol', 0, winreg.REG_SZ, '')
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf'Software\Classes\{SCHEME}\shell\open\command') as k:
         winreg.SetValueEx(k, '', 0, winreg.REG_SZ, cmd)
-    run = f'"{exe}" -I -S "{dst}" --serve'
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\Run') as k:
-        winreg.SetValueEx(k, RUN_NAME, 0, winreg.REG_SZ, run)
-    subprocess.Popen([exe, '-I', '-S', dst, '--serve'], close_fds=True, creationflags=0x08000000)   # CREATE_NO_WINDOW
-    log('installed: ' + cmd + ' | run: ' + run)
     print('link:', cmd)
-    print('sign-in start:', run)
-    print('helper started on http://127.0.0.1:%d' % PORT)
+    log('installed: ' + cmd)
+    if helper:   # only with --install --helper: background helper at every Windows sign-in (instant jumps)
+        run = f'"{exe}" -I -S "{dst}" --serve'
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\Run') as k:
+            winreg.SetValueEx(k, RUN_NAME, 0, winreg.REG_SZ, run)
+        subprocess.Popen([exe, '-I', '-S', dst, '--serve'], close_fds=True, creationflags=0x08000000)   # CREATE_NO_WINDOW
+        log('helper: ' + run)
+        print('sign-in start:', run)
+        print('helper started on http://127.0.0.1:%d' % PORT)
 
 
 def uninstall():
@@ -219,7 +219,7 @@ def main():
         print(__doc__)
         return
     if args[0] == '--install':
-        install()
+        install('--helper' in args)
         return
     if args[0] == '--uninstall':
         uninstall()
@@ -234,7 +234,6 @@ def main():
         go(clean_num(parts[1]))
     else:
         log('unknown link: ' + args[0])
-    serve()   # stay as the helper (returns at once if one already runs), so the next click is instant
 
 
 if __name__ == '__main__':
