@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.92.0';
+  const APP_VERSION = '1.93.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -90,8 +90,18 @@
   let curTreeId = null;
   let tab = 'trees';
   const thumbUrls = new Map();
-  const saveSoon = debounce(() => { if (cur) { DB.putSurvey(cur); Sync.kick(); } }, 400);
-  const saveNow = () => cur && DB.putSurvey(cur);
+  // שמירה בטאבלט שנכשלה (בדרך כלל: אין מקום בזיכרון) לא עוברת בשקט: הודעה בולטת, לכל היותר פעם בדקה
+  let saveErrAt = 0;
+  const saveFailed = err => {
+    console.error(err);
+    if (Date.now() - saveErrAt < 60000) return;
+    saveErrAt = Date.now();
+    const full = err && (err.name === 'QuotaExceededError' || /quota|space/i.test(err.message || ''));
+    toast(full ? '⚠ השמירה בטאבלט נכשלה: אין מספיק מקום. סיים סקרים ישנים (סיום סקר מפנה תמונות) או פנה מקום במכשיר.'
+      : '⚠ השמירה בטאבלט נכשלה: ' + ((err && err.message) || err), 8000);
+  };
+  const saveSoon = debounce(() => { if (cur) { DB.putSurvey(cur).catch(saveFailed); Sync.kick(); } }, 400);
+  const saveNow = () => cur && DB.putSurvey(cur).catch(e => { saveFailed(e); throw e; });
 
   // תמונה מלאה: מהטאבלט, ואם כבר פונתה אחרי "סיום סקר" — מגוגל דרייב
   async function photoBlob(s, id) {
@@ -2476,6 +2486,7 @@
   function captureGps(t, quiet) {
     if (!navigator.geolocation) { toast('אין GPS בדפדפן הזה'); return; }
     t._gpsBusy = true; renderGps(t);
+    const sv = cur; // הסקר של העץ (אם בינתיים עברו לסקר אחר, הנ"צ נשמר בכל זאת בסקר הנכון)
     const started = Date.now();
     const fixes = gw.fixes.filter(p => started - p.timestamp < 3000);
     let done = false, wid = null;
@@ -2488,7 +2499,7 @@
       if (fixes.length) {
         const b = blendFixes(fixes);
         t.lat = b.lat; t.lon = b.lon; t.acc = b.acc; t.gpsTime = b.time; delete t.gpsSrc;
-        saveSoon(); refreshRow(t);
+        if (cur === sv) { saveSoon(); refreshRow(t); } else if (sv && sv.trees.includes(t)) DB.putSurvey(sv).catch(saveFailed);
       }
       renderGps(t);
       gpsWarm(!!cur && tab === 'trees'); // אחרי אישור ההרשאה בלחיצה הראשונה: מכאן ה-GPS נשאר חם
@@ -2559,11 +2570,12 @@
   // השמירות בתור אחת אחרי השנייה, כדי שבכמה תמונות ברצף רק הראשונה תיכנס לדוח
   let photoSaveChain = Promise.resolve();
   function savePhoto(t, processing, strokes) {
-    const run = photoSaveChain.then(() => savePhotoNow(t, processing, strokes));
+    const sv = cur; // הסקר של העץ, כפי שהיה בזמן הצילום
+    const run = photoSaveChain.then(() => savePhotoNow(t, processing, strokes, sv));
     photoSaveChain = run.catch(() => {});
     return run;
   }
-  async function savePhotoNow(t, processing, strokes) {
+  async function savePhotoNow(t, processing, strokes, sv) {
     try {
       const p = await processing;
       let rec = { id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h };
@@ -2582,7 +2594,10 @@
       np.inReport = !group.some(x => !x.fromOld);
       if (np.inReport) group.forEach(x => { x.inReport = false; });
       t.photos.push(np);
-      await saveNow(); // כל תמונה נרשמת בסקר מיד, גם אם האפליקציה תיסגר באמצע
+      // כל תמונה נרשמת בסקר מיד, גם אם האפליקציה תיסגר באמצע. השמירה ממשיכה ברקע אחרי שהמצלמה נסגרת, אז אם בינתיים
+      // יצאו מהסקר (לדף הראשי או לסקר אחר), שומרים את הסקר של העץ ולא את מה שפתוח עכשיו (אחרת התמונה הייתה הולכת לאיבוד)
+      if (!sv || cur === sv) await saveNow();
+      else { await DB.putSurvey(sv); Sync.kick(true); return true; }
       refreshRow(t);
       if (t.id === curTreeId) renderPhotos();
       Sync.kick(true);
