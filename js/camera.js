@@ -238,6 +238,8 @@
             ov.classList.remove('busy');
             ov.classList.add('hidden');
             const kept = await onShot(backup, { better, thumb });
+            // הפריים בגודל מלא כבר הועתק (ההקטנה והעורך מעתיקים אותו מיד כשהם מתחילים): משחררים את הזיכרון שלו
+            if (!better) setTimeout(() => { backup.width = backup.height = 0; }, 3000);
             return after(kept, thumb);
           }
           const blob = fast ? (backup && !(await isBlack(backup)) ? await new Promise(r => backup.toBlob(r, 'image/jpeg', 0.92)) : null)
