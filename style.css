@@ -533,3 +533,7 @@ textarea.doc-text.b { font-weight: 700; }
 .cad-row .status-seg { flex: 1; min-width: 0; }
 .cad-go { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; min-height: 48px; padding: 0 12px; }
 .cad-go svg { width: 18px; height: 18px; }
+/* מסגרת הפוקוס כשנוגעים בתמונה במצלמה */
+.cam-focus { position: fixed; width: 72px; height: 72px; margin: -36px 0 0 -36px; border: 2px solid #ffd400; border-radius: 10px; pointer-events: none; opacity: 0; z-index: 3; }
+.cam-focus.on { animation: camfocus 1.2s ease-out; }
+@keyframes camfocus { 0% { opacity: 1; transform: scale(1.4); } 25% { opacity: 1; transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
