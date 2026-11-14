@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.90.0';
+  const APP_VERSION = '1.91.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -214,10 +214,12 @@
         refreshSuggestions();
       }
       tab = m[2] || 'trees';
+      gpsWarm(tab === 'trees');
       if (m[3]) curTreeId = decodeURIComponent(m[3]);
       if (!cur.trees.find(t => t.id === curTreeId)) curTreeId = (Core.sortTrees(cur.trees)[0] || {}).id || null;
       return renderSurvey();
     }
+    gpsWarm(false);
     await saveNow();
     // יציאה מסקר: נתוני הסקר עולים לענן מיד
     if (cur) Sync.now();
@@ -2422,40 +2424,81 @@
       h('button', { class: 'btn big', disabled: t._gpsBusy ? '' : null, onclick: () => refineOnMap(t) }, has ? '🗺 דייק במפה' : '🗺 סמן במפה'));
   }
 
-  // מאזין עד 8 שניות ולוקח את הקריאה המדויקת ביותר
+  // ---------- GPS ----------
+  // GPS "חם": כל עוד מסך העצים פתוח (והאפליקציה על המסך), המכשיר כבר מאתר ברקע. כך לחיצה על נ"צ לא מחכה
+  // שה-GPS יידלק, ויש כבר כמה מדידות מהשניות האחרונות למיצוע. נכבה ביציאה מהמסך או כשהאפליקציה ברקע (סוללה)
+  const gw = { id: null, fixes: [], subs: new Set() };
+  async function gpsWarm(on) {
+    if (on && document.visibilityState === 'visible' && navigator.geolocation) {
+      if (gw.id != null) return;
+      // רק אם כבר אישרו מיקום: לא מקפיצים בקשת הרשאה רק מפתיחת המסך
+      try { if (navigator.permissions && (await navigator.permissions.query({ name: 'geolocation' })).state !== 'granted') return; } catch (_) {}
+      if (gw.id != null) return;
+      gw.id = navigator.geolocation.watchPosition(pos => {
+        gw.fixes.push(pos);
+        const old = Date.now() - 20000;
+        while (gw.fixes.length && gw.fixes[0].timestamp < old) gw.fixes.shift();
+        for (const f of [...gw.subs]) f(pos);
+      }, () => {}, { enableHighAccuracy: true, maximumAge: 0 });
+    } else if (!on && gw.id != null) {
+      navigator.geolocation.clearWatch(gw.id); gw.id = null; gw.fixes = [];
+    }
+  }
+  document.addEventListener('visibilitychange', () => gpsWarm(!!cur && tab === 'trees' && document.visibilityState === 'visible'));
+  // מיקום מכמה מדידות: ממוצע משוקלל (מדידה מדויקת שוקלת יותר) של המדידות שקרובות בדיוק לטובה ביותר.
+  // כשעומדים במקום, הממוצע מבטל חלק מהקפיצות של ה-GPS ומדויק יותר ממדידה בודדת
+  function blendFixes(fixes) {
+    const bestAcc = Math.min(...fixes.map(p => p.coords.accuracy));
+    const use = fixes.filter(p => p.coords.accuracy <= Math.max(bestAcc * 1.5, bestAcc + 2));
+    let w = 0, lat = 0, lon = 0;
+    for (const p of use) { const k = 1 / Math.max(1, p.coords.accuracy) ** 2; w += k; lat += k * p.coords.latitude; lon += k * p.coords.longitude; }
+    return { lat: lat / w, lon: lon / w, acc: bestAcc, n: use.length, time: Math.max(...use.map(p => p.timestamp)) };
+  }
+
+  // נ"צ לעץ: מדידות מ-3 השניות האחרונות (מה-GPS החם) ומה שמגיע עכשיו. מסיימים מיד כשיש 3 מדידות טובות (עד 6 מ'),
+  // אחרת אחרי 5 שניות עם מה שיש. GPS שרק נדלק: מחכים למדידה הראשונה עד 30 שניות
   function captureGps(t, quiet) {
     if (!navigator.geolocation) { toast('אין GPS בדפדפן הזה'); return; }
     t._gpsBusy = true; renderGps(t);
-    let best = null, done = false;
     const started = Date.now();
+    const fixes = gw.fixes.filter(p => started - p.timestamp < 3000);
+    let done = false, wid = null;
+    const good = () => fixes.filter(p => p.coords.accuracy <= 6).length >= 3;
     const finish = () => {
       if (done) return; done = true;
-      navigator.geolocation.clearWatch(wid);
+      if (wid != null) navigator.geolocation.clearWatch(wid);
+      gw.subs.delete(onFix);
       t._gpsBusy = false;
-      if (best) {
-        t.lat = best.coords.latitude; t.lon = best.coords.longitude; t.acc = best.coords.accuracy; t.gpsTime = best.timestamp;
+      if (fixes.length) {
+        const b = blendFixes(fixes);
+        t.lat = b.lat; t.lon = b.lon; t.acc = b.acc; t.gpsTime = b.time; delete t.gpsSrc;
         saveSoon(); refreshRow(t);
       }
       renderGps(t);
+      gpsWarm(!!cur && tab === 'trees'); // אחרי אישור ההרשאה בלחיצה הראשונה: מכאן ה-GPS נשאר חם
     };
-    const wid = navigator.geolocation.watchPosition(pos => {
-      const first = !best;
-      if (!best || pos.coords.accuracy < best.coords.accuracy) best = pos;
-      if (best.coords.accuracy <= 8) finish();
-      // המיקום הראשון הגיע אחרי 6 שניות: עוד 2 שניות לשיפור הדיוק ומסיימים
-      else if (first && Date.now() - started > 6000) setTimeout(finish, 2000);
-    }, err => {
-      if (!best) {
-        t._gpsBusy = false; renderGps(t); done = true; navigator.geolocation.clearWatch(wid);
-        if (!quiet || err.code === 1) toast(err.code === 1 ? 'צריך לאשר גישה למיקום בדפדפן' : 'לא הצלחתי לקבל מיקום. נסה שוב בשטח פתוח.');
-      }
-    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
-    // אחרי 6 שניות לוקחים את המיקום הטוב ביותר שהתקבל. אם עוד אין אף מיקום (GPS שרק נדלק), ממשיכים לחכות
-    // לראשון במקום לוותר בשקט, עד 30 שניות
-    setTimeout(() => { if (best) finish(); }, 6000);
+    function onFix(pos) {
+      if (done) return;
+      const first = !fixes.length;
+      fixes.push(pos);
+      if (good()) finish();
+      // המדידה הראשונה הגיעה מאוחר (GPS שרק נדלק): עוד 2 שניות לשיפור ומסיימים
+      else if (first && Date.now() - started > 5000) setTimeout(finish, 2000);
+    }
+    if (good()) return finish();
+    if (gw.id != null) gw.subs.add(onFix);
+    else {
+      wid = navigator.geolocation.watchPosition(onFix, err => {
+        if (!fixes.length && !done) {
+          done = true; t._gpsBusy = false; renderGps(t); navigator.geolocation.clearWatch(wid);
+          if (!quiet || err.code === 1) toast(err.code === 1 ? 'צריך לאשר גישה למיקום בדפדפן' : 'לא הצלחתי לקבל מיקום. נסה שוב בשטח פתוח.');
+        }
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+    }
+    setTimeout(() => { if (fixes.length) finish(); }, 5000);
     setTimeout(() => {
       if (done) return;
-      if (!best && !quiet) toast('לא הצלחתי לקבל מיקום. נסה שוב בשטח פתוח.');
+      if (!fixes.length && !quiet) toast('לא הצלחתי לקבל מיקום. נסה שוב בשטח פתוח.');
       finish();
     }, 30000);
   }
