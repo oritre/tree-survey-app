@@ -1011,16 +1011,22 @@
       running = false; state.busy = false; emit();
       if (root.App && root.App.onSynced) root.App.onSynced();
       if (again) kick(true);
-      else if (state.error || state.odPending || state.tgPending) schedule(60000); // ניסיון חוזר בעוד דקה
+      else if (state.error || state.odPending || state.tgPending) {
+        // ניסיון חוזר: אחרי תקלה (למשל קליטה שרק חזרה וחלשה) מהר בהתחלה, 5, 10, 20, 40 שניות ואז כל דקה,
+        // כדי שסקר שהסתיים בלי קליטה יעלה תוך שניות כשהקליטה חוזרת ולא רק אחרי דקה
+        fails = state.error ? fails + 1 : 0;
+        schedule(state.error ? Math.min(60000, 5000 * 2 ** (fails - 1)) : 60000);
+      } else fails = 0;
     }
   }
 
+  let fails = 0; // סבבים רצופים שנגמרו בתקלה
   function schedule(ms) { clearTimeout(timer); timer = setTimeout(run, ms); }
 
   // fast=true אחרי צילום (שולח כמעט מיד), אחרת מחכה שיסיימו להקליד
   function kick(fast) { schedule(fast ? 1500 : 8000); }
 
-  window.addEventListener('online', () => { state.offline = false; kick(true); });
+  window.addEventListener('online', () => { state.offline = false; fails = 0; kick(true); });
   window.addEventListener('offline', () => { state.offline = true; emit(); });
   setInterval(() => { if (!running) run(); }, 3 * 60 * 1000);
 
