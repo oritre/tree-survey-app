@@ -6,7 +6,7 @@ Excel does: (ts:xlgo "<num>") as a WM_COPYDATA message (BricsCAD has no COM regi
 unsigned exe/dll files are blocked, so the bridge is pythonw + a small registry entry).
 The same tree again = the next copy of the "trees" block (ts:xlgo does that).
 
-Install once (registers the oritrees: link for this Windows user, no admin):
+Install once (copies itself to %LOCALAPPDATA%\OriTrees and registers the oritrees: link for this Windows user, no admin):
     pythonw.exe oritrees_link.pyw --install
 Remove:
     pythonw.exe oritrees_link.pyw --uninstall
@@ -39,11 +39,19 @@ def log(msg):
 
 
 def install():
+    """copies this script to %LOCALAPPDATA%\\OriTrees (local disk: starting from Google Drive G: took ~1 s) and
+    registers pythonw -I -S (no site packages / user paths: Python starts in a few tens of ms)"""
+    import shutil
     import winreg
     exe = sys.executable
     if exe.lower().endswith('python.exe'):
         exe = exe[:-10] + 'pythonw.exe'
-    cmd = f'"{exe}" "{os.path.abspath(__file__)}" "%1"'
+    dst_dir = os.path.join(os.environ['LOCALAPPDATA'], 'OriTrees')
+    os.makedirs(dst_dir, exist_ok=True)
+    dst = os.path.join(dst_dir, 'oritrees_link.pyw')
+    if os.path.abspath(__file__).lower() != dst.lower():
+        shutil.copyfile(os.path.abspath(__file__), dst)
+    cmd = f'"{exe}" -I -S "{dst}" "%1"'
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf'Software\Classes\{SCHEME}') as k:
         winreg.SetValueEx(k, '', 0, winreg.REG_SZ, 'URL:Tree survey -> BricsCAD')
         winreg.SetValueEx(k, 'URL Protocol', 0, winreg.REG_SZ, '')
