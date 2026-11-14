@@ -226,7 +226,7 @@
     return {
       add(slot, cell, data, photo) {
         const media = `tree_photo_${slot.index}.jpg`;
-        zip.file('xl/media/' + media, data.bytes || data.blob);
+        zip.file('xl/media/' + media, data.bytes || data.blob, { compression: 'STORE' }); // JPEG: בלי דחיסה נוספת
         const rid = 'rId' + (nextRid++);
         rels = rels.replace('</Relationships>', `<Relationship Id="${rid}" Type="${REL_IMAGE}" Target="../media/${media}"/></Relationships>`);
         anchors.push(picXml(nextId++, rid, 'תמונה ' + slot.index + ' עץ ' + slot.label, cell, anchorFor(cell, data.w || photo.w, data.h || photo.h)));
@@ -250,7 +250,7 @@
       // מחזיר פונקציית תא כמו strCell
       add(slot, data) {
         const media = `tree_photo_${slot.index}.jpg`;
-        zip.file('xl/media/' + media, data.bytes || data.blob);
+        zip.file('xl/media/' + media, data.bytes || data.blob, { compression: 'STORE' }); // JPEG: בלי דחיסה נוספת
         imgs.push(media);
         const vm = imgs.length; // 1-based
         return (ref, s) => `<c r="${ref}"${s ? ` s="${s}"` : ''} t="e" vm="${vm}"><v>#VALUE!</v></c>`;
@@ -413,11 +413,20 @@
       const pages = extraPages(slots.length);
       if (pages) lastRow = addAppendixPages(sheet, pages);
       const cellImgs = await openCellImages(zip);
-      for (const slot of slots) {
+      // התמונות מוכנות 3 קדימה במקביל, ונכנסות לפי הסדר
+      const ahead = new Map(); let nextPre = 0;
+      const photoAt = i => {
+        while (nextPre < slots.length && nextPre <= i + 3) {
+          const k = nextPre++;
+          ahead.set(k, Promise.resolve(getPhoto(slots[k].photo.id, slotAspect(appendixCell(slots[k].index - 1).block))).catch(() => null));
+        }
+        const p = ahead.get(i); ahead.delete(i); return p;
+      };
+      for (const [si, slot] of slots.entries()) {
         const cell = appendixCell(slot.index - 1);
         sheet.setCell(colName(cell.col) + (SLOT_ROWS[cell.block].label + cell.off), valueCell(strings, slot.label));
         // התמונה נחתכת ליחס של התא, כדי שתמלא אותו כמו השאר
-        const data = await getPhoto(slot.photo.id, slotAspect(cell.block));
+        const data = await photoAt(si);
         if (!data) continue;
         sheet.setCell(colName(cell.col) + (SLOT_ROWS[cell.block].img + cell.off), cellImgs.add(slot, data));
         placed.push({ index: slot.index, printed: true });

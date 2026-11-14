@@ -34,7 +34,8 @@
     })), Promise.resolve()));
   }
   const fontBytes = {};
-  const getBytes = u => fontBytes[u] || (fontBytes[u] = fetch(u).then(r => { if (!r.ok) throw new Error(u); return r.arrayBuffer(); }));
+  const getBytes = u => fontBytes[u] || (fontBytes[u] = fetch(u).then(r => { if (!r.ok) throw new Error(u); return r.arrayBuffer(); })
+    .catch(e => { delete fontBytes[u]; throw e; })); // טעינה שנכשלה: מנסים שוב בפעם הבאה
 
   function parseColor(c) {
     const m = /rgba?\(([^)]+)\)/.exec(c || '');

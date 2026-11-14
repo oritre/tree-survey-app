@@ -43,7 +43,10 @@
   }
 
   let layoutP = null;
-  const getLayout = () => layoutP || (layoutP = fetch('template/layout.json').then(r => r.json()));
+  // טעינה שנכשלה (בלי קליטה ובלי עותק במטמון) לא נשמרת: בפעם הבאה מנסים שוב, אחרת ה-PDF נכשל עד שפותחים מחדש את האפליקציה
+  const getLayout = () => layoutP || (layoutP = fetch('template/layout.json')
+    .then(r => { if (!r.ok) throw new Error('לא נמצא מבנה הדוח'); return r.json(); })
+    .catch(e => { layoutP = null; throw e; }));
 
   const colLetter = n => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -384,7 +387,8 @@
   const PX = 96 / 72;
   const dataUrlCache = {};
   const blobToDataUrl = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
-  const urlToDataUrl = u => dataUrlCache[u] || (dataUrlCache[u] = fetch(u).then(r => { if (!r.ok) throw new Error(u); return r.blob(); }).then(blobToDataUrl));
+  const urlToDataUrl = u => dataUrlCache[u] || (dataUrlCache[u] = fetch(u).then(r => { if (!r.ok) throw new Error(u); return r.blob(); }).then(blobToDataUrl)
+    .catch(e => { delete dataUrlCache[u]; throw e; })); // טעינה שנכשלה: מנסים שוב בפעם הבאה
 
   async function fontCss() {
     const faces = [['hebrew', 400], ['latin', 400], ['hebrew', 700], ['latin', 700]];

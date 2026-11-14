@@ -229,7 +229,8 @@
   async function addCellImages(zip, images) {
     if (!images.length) return;
     const base = 2, n = images.length;
-    images.forEach((b, i) => zip.file(`xl/media/survey_photo_${i + 1}.jpg`, b));
+    // JPEG כבר דחוס: נשמר בקובץ כמו שהוא (STORE) בלי לנסות לדחוס שוב, מה שחוסך הרבה זמן בהפקה ובקושי משנה את הגודל
+    images.forEach((b, i) => zip.file(`xl/media/survey_photo_${i + 1}.jpg`, b, { compression: 'STORE' }));
     let rv = await zip.file('xl/richData/rdrichvalue.xml').async('string');
     const baseCount = +/count="(\d+)"/.exec(rv)[1];
     if (baseCount !== base) throw new Error('מבנה התבנית השתנה (richData)');
@@ -577,12 +578,18 @@
         sheet.tail = sheet.tail.replace(/<mergeCells count="\d+">/, () => `<mergeCells count="${(sheet.tail.match(/<mergeCell /g) || []).length}">`);
       }
     }
-    for (const slot of slots) {
+    // התמונות מוכנות (פענוח, חיתוך, דחיסה) 3 קדימה במקביל, ונכנסות לפי הסדר: מהיר יותר מאחת אחרי השנייה
+    const ahead = new Map(); let nextPre = 0;
+    const photoAt = i => {
+      while (nextPre < slots.length && nextPre <= i + 3) { const k = nextPre++; ahead.set(k, Promise.resolve(getPhoto(slots[k].photo.id)).catch(() => null)); }
+      const p = ahead.get(i); ahead.delete(i); return p;
+    };
+    for (const [si, slot] of slots.entries()) {
       const c = embed ? embedCell(slot.index - 1) : SLOT_CELLS[slot.index - 1];
       if (!embed && c.page > avail) break;
       sheet.set(c.label, numOrText(slot.label));
       if (!embed || !getPhoto) continue;
-      const blob = await getPhoto(slot.photo.id);
+      const blob = await photoAt(si);
       if (!blob) continue;
       images.push(blob);
       const vm = 2 + images.length;
