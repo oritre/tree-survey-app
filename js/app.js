@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.91.1';
+  const APP_VERSION = '1.92.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1724,7 +1724,7 @@
     const urgCls = v => v === Core.OK ? 'ok' : v;
     const urg = !Construction.isConstruction(cur) && t.urgency ? ' u-' + urgCls(t.urgency) : '';
     const picked = selMode && selIds.has(t.id);
-    return h('button', { class: 'tree-row' + (!selMode && t.id === curTreeId ? ' on' : '') + (selMode ? ' pick' : '') + (picked ? ' picked' : '') + urg, 'data-id': t.id, 'data-search': `${t.num || ''} ${t.species || ''} ${t.notes || ''}`.toLowerCase(),
+    return h('button', { class: 'tree-row' + (!selMode && t.id === curTreeId ? ' on' : '') + (selMode ? ' pick' : '') + (picked ? ' picked' : '') + urg, 'data-id': t.id, 'data-search': `${t.num || ''} ${t.species || ''} ${t.notes || ''}`.toLowerCase(), 'data-nums': ' ' + (Core.expandNum(t.num) || []).join(' ') + ' ',
       'aria-pressed': selMode ? String(picked) : null, onclick: () => selMode ? togglePick(t.id) : selectTree(t.id),
       ondblclick: () => { if (!selMode && cadOk()) cadGo(t); } },
       h('span', { class: 'n' }, selMode ? h('span', { class: 'pick-box' }, picked ? icon('check') : null) : null, t.num || '—'),
@@ -1745,7 +1745,12 @@
   function applyTreeFilter(list) {
     const q = treeFilter.trim().toLowerCase();
     let shown = 0;
-    for (const r of list.querySelectorAll('.tree-row')) { const ok = !q || r.dataset.search.includes(q); r.classList.toggle('hidden', !ok); if (ok) shown++; }
+    // מספר בלבד: רק העץ עם המספר הזה (גם בתוך טווח כמו 5-7), ולא כל עץ שהמספר מופיע בו (12, 112, "3 ענפים")
+    const numQ = /^\d+$/.test(q);
+    for (const r of list.querySelectorAll('.tree-row')) {
+      const ok = !q || (numQ ? r.dataset.nums.includes(' ' + Number(q) + ' ') : r.dataset.search.includes(q));
+      r.classList.toggle('hidden', !ok); if (ok) shown++;
+    }
     const none = $('.no-match', list.parentNode);
     if (none) none.classList.toggle('hidden', shown > 0 || !q);
   }
@@ -1789,7 +1794,9 @@
     const n = trees.filter(Core.hasContent).length;
     const list = h('div', { class: 'tree-list' }, trees.map(treeRow));
     const search = trees.length > 6 ? h('input', { class: 'in tree-search', type: 'search', value: treeFilter, placeholder: 'סינון: מספר, מין או הערה', 'aria-label': 'סינון העצים',
-      oninput: e => { treeFilter = e.target.value; applyTreeFilter(list); } }) : null;
+      oninput: e => { treeFilter = e.target.value; applyTreeFilter(list); },
+      // Enter: פותח את העץ הראשון שנמצא (קפיצה מהירה לעץ לפי מספר)
+      onkeydown: e => { if (e.key !== 'Enter') return; const r = list.querySelector('.tree-row:not(.hidden)'); if (r) { e.preventDefault(); e.target.blur(); r.click(); } } }) : null;
     if (!search) treeFilter = '';
     pane.replaceChildren(...[
       h('button', { class: 'btn primary big block', onclick: addTree }, icon('plus'), 'עץ חדש'),
@@ -2099,8 +2106,15 @@
       splitWrap.title = multi ? '' : 'פעיל כשמספר העץ הוא טווח, למשל 2-5';
     };
     const numIn = h('input', { class: 'in', value: t.num || '', inputmode: 'text', 'aria-label': 'מספר העץ', placeholder: Core.isOk(t) ? 'תקין, בלי מספר' : '',
-      oninput: e => { t.num = e.target.value; showSplit(); changed(); }, onchange: () => { renderTreeList(); renderPhotos(); } });
-    showSplit();
+      oninput: e => { t.num = e.target.value; showSplit(); showDup(); changed(); }, onchange: () => { renderTreeList(); renderPhotos(); } });
+    // מספר שכבר קיים בעץ אחר: אזהרה מיד מתחת לשדה (לא חוסם, כמו בבדיקת השלמות בסיום הסקר)
+    const dupHint = h('div', { class: 'small', style: 'color:var(--danger);font-weight:700', role: 'status' });
+    const showDup = () => {
+      const mine = new Set(Core.expandNum(t.num) || []);
+      const hit = mine.size ? cur.trees.find(o => o !== t && !o.ref && (Core.expandNum(o.num) || []).some(n => mine.has(n))) : null;
+      dupHint.textContent = hit ? `המספר כבר קיים: עץ ${hit.num}${(hit.species || '').trim() ? ' · ' + hit.species.trim() : ''}` : '';
+    };
+    showSplit(); showDup();
 
     // מין העץ + אורנים
     const pineIn = h('input', { class: 'in', type: 'number', inputmode: 'numeric', min: 0, value: t.pines == null ? '' : t.pines,
@@ -2226,7 +2240,7 @@
             gpsBox),
           photosBox),
         h('div', { class: 'grid2' },
-          h('div', {}, field('מספר העץ', numIn), splitWrap,
+          h('div', {}, field('מספר העץ', numIn), dupHint, splitWrap,
             h('label', { class: 'row', style: 'margin-top:6px;cursor:pointer', title: 'נשמר בסקר לגיבוי. בהפקת דוח שואלים אם לכלול אותו' },
               h('input', { type: 'checkbox', checked: !!t.ref, style: 'width:24px;height:24px', onchange: e => { t.ref = e.target.checked || undefined; const pl = t.polyId && (cur.planPolys || []).find(p => p.id === t.polyId); if (pl) pl.ref = t.ref; changed(); } }),
               h('span', {}, 'לא להתייחסות (גיבוי בלבד)'))),
@@ -2379,6 +2393,7 @@
 
   async function deleteTree() {
     const t = treeById(curTreeId);
+    if (!t) return;
     if (!confirm(`למחוק את עץ ${t.num || ''}${t.photos.length ? ' ואת ' + t.photos.length + ' התמונות שלו' : ''}?`)) return;
     const sorted = Core.sortTrees(cur.trees), idx = sorted.indexOf(t);
     for (const p of t.photos) await DB.deletePhoto(p.id);
