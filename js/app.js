@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.94.0';
+  const APP_VERSION = '1.95.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -291,7 +291,34 @@
   Sync.onChange(() => { const el = $('#syncPill'); if (el) { $('.txt', el).textContent = syncText(); el.className = 'sync-pill icon-btn ' + syncClass(); } });
 
   window.App = {
+    version: APP_VERSION,
     live: id => (cur && cur.id === id ? cur : null),
+    // BricsCAD במחשב (1.95.0, js/cadlink.js): ייעוד שהגיע מ-TREESTABLE לסקר הפתוח
+    cadUpdated(id, changed) {
+      if (!cur || cur.id !== id) return;
+      saveNow();
+      if (tab === 'trees' && $('.list-pane')) {
+        renderTreeList();
+        if (changed.some(t => t.id === curTreeId) && !App.isEditing(id)) renderEditor();
+      }
+      const one = changed.length === 1 ? changed[0] : null;
+      toast(one ? `מ-BricsCAD: עץ ${one.num || ''} ${one.status ? '← ' + one.status : 'בלי ייעוד'}` : `מ-BricsCAD: ${changed.length} ייעודים עודכנו`, 2500);
+    },
+    // ייעוד שנבחר בטבלה שליד BricsCAD
+    cadSetStatus(id, treeId, v) {
+      if (!cur || cur.id !== id) return;
+      const t = treeById(treeId);
+      if (!t) return;
+      t.status = v; t.statusAt = Date.now();
+      saveNow(); Sync.statusChanged(cur);
+      if (tab === 'trees' && $('.list-pane')) { renderTreeList(); if (t.id === curTreeId && !App.isEditing(id)) renderEditor(); }
+    },
+    // עץ שסומן בשרטוט (TREESPICK) או בטבלה שליד: נפתח גם כאן
+    cadPicked(id, treeId, num) {
+      if (!cur || cur.id !== id || tab !== 'trees' || !$('.list-pane') || App.isEditing(id)) return;
+      const t = treeById(treeId) || cur.trees.find(x => String(x.num || '').trim() === num);
+      if (t && t.id !== curTreeId) selectTree(t.id);
+    },
     current: () => cur,
     // רשימות הבחירה הגיעו ממכשיר אחר
     listsUpdated() {
@@ -1725,6 +1752,38 @@
     document.body.append(a); a.click(); a.remove();
     toast(`עץ ${num} נשלח ל-BricsCAD. לחיצה נוספת = העותק הבא בשרטוט`, 2500);
   }
+  // הגדרות: התיקייה במחשב שדרכה האפליקציה ו-BricsCAD מסתנכרנים (רק במחשב עם דפדפן שתומך בזה)
+  function cadCard() {
+    if (!window.CadLink || !CadLink.supported || !(window.matchMedia && matchMedia('(any-pointer: fine)').matches)) return null;
+    const st = CadLink.state();
+    const status = h('div', { class: 'small' }, st.connected ? `✓ מחובר: ${st.folder}` : st.needsClick ? `צריך אישור מחדש לתיקייה ${st.folder} (לחיצה אחת)` : 'לא מחובר');
+    const pick = async () => {
+      try {
+        const name = await CadLink.connect();
+        toast(name === 'סקרי עצים' ? '✓ BricsCAD מחובר' : `✓ מחובר לתיקייה "${name}". מומלץ: G:\\האחסון שלי\\סקרי עצים`, 4000);
+        renderSettings();
+      } catch (e) { if (e.name !== 'AbortError') toast(e.message, 4000); }
+    };
+    return h('div', { class: 'card stack' },
+      h('h2', { style: 'margin:0;font-size:20px' }, 'BricsCAD במחשב'),
+      h('div', { class: 'muted small' }, 'סקר לבנייה מסתנכרן מיד עם השרטוט ועם טבלת העצים ב-BricsCAD, בלי אקסל. בוחרים פעם אחת את התיקייה G:\\האחסון שלי\\סקרי עצים, והאפליקציה שומרת בתיקייה BricsCAD שבתוכה קובץ לכל סקר. ב-BricsCAD: "בחר קובץ" (TREESFILE) ובוחרים את הסקר.'),
+      status,
+      h('div', { class: 'row' },
+        st.needsClick ? h('button', { class: 'btn primary', onclick: async () => { try { await CadLink.reconnect(); renderSettings(); } catch (e) { toast(e.message, 4000); } } }, 'אשר את התיקייה') : null,
+        h('button', { class: 'btn' + (st.connected || st.needsClick ? '' : ' primary'), onclick: pick }, st.connected || st.needsClick ? 'בחר תיקייה אחרת' : 'בחר תיקייה'),
+        st.connected || st.needsClick ? h('button', { class: 'btn', onclick: async () => { await CadLink.disconnect(); renderSettings(); } }, 'נתק') : null));
+  }
+  // טבלת העצים ליד BricsCAD + חיבור התיקייה במחשב (1.95.0, js/cadlink.js)
+  function cadBar() {
+    const st = CadLink.state();
+    return h('div', { class: 'row cad-bar' },
+      h('button', { class: 'btn block', title: 'חלון קטן עם טבלת העצים, לצד השרטוט ב-BricsCAD. מתעדכן מיד בשני הכיוונים', onclick: () => {
+        try { CadLink.openTable(); } catch (e) { toast(e.message, 4000); }
+      } }, icon('list'), 'טבלה ל-BricsCAD'),
+      st.needsClick ? h('button', { class: 'btn primary', title: 'הדפדפן צריך אישור לתיקייה ' + st.folder, onclick: async () => {
+        try { if (await CadLink.reconnect()) { toast('✓ BricsCAD מחובר', 2000); renderTreeList(); } } catch (e) { toast(e.message, 4000); }
+      } }, 'חבר את BricsCAD') : null);
+  }
   function cadBtn(t) {
     return h('button', { type: 'button', class: 'btn small cad-go', title: 'הצג את העץ ב-BricsCAD (גם: לחיצה כפולה על העץ ברשימה)', onclick: () => cadGo(t) }, icon('target'), 'הצג ב-BricsCAD');
   }
@@ -1811,6 +1870,7 @@
     pane.replaceChildren(...[
       h('button', { class: 'btn primary big block', onclick: addTree }, icon('plus'), 'עץ חדש'),
       Construction.isConstruction(cur) ? h('button', { class: 'btn big block', onclick: () => openPlan() }, icon('pin'), cur.plan ? 'מדידה' : 'טען מדידה (DWG / PDF)') : null,
+      cadOk() && window.CadLink && CadLink.supported ? cadBar() : null,
       Construction.isConstruction(cur) || !VOICE_UI ? null : h('button', { class: 'btn big block', onclick: voiceMode }, icon('mic'), 'מצב דיבור'),
       h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > maxTrees(cur) ? ` (בתבנית יש מקום ל-${maxTrees(cur)})` : '')),
         trees.length > 1 && !selMode ? h('button', { class: 'btn small', onclick: () => { saveNow(); selMode = true; selIds = new Set(); renderTreeList(); } }, icon('check'), 'בחירה') : null),
@@ -3852,6 +3912,7 @@
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'עבודה בשטח'),
           inAppCamera, camFast, annotateAfter, shareFiles, field('כיוון המסך באפליקציה', orientSel)),
+        cadCard(),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'רשימות בחירה'),
           h('div', { class: 'muted small' }, 'שורה לכל פריט. ההערות מתחת לשדה ההערות הן רק מה שכתוב כאן (בלי למידה מהסקרים). למיני העצים האפליקציה מוסיפה גם מינים שכבר כתבת בסקרי בטיחות.'),
@@ -4010,6 +4071,7 @@
     if (r) { toast(r.ok ? '✓ מחובר לגוגל דרייב' : 'החיבור לגוגל דרייב נכשל: ' + r.message, 4000); Sync.state.odNeedsLogin = false; }
     route();
     Sync.kick(true);
+    if (window.CadLink) CadLink.init().then(() => { if (cur && tab === 'trees' && $('.list-pane')) renderTreeList(); }).catch(() => {});
     setTimeout(() => { ReportPrint.preloadFonts(); getLayoutWarm(); }, 2000);
   });
   function getLayoutWarm() { fetch('template/layout.json').catch(() => {}); }
