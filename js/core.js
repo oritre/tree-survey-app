@@ -160,10 +160,8 @@
   // המספר הבא לעץ חדש
   function nextNum(trees) {
     let max = 0;
-    for (const t of trees) {
-      const e = expandNum(t.num) || [];
-      for (const n of e) if (n > max) max = n;
-    }
+    // כל מספר שכתוב בשדה, גם סוף של טווח ארוך ("1-100") ורשימה ארוכה, ש-expandNum חותך (מוגבל למספר התמונות)
+    for (const t of trees) for (const m of normNum(t.num).match(/\d+/g) || []) if (+m > max) max = +m;
     return String(max + 1);
   }
 
