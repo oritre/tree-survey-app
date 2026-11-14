@@ -90,7 +90,8 @@
     const c = document.createElement('canvas');
     c.width = img.width; c.height = img.height;
     render(c.getContext('2d'), img, strokes, c.width, c.height);
-    return new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
+    if (img.close) img.close();
+    return new Promise(r => c.toBlob(b => { c.width = c.height = 0; r(b); }, 'image/jpeg', 0.88));
   }
 
   // הקווים עוברים מתמונה ביחס w/h אחד לתמונה ביחס אחר, כשהראשונה היא חיתוך מהמרכז של השנייה
