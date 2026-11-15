@@ -588,3 +588,12 @@ textarea.doc-text.b { font-weight: 700; }
 .wl-table tbody tr.st-done .wl-st, .wl-table tbody tr.st-done .link-btn { color: #1b3d14; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wl-table tbody tr.st-open td { background: #3a3317; } }
 :root[data-theme="dark"] .wl-table tbody tr.st-open td { background: #3a3317; }
+/* מיון וסינון בכותרת (1.96.3) */
+.wl-th { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.wl-fbtn { flex: none; min-width: 30px; height: 28px; border-radius: 6px; border: 1px solid rgba(255,255,255,.55); background: rgba(255,255,255,.15); color: inherit; font-size: 14px; cursor: pointer; padding: 0 5px; }
+.wl-fbtn.on { background: #fff; color: #1f5a24; border-color: #fff; font-weight: 700; }
+.wl-pop { position: fixed; z-index: 80; max-height: min(520px, calc(100vh - 24px)); overflow: auto; box-shadow: var(--shadow-lg); padding: 12px; gap: 8px; }
+.wl-pop .btn { min-height: 40px; }
+.wl-pop-list { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
+.wl-pop-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; cursor: pointer; font-size: 15px; }
+.wl-pop-row input { width: 18px; height: 18px; }

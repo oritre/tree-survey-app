@@ -476,7 +476,60 @@
       return { k: 'open', t: 'בעבודה', d: ui.fmtDate(s.date) };
     };
     let filter = 'all';
+    // מיון וסינון לפי עמודה כמו באקסל (נשמר במכשיר הזה לכל רשימה). '_st' = עמודת הסטטוס
+    const VKEY = 'wlView:' + l.id;
+    const saved = (await DB.getKV(VKEY, null)) || {};
+    const view = { sort: saved.sort || null, filt: Object.fromEntries(Object.entries(saved.filt || {}).map(([k, v]) => [k, new Set(v)])) };
+    const saveView = () => DB.setKV(VKEY, { sort: view.sort, filt: Object.fromEntries(Object.entries(view.filt).map(([k, v]) => [k, [...v]])) }).catch(() => {});
+    const valOf = (r, cid) => cid === '_st' ? stateOf(r).t : clean(r.cells[cid]);
+    const cmp = (a, b) => (a === '') - (b === '') || a.localeCompare(b, 'he', { numeric: true, sensitivity: 'base' });
+    function colMenu(cid, name, btn) {
+      document.querySelectorAll('.wl-pop').forEach(x => x.remove());
+      const rs = l.rows.filter(r => !r.deleted);
+      const vals = [...new Set(rs.map(r => valOf(r, cid)))].sort(cmp);
+      const cur = view.filt[cid];
+      const chosen = new Set(cur ? [...cur] : vals);
+      const listBox = h('div', { class: 'wl-pop-list' });
+      const search = h('input', { class: 'in', type: 'search', placeholder: 'חיפוש', style: 'min-height:40px' });
+      const drawVals = () => {
+        const w = norm(search.value);
+        const vis = vals.filter(v => !w || norm(v).includes(w));
+        const all = h('input', { type: 'checkbox', checked: vis.every(v => chosen.has(v)), onchange: e => { for (const v of vis) e.target.checked ? chosen.add(v) : chosen.delete(v); drawVals(); } });
+        listBox.replaceChildren(h('label', { class: 'wl-pop-row', style: 'font-weight:700' }, all, '(בחר הכל)'),
+          ...vis.map(v => h('label', { class: 'wl-pop-row' }, h('input', { type: 'checkbox', checked: chosen.has(v), onchange: e => { e.target.checked ? chosen.add(v) : chosen.delete(v); } }), v || '(ריקים)')));
+      };
+      search.addEventListener('input', drawVals);
+      drawVals();
+      const done = () => { pop.remove(); document.removeEventListener('pointerdown', outside, true); };
+      const outside = e => { if (!pop.contains(e.target) && e.target !== btn) done(); };
+      const sortBtn = (dir, label) => h('button', { class: 'btn block' + (view.sort && view.sort.col === cid && view.sort.dir === dir ? ' primary' : ''), onclick: () => { view.sort = { col: cid, dir }; saveView(); done(); draw(); } }, label);
+      const pop = h('div', { class: 'wl-pop card stack' },
+        h('b', {}, name),
+        sortBtn(1, '↓ מיון מהקטן לגדול (א→ת)'), sortBtn(-1, '↑ מיון מהגדול לקטן (ת→א)'),
+        search, listBox,
+        h('div', { class: 'row', style: 'gap:6px' },
+          h('button', { class: 'btn primary', onclick: () => {
+            if (vals.every(v => chosen.has(v))) delete view.filt[cid]; else view.filt[cid] = new Set(chosen);
+            saveView(); done(); draw();
+          } }, 'אישור'),
+          h('button', { class: 'btn', onclick: () => { delete view.filt[cid]; if (view.sort && view.sort.col === cid) view.sort = null; saveView(); done(); draw(); } }, 'נקה'),
+          h('button', { class: 'btn', onclick: done }, 'ביטול')));
+      document.body.append(pop);
+      const r = btn.getBoundingClientRect();
+      const w = Math.min(300, window.innerWidth - 16);
+      pop.style.width = w + 'px';
+      pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + 'px';
+      pop.style.top = Math.min(r.bottom + 4, window.innerHeight - 200) + 'px';
+      setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
+    }
+    const headBtn = (cid, name) => {
+      const on = view.filt[cid], so = view.sort && view.sort.col === cid ? view.sort.dir : 0;
+      const b = h('button', { class: 'wl-fbtn' + (on || so ? ' on' : ''), title: 'מיון וסינון', 'aria-label': 'מיון וסינון: ' + name,
+        onclick: e => { e.stopPropagation(); colMenu(cid, name, b); } }, (so === 1 ? '↓' : so === -1 ? '↑' : '') + (on ? '⧩' : '▾'));
+      return b;
+    };
     const q = h('input', { class: 'in', type: 'search', placeholder: 'חיפוש ברשימה', style: 'flex:1;min-width:160px' });
+    const clearBox = h('span');
     const table = h('div', { class: 'wl-wrap' });
     const counts = h('div', { class: 'muted small', role: 'status' });
     const chipsBox = h('div', { class: 'project-chips' });
@@ -488,13 +541,20 @@
       chipsBox.replaceChildren(...[['all', 'הכל'], ['todo', 'טרם נפתחו'], ['open', 'בעבודה'], ['done', 'הסתיימו']].map(([k, t]) =>
         h('button', { class: 'chip' + (filter === k ? ' on' : ''), onclick: () => { filter = k; draw(); } }, `${t} (${n[k]})`)));
       const words = norm(q.value).split(' ').filter(Boolean);
-      const shown = rs.filter(r => (filter === 'all' || stateOf(r).k === filter) && words.every(w => norm(Object.values(r.cells).join(' ')).includes(w)));
+      const shown = rs.filter(r => (filter === 'all' || stateOf(r).k === filter) && words.every(w => norm(Object.values(r.cells).join(' ')).includes(w))
+        && Object.entries(view.filt).every(([cid, set]) => (cid !== '_st' && !l.cols.some(c => c.id === cid)) || set.has(valOf(r, cid))));
+      if (view.sort && (view.sort.col === '_st' || l.cols.some(c => c.id === view.sort.col))) {
+        const { col, dir } = view.sort;
+        shown.sort((a, b) => { const x = valOf(a, col), y = valOf(b, col); return (x === '') - (y === '') || dir * cmp(x, y); });
+      }
+      const active = Object.keys(view.filt).length || view.sort;
+      clearBox.replaceChildren(active ? h('button', { class: 'btn', onclick: () => { view.filt = {}; view.sort = null; saveView(); draw(); } }, '✕ נקה מיון וסינון') : '');
       counts.textContent = shown.length === rs.length ? `${rs.length} שורות` : `${shown.length} מתוך ${rs.length} שורות`;
       // רוחב כל עמודה לפי הטקסט הארוך בה (בגבולות), כדי שכתובת שלמה תיראה בלי לגלול בתוך התא
       const width = new Map(l.cols.map(c => [c.id, Math.min(38, Math.max(8, c.name.length, ...rs.map(r => (r.cells[c.id] || '').length)) + 2)]));
       const mapped = new Map(Object.entries(l.map || {}).filter(([k, m]) => m.col && fieldsOf(l).some(f => f.key === k)).map(([k, m]) => [m.col, FIELDS.find(f => f.key === k).label]));
       table.replaceChildren(h('table', { class: 'wl-table' },
-        h('thead', {}, h('tr', {}, h('th', { class: 'wl-act' }, 'סקר'), ...l.cols.map(c => h('th', {}, c.name, mapped.has(c.id) ? h('div', { class: 'wl-tag' }, '← ' + mapped.get(c.id)) : null)), h('th', {}))),
+        h('thead', {}, h('tr', {}, h('th', { class: 'wl-act' }, h('div', { class: 'wl-th' }, h('span', {}, 'סקר'), headBtn('_st', 'סטטוס הסקר'))), ...l.cols.map(c => h('th', {}, h('div', { class: 'wl-th' }, h('span', {}, c.name), headBtn(c.id, c.name)), mapped.has(c.id) ? h('div', { class: 'wl-tag' }, '← ' + mapped.get(c.id)) : null)), h('th', {}))),
         h('tbody', {}, shown.map(r => {
           const st = stateOf(r);
           return h('tr', { class: 'st-' + st.k },
@@ -522,7 +582,7 @@
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, q,
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/setup') }, ui.icon('gear'), 'שיוך עמודות והגדרות'),
           h('button', { class: 'btn', onclick: () => { l.rows.push({ id: uid(), cells: {}, u: Date.now() }); save(l); filter = 'all'; q.value = ''; draw(); const ins = table.querySelectorAll('tbody tr:last-child input'); if (ins[0]) ins[0].focus(); } }, '➕ שורה'),
-          h('button', { class: 'btn', onclick: exportXlsx }, '⬇ אקסל')),
+          h('button', { class: 'btn', onclick: exportXlsx }, '⬇ אקסל'), clearBox),
         chipsBox, counts, table));
     draw();
     // סקרים שנפתחו במכשיר אחר: הסטטוס מהאינדקס בענן
