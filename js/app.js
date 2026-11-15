@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.96.3';
+  const APP_VERSION = '1.97.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -346,6 +346,7 @@
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
     ui: { h, icon, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, shareName, today, fmtDate,
       app: () => $('#app'), composeSite: s => composeSite(s), pathOf: f => pathOf(f),
+      leaflet: () => loadLeaflet(), mapLayers: () => LAYERS,
       // עבודה לפי רשימה (js/worklists.js): apply(s) מכניס את פרטי השורה לסקר החדש לפני השמירה
       lists: {
         async blank(type, apply) {
