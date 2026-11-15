@@ -597,3 +597,18 @@ textarea.doc-text.b { font-weight: 700; }
 .wl-pop-list { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
 .wl-pop-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; cursor: pointer; font-size: 15px; }
 .wl-pop-row input { width: 18px; height: 18px; }
+/* מסלול נסיעה (1.97.0) */
+.wl-route { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 14px; align-items: start; }
+.wl-map { height: calc(100vh - 110px); min-height: 320px; border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden; position: sticky; top: 70px; }
+@media (max-width: 860px) { .wl-route { grid-template-columns: 1fr; } .wl-map { height: 46vh; position: static; } }
+.wl-stop { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.wl-stop.done { background: #92d050; color: #000; }
+.wl-stop.done .muted { color: #1b3d14; }
+.wl-stop.out { background: var(--surface-2); }
+.wl-rnum { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 30px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-weight: 800; font-size: 15px; margin: 0 auto 4px; }
+.wl-pin { display: flex !important; align-items: center; justify-content: center; border-radius: 999px; background: #2e6b33; color: #fff; font-weight: 800; font-size: 15px; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45); }
+.wl-pin.done { background: #4f9a1c; }
+.wl-pin.approx { background: #b26a00; }
+.wl-sec > summary { cursor: pointer; font-weight: 700; font-size: 17px; padding: 8px 2px; color: var(--muted); }
+.wl-sec[open] > summary { margin-bottom: 8px; }
+.wl-lcard.fin { opacity: .85; }

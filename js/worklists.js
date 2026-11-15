@@ -55,7 +55,7 @@
   function mergeList(a, b) {
     if (!a) return b; if (!b) return a;
     const [n, o] = (b.updated || 0) > (a.updated || 0) ? [b, a] : [a, b];
-    if (n.deleted || o.deleted) return Object.assign({}, n, { deleted: n.deleted || o.deleted, updated: Math.max(n.updated || 0, o.updated || 0) });
+    if (n.deleted) return n; // מחיקה שבוטלה (שמירה חדשה יותר בלי deleted) מחזירה את הרשימה
     const rows = new Map(o.rows.map(r => [r.id, r]));
     for (const r of n.rows) { const x = rows.get(r.id); rows.set(r.id, !x || (r.u || 0) >= (x.u || 0) ? r : x); }
     const order = [...n.rows.map(r => r.id), ...o.rows.map(r => r.id).filter(id => !n.rows.some(r => r.id === id))];
@@ -340,7 +340,7 @@
     if (id) {
       const l = await byId(id);
       if (!l) { U().go('#/lists'); return; }
-      return parts[3] === 'setup' ? renderSetup(l) : renderList(l);
+      return parts[3] === 'setup' ? renderSetup(l) : parts[3] === 'route' ? renderRoute(l) : renderList(l);
     }
     return renderLists();
   }
@@ -358,21 +358,51 @@
       if (f) await importFile(f);
     };
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
+    const active = lists.filter(l => !l.finished && !l.offHome), finished = lists.filter(l => l.finished), hidden = lists.filter(l => !l.finished && l.offHome);
+    // כמו בסקרים: סיום רשימה, הסרה מהמסך (בלי מחיקה), החזרה ומחיקה (עם ביטול)
+    const act = (label, title, fn, cls) => h('button', { class: 'btn ' + (cls || ''), title, onclick: e => { e.stopPropagation(); fn(); }, onkeydown: e => e.stopPropagation() }, label);
+    const card = l => {
+      const rs = l.rows.filter(r => !r.deleted);
+      const doneN = rs.filter(r => { const s = r.sid && local.get(r.sid); return s && (s.finished || s.finishPending); }).length;
+      const allDone = rs.length && doneN === rs.length;
+      return h('div', { class: 'card survey-item wl-lcard' + (l.finished ? ' fin' : ''), role: 'button', tabindex: 0, onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id)),
+        onkeydown: e => { if (e.key === 'Enter') ui.go('#/lists/' + encodeURIComponent(l.id)); } },
+        h('div', { style: 'flex:1;min-width:0' },
+          h('div', { class: 't' }, l.name || 'רשימה'),
+          h('div', { class: 'muted small' }, [l.project ? 'פרויקט ' + l.project : null, `${rs.length} מוסדות`, `${rs.filter(r => r.sid).length} נפתחו`, doneN ? `✓ ${doneN} הסתיימו` : null, l.finished ? 'הרשימה הסתיימה ' + new Date(l.finished).toLocaleDateString('he-IL') : null].filter(Boolean).join(' · ')),
+          allDone && !l.finished ? h('div', { class: 'small', style: 'font-weight:700;color:var(--accent);margin-top:4px' }, '✓ כל המוסדות ברשימה הסתיימו') : null,
+          h('div', { class: 'row', style: 'gap:6px;margin-top:8px;flex-wrap:wrap' },
+            l.finished || l.offHome
+              ? act('↩ החזר לפעילות', 'החזר לרשימות הפעילות', () => setState(l, { finished: null, offHome: null }), 'primary')
+              : [act('✓ סיום רשימה', 'הרשימה עוברת ל"רשימות שהסתיימו"', () => setState(l, { finished: Date.now() }), allDone ? 'primary' : ''),
+                act('הסר מהמסך', 'הרשימה נשמרת ואפשר להחזיר אותה', () => setState(l, { offHome: Date.now() }))],
+            act('🗑 מחק', 'מחיקת הרשימה (הסקרים לא נמחקים)', () => removeList(l), 'danger'))),
+        h('span', { class: 'arrow', 'aria-hidden': 'true' }, '‹'));
+    };
+    async function setState(l, ch) {
+      for (const [k, v] of Object.entries(ch)) { if (v == null) delete l[k]; else l[k] = v; }
+      await save(l);
+      ui.toast(ch.finished ? 'הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"' : ch.offHome ? 'הרשימה הוסרה מהמסך ולא נמחקה' : 'הרשימה חזרה לפעילות', 3500,
+        ch.finished || ch.offHome ? 'בטל' : null, () => setState(l, { finished: null, offHome: null }));
+      renderLists();
+    }
+    async function removeList(l) {
+      if (!confirm(`למחוק את הרשימה "${l.name}"? הסקרים שנפתחו ממנה לא נמחקים.`)) return;
+      const copy = JSON.parse(JSON.stringify(l));
+      l.deleted = Date.now(); await save(l);
+      ui.toast('הרשימה נמחקה', 6000, 'בטל', async () => { Object.assign(l, copy); delete l.deleted; await save(l); renderLists(); });
+      renderLists();
+    }
     ui.app().replaceChildren(ui.bar('עבודה לפי רשימה', '#/'),
       h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
         h('div', { class: 'card stack' },
           h('div', { class: 'small' }, 'רשימת מוסדות מאקסל (למשל רשימת המעונות מהלקוח): אפשר לערוך את התאים כאן, לבחור איזו עמודה היא הכתובת, העיר, סמל המוסד והמנהל/ת, ולפתוח סקר מכל שורה. לפני הפתיחה האפליקציה מחפשת סקר קודם באותו מקום (גם בארכיון בגוגל דרייב), כדי להתחיל מהסקר של השנה שעברה עם העצים והתמונות.'),
           h('button', { class: 'btn primary big', onclick: () => pick.click() }, '📥 ייבוא רשימה מאקסל'), pick,
           h('div', { class: 'muted small', style: 'text-align:center' }, 'במחשב אפשר גם לגרור את קובץ האקסל לכאן')),
-        lists.length ? lists.map(l => {
-          const rs = l.rows.filter(r => !r.deleted);
-          const st = rs.map(r => r.sid && local.get(r.sid)).filter(Boolean);
-          return h('div', { class: 'card survey-item', role: 'button', tabindex: 0, onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id)) },
-            h('div', { style: 'flex:1;min-width:0' },
-              h('div', { class: 't' }, l.name || 'רשימה'),
-              h('div', { class: 'muted small' }, [l.project ? 'פרויקט ' + l.project : null, `${rs.length} שורות`, `${rs.filter(r => r.sid).length} נפתחו`, st.filter(s => s.finished || s.finishPending).length ? `✓ ${st.filter(s => s.finished || s.finishPending).length} הסתיימו` : null].filter(Boolean).join(' · '))),
-            h('span', { class: 'arrow', 'aria-hidden': 'true' }, '‹'));
-        }) : h('div', { class: 'empty' }, ui.icon('list'), 'עוד אין רשימות. ייבא קובץ אקסל של רשימת מוסדות.')));
+        lists.length ? null : h('div', { class: 'empty' }, ui.icon('list'), 'עוד אין רשימות. ייבא קובץ אקסל של רשימת מוסדות.'),
+        active.map(card),
+        finished.length ? h('details', { class: 'wl-sec' }, h('summary', {}, `רשימות שהסתיימו (${finished.length})`), h('div', { class: 'stack' }, finished.map(card))) : null,
+        hidden.length ? h('details', { class: 'wl-sec' }, h('summary', {}, `הוסרו מהמסך (${hidden.length}), לא נמחקו`), h('div', { class: 'stack' }, hidden.map(card))) : null));
     syncThen(renderLists);
   }
 
@@ -481,7 +511,7 @@
     const saved = (await DB.getKV(VKEY, null)) || {};
     const view = { sort: saved.sort || null, filt: Object.fromEntries(Object.entries(saved.filt || {}).map(([k, v]) => [k, new Set(v)])) };
     const saveView = () => DB.setKV(VKEY, { sort: view.sort, filt: Object.fromEntries(Object.entries(view.filt).map(([k, v]) => [k, [...v]])) }).catch(() => {});
-    const valOf = (r, cid) => cid === '_st' ? stateOf(r).t : clean(r.cells[cid]);
+    const valOf = (r, cid) => cid === '_st' ? stateOf(r).t : cid === '_route' ? ((l.route || []).indexOf(r.id) + 1 ? String((l.route || []).indexOf(r.id) + 1) : '') : clean(r.cells[cid]);
     const cmp = (a, b) => (a === '') - (b === '') || a.localeCompare(b, 'he', { numeric: true, sensitivity: 'base' });
     function colMenu(cid, name, btn) {
       document.querySelectorAll('.wl-pop').forEach(x => x.remove());
@@ -543,7 +573,7 @@
       const words = norm(q.value).split(' ').filter(Boolean);
       const shown = rs.filter(r => (filter === 'all' || stateOf(r).k === filter) && words.every(w => norm(Object.values(r.cells).join(' ')).includes(w))
         && Object.entries(view.filt).every(([cid, set]) => (cid !== '_st' && !l.cols.some(c => c.id === cid)) || set.has(valOf(r, cid))));
-      if (view.sort && (view.sort.col === '_st' || l.cols.some(c => c.id === view.sort.col))) {
+      if (view.sort && (view.sort.col === '_st' || view.sort.col === '_route' || l.cols.some(c => c.id === view.sort.col))) {
         const { col, dir } = view.sort;
         shown.sort((a, b) => { const x = valOf(a, col), y = valOf(b, col); return (x === '') - (y === '') || dir * cmp(x, y); });
       }
@@ -559,6 +589,7 @@
           const st = stateOf(r);
           return h('tr', { class: 'st-' + st.k },
             h('td', { class: 'wl-act' },
+              (l.route || []).includes(r.id) ? h('div', { class: 'wl-rnum', title: 'מספר במסלול' }, String(l.route.indexOf(r.id) + 1)) : null,
               h('button', { class: 'btn ' + (st.k === 'todo' ? 'primary' : ''), onclick: () => openRow(l, r) }, st.k === 'todo' ? 'פתח סקר' : 'פתח'),
               h('div', { class: 'wl-badge ' + st.k }, st.t), st.d ? h('div', { class: 'wl-st small' }, st.d) : null,
               r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null),
@@ -582,12 +613,224 @@
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, q,
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/setup') }, ui.icon('gear'), 'שיוך עמודות והגדרות'),
           h('button', { class: 'btn', onclick: () => { l.rows.push({ id: uid(), cells: {}, u: Date.now() }); save(l); filter = 'all'; q.value = ''; draw(); const ins = table.querySelectorAll('tbody tr:last-child input'); if (ins[0]) ins[0].focus(); } }, '➕ שורה'),
-          h('button', { class: 'btn', onclick: exportXlsx }, '⬇ אקסל'), clearBox),
+          h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/route') }, '🗺 מסלול ומפה'),
+          h('button', { class: 'btn', onclick: exportXlsx }, '⬇ אקסל'),
+          l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox),
+        l.finished ? h('div', { class: 'card row', style: 'gap:10px;align-items:center;background:var(--accent-soft)' }, h('b', { style: 'flex:1' }, '✓ הרשימה הסתיימה ' + new Date(l.finished).toLocaleDateString('he-IL')),
+          h('button', { class: 'btn', onclick: async () => { delete l.finished; delete l.offHome; await save(l); renderList(l); } }, '↩ החזר לפעילות')) : null,
         chipsBox, counts, table));
     draw();
     // סקרים שנפתחו במכשיר אחר: הסטטוס מהאינדקס בענן
     if (navigator.onLine !== false && await OD.connected()) Sync.cloudIndex().then(list => { idx = new Map(list.map(e => [e.id, e])); if (!table.contains(document.activeElement)) draw(); }).catch(() => {});
     syncThen(async () => { const n = await byId(l.id); if (n) { Object.assign(l, n); draw(); } else ui.go('#/lists'); });
+  }
+
+
+  // ---------- מסלול נסיעה (1.97.0): מפה עם המוסדות ממוספרים, סידור אוטומטי (הדרך הקצרה) או ידני, ופתיחה בגוגל מפות / וייז ----------
+  // הכתובת לחיפוש במפה: הרחוב והמספר בלבד ("שכ' טירת צבי רח' חנה סנש 6" -> "חנה סנש 6"), והעיר
+  function geoStreet(street) {
+    let st = clean(street);
+    const parts = st.split(/רח(?:וב|['׳])\s*/);
+    if (parts.length > 1) st = parts[parts.length - 1];
+    st = st.split(',').map(clean).find(x => /\d/.test(x)) || st.split(',')[0];
+    const m = /^(.*?\d+)/.exec(st);
+    return clean(m ? m[1] : st);
+  }
+  const NOMI = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=il&accept-language=he&q=';
+  let lastGeo = 0;
+  async function nominatim(q) {
+    const wait = 1100 - (Date.now() - lastGeo); // לכל היותר בקשה אחת בשנייה (מדיניות השירות)
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    lastGeo = Date.now();
+    const res = await fetch(NOMI + encodeURIComponent(q));
+    if (!res.ok) throw new Error('שירות המפה לא זמין (' + res.status + ')');
+    const j = await res.json();
+    return j && j[0] ? { lat: +j[0].lat, lon: +j[0].lon } : null;
+  }
+  // מיקום לשורה: נ"צ של עצים בסקר המקושר, אחרת חיפוש הכתובת (נשמר בשורה, ומתחדש כשהכתובת משתנה)
+  async function locate(l, r, local) {
+    const s = r.sid && local.get(r.sid);
+    const pts = s ? s.trees.filter(t => typeof t.lat === 'number' && typeof t.lon === 'number') : [];
+    if (pts.length) return { lat: pts.reduce((a, t) => a + t.lat, 0) / pts.length, lon: pts.reduce((a, t) => a + t.lon, 0) / pts.length, src: 'gps' };
+    const v = valuesOf(l, r);
+    const st = geoStreet(v.street), city = clean(v.city);
+    const key = st + '|' + city;
+    if (r.geo && r.geo.key === key) return r.geo;
+    if (!st && !city) return null;
+    let g = null, approx = false;
+    if (st && city) g = await nominatim(st + ', ' + city);
+    if (!g && st && city) { const w = st.replace(/\s*\d+\s*$/, ''); if (w && w !== st) g = await nominatim(w + ', ' + city); }
+    if (!g && city) { g = await nominatim(city); approx = true; }
+    if (!g && st && !city) g = await nominatim(st);
+    if (!g) return null;
+    r.geo = { lat: g.lat, lon: g.lon, key, approx };
+    return r.geo;
+  }
+  const rad = d => d * Math.PI / 180;
+  function km(a, b) {
+    const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+    const x = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+    return 12742 * Math.asin(Math.sqrt(x));
+  }
+  // הדרך הקצרה (בקו אווירי) שעוברת בכל הנקודות: שכן קרוב מכל נקודת התחלה + שיפור 2-opt. start: נקודה קבועה בהתחלה (המיקום שלי)
+  function bestOrder(pts, start) {
+    const n = pts.length;
+    if (n < 2) return pts.map((_, i) => i);
+    const d = (i, j) => km(pts[i], pts[j]);
+    const len = o => (start ? km(start, pts[o[0]]) : 0) + o.slice(1).reduce((a, x, i) => a + d(o[i], x), 0);
+    const improve = o => {
+      let better = true;
+      while (better) {
+        better = false;
+        for (let i = 0; i < n - 1; i++) for (let k = i + 1; k < n; k++) {
+          const nw = [...o.slice(0, i), ...o.slice(i, k + 1).reverse(), ...o.slice(k + 1)];
+          if (len(nw) < len(o) - 1e-9) { o = nw; better = true; }
+        }
+      }
+      return o;
+    };
+    let best = null;
+    const starts = start ? [-1] : pts.map((_, i) => i);
+    for (const s0 of starts) {
+      const left = new Set(pts.map((_, i) => i));
+      const o = [];
+      let cur = s0 >= 0 ? s0 : null;
+      if (cur != null) { o.push(cur); left.delete(cur); }
+      while (left.size) {
+        const from = cur == null ? start : pts[cur];
+        let bi = -1, bd = Infinity;
+        for (const j of left) { const x = km(from, pts[j]); if (x < bd) { bd = x; bi = j; } }
+        o.push(bi); left.delete(bi); cur = bi;
+      }
+      const im = improve(o);
+      if (!best || len(im) < len(best)) best = im;
+    }
+    // בלי נקודת התחלה: מצפון לדרום
+    if (!start && pts[best[0]].lat < pts[best[n - 1]].lat) best.reverse();
+    return best;
+  }
+
+  async function renderRoute(l) {
+    const ui = U(), { h } = ui;
+    const back = '#/lists/' + encodeURIComponent(l.id);
+    const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
+    const live = () => l.rows.filter(r => !r.deleted);
+    const done = r => { const s = r.sid && local.get(r.sid); return !!(s && (s.finished || s.finishPending)); };
+    if (!Array.isArray(l.route) || !l.route.length) l.route = live().filter(r => !done(r)).map(r => r.id);
+    l.route = l.route.filter(id => live().some(r => r.id === id));
+    const nameCol = l.cols.find(c => /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר)/.test(c.name)) || null;
+    const label = r => { const v = valuesOf(l, r); return { name: (nameCol && clean(r.cells[nameCol.id])) || v.siteName || 'שורה', addr: [geoStreet(v.street), v.city].filter(Boolean).join(', ') }; };
+    const geo = new Map();
+    const status = h('div', { class: 'muted small', role: 'status' });
+    const listBox = h('div', { class: 'stack wl-route-list' });
+    const outBox = h('div', { class: 'stack' });
+    const mapEl = h('div', { class: 'wl-map' });
+    const fromMe = h('input', { type: 'checkbox' });
+    const linksBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
+    let map = null, layer = null;
+    const persist = () => save(l);
+    const navUrl = r => { const g = geo.get(r.id), lb = label(r); return g && !g.approx ? `https://waze.com/ul?ll=${g.lat},${g.lon}&navigate=yes` : 'https://waze.com/ul?q=' + encodeURIComponent(lb.addr) + '&navigate=yes'; };
+    const stopOf = r => { const g = geo.get(r.id); return g && !g.approx ? `${g.lat.toFixed(6)},${g.lon.toFixed(6)}` : label(r).addr; };
+    // גוגל מפות: עד 10 תחנות בקישור, ולכן מסלול ארוך מתחלק לכמה קישורים (כל חלק מתחיל איפה שהקודם נגמר)
+    function gmapsLinks() {
+      const rs = l.route.map(id => l.rows.find(r => r.id === id)).filter(Boolean);
+      const stops = rs.map(stopOf);
+      const out = [];
+      for (let i = 0; i < stops.length - 1 || (i === 0 && stops.length === 1); i += 9) {
+        const part = stops.slice(i, i + 10);
+        if (part.length === 1) { out.push('https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + encodeURIComponent(part[0])); break; }
+        out.push('https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=' + encodeURIComponent(part[0]) + '&destination=' + encodeURIComponent(part[part.length - 1])
+          + (part.length > 2 ? '&waypoints=' + encodeURIComponent(part.slice(1, -1).join('|')) : ''));
+      }
+      return out;
+    }
+    function drawMap() {
+      if (!map || !window.L) return;
+      if (layer) layer.remove();
+      layer = L.layerGroup().addTo(map);
+      const ll = [];
+      l.route.forEach((id, i) => {
+        const r = l.rows.find(x => x.id === id), g = geo.get(id);
+        if (!r || !g) return;
+        const lb = label(r);
+        const icon = L.divIcon({ className: 'wl-pin' + (done(r) ? ' done' : '') + (g.approx ? ' approx' : ''), html: String(i + 1), iconSize: [30, 30], iconAnchor: [15, 15] });
+        L.marker([g.lat, g.lon], { icon }).addTo(layer).bindPopup(`<b>${i + 1}. ${lb.name.replace(/</g, '&lt;')}</b><br>${lb.addr.replace(/</g, '&lt;')}${g.approx ? '<br><i>מיקום משוער (מרכז העיר)</i>' : ''}<br><a href="${navUrl(r)}" target="_blank" rel="noopener">נווט בוויז</a>`);
+        ll.push([g.lat, g.lon]);
+      });
+      if (ll.length > 1) L.polyline(ll, { color: '#2e6b33', weight: 3, opacity: .7, dashArray: '6 6' }).addTo(layer);
+      if (ll.length) map.fitBounds(L.latLngBounds(ll).pad(0.15), { maxZoom: 15 });
+    }
+    function drawList() {
+      const idx = new Map(l.route.map((id, i) => [id, i]));
+      let tot = 0, prev = null;
+      for (const id of l.route) { const g = geo.get(id); if (g && prev) tot += km(prev, g); if (g) prev = g; }
+      listBox.replaceChildren(...l.route.map((id, i) => {
+        const r = l.rows.find(x => x.id === id); if (!r) return null;
+        const lb = label(r), g = geo.get(id);
+        const move = dlt => { const j = i + dlt; if (j < 0 || j >= l.route.length) return; [l.route[i], l.route[j]] = [l.route[j], l.route[i]]; persist(); redraw(); };
+        return h('div', { class: 'wl-stop' + (done(r) ? ' done' : '') },
+          h('span', { class: 'wl-rnum' }, String(i + 1)),
+          h('div', { style: 'flex:1;min-width:0' }, h('b', {}, lb.name), done(r) ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הסתיים') : null,
+            h('div', { class: 'muted small' }, lb.addr + (g ? (g.approx ? ' · מיקום משוער' : '') : geo.has(id) ? '' : ' · לא נמצא במפה'))),
+          h('button', { class: 'icon-btn', title: 'למעלה', 'aria-label': 'הזז למעלה', disabled: i === 0 ? true : null, onclick: () => move(-1) }, '↑'),
+          h('button', { class: 'icon-btn', title: 'למטה', 'aria-label': 'הזז למטה', disabled: i === l.route.length - 1 ? true : null, onclick: () => move(1) }, '↓'),
+          h('a', { class: 'btn', href: navUrl(r), target: '_blank', rel: 'noopener' }, 'וייז'),
+          h('button', { class: 'icon-btn', title: 'הוצא מהמסלול', 'aria-label': 'הוצא מהמסלול', onclick: () => { l.route.splice(i, 1); persist(); redraw(); } }, '✕'));
+      }));
+      const out = live().filter(r => !idx.has(r.id));
+      outBox.replaceChildren(...(out.length ? [h('b', {}, `לא במסלול (${out.length})`), ...out.map(r => h('div', { class: 'wl-stop out' },
+        h('div', { style: 'flex:1;min-width:0' }, label(r).name, done(r) ? ' ✓' : '', h('div', { class: 'muted small' }, label(r).addr)),
+        h('button', { class: 'btn', onclick: async () => { l.route.push(r.id); persist(); await locateAll(); redraw(); } }, '➕ הוסף')))] : []));
+      const links = gmapsLinks();
+      linksBox.replaceChildren(...links.map((u, i) => h('a', { class: 'btn primary', href: u, target: '_blank', rel: 'noopener' }, '🧭 פתח בגוגל מפות' + (links.length > 1 ? ` (חלק ${i + 1})` : ''))));
+      status.textContent = `${l.route.length} תחנות במסלול` + (tot ? ` · כ-${Math.round(tot)} ק"מ בקו אווירי (בכביש יותר)` : '');
+    }
+    const redraw = () => { drawList(); drawMap(); };
+    async function locateAll() {
+      const need = l.route.map(id => l.rows.find(r => r.id === id)).filter(r => r && !geo.has(r.id));
+      let i = 0, changed = false;
+      for (const r of need) {
+        status.textContent = `מאתר כתובות במפה… ${++i} מתוך ${need.length}`;
+        const before = JSON.stringify(r.geo || null);
+        try { geo.set(r.id, await locate(l, r, local)); } catch (e) { geo.set(r.id, null); status.textContent = e.message; }
+        if (JSON.stringify(r.geo || null) !== before) changed = true;
+      }
+      if (changed) persist();
+    }
+    async function auto() {
+      await locateAll();
+      const ids = l.route.filter(id => geo.get(id));
+      const rest = l.route.filter(id => !geo.get(id));
+      let start = null;
+      if (fromMe.checked) start = await new Promise(res => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lon: p.coords.longitude }), () => res(null), { timeout: 8000, maximumAge: 120000 }) : res(null));
+      if (fromMe.checked && !start) ui.toast('המיקום שלך לא זמין, המסלול מסודר מצפון לדרום', 3500);
+      const ord = bestOrder(ids.map(id => geo.get(id)), start);
+      l.route = [...ord.map(i => ids[i]), ...rest];
+      persist(); redraw();
+      ui.toast('המסלול סודר לפי הדרך הקצרה', 2500);
+    }
+    ui.app().replaceChildren(ui.bar({ title: 'מסלול נסיעה', sub: l.name }, back),
+      h('main', { class: 'wl-route' },
+        mapEl,
+        h('div', { class: 'stack' },
+          h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' },
+            h('button', { class: 'btn primary', onclick: ev => { ev.currentTarget.disabled = true; auto().finally(() => { ev.target.disabled = false; }); } }, '⚡ סדר אוטומטי (הדרך הקצרה)'),
+            h('label', { class: 'row small', style: 'gap:6px' }, fromMe, 'להתחיל מהמיקום שלי')),
+          linksBox, status, listBox,
+          h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+            h('button', { class: 'btn', onclick: async () => { await DB.setKV('wlView:' + l.id, { sort: { col: '_route', dir: 1 }, filt: {} }); ui.go(back); } }, 'מיין את הטבלה לפי המסלול'),
+            h('button', { class: 'btn', onclick: async () => { l.route = live().filter(r => !done(r)).map(r => r.id); persist(); await locateAll(); redraw(); } }, 'כל מה שלא הסתיים')),
+          outBox)));
+    drawList();
+    try {
+      await ui.leaflet();
+      map = L.map(mapEl, { zoomControl: true }).setView([32.3, 35.0], 8);
+      const g = ui.mapLayers()['גוגל – מפה'];
+      L.tileLayer(g[0], g[1]).addTo(map);
+    } catch (e) { mapEl.replaceChildren(h('div', { class: 'muted small', style: 'padding:16px' }, 'המפה לא נטענה: ' + e.message)); }
+    if (navigator.onLine === false) { status.textContent = 'אין קליטה: אי אפשר לאתר כתובות במפה'; for (const id of l.route) { const r = l.rows.find(x => x.id === id); if (r && r.geo) geo.set(id, r.geo); } redraw(); return; }
+    await locateAll();
+    redraw();
   }
 
   // גרירת קובץ רשימה (אקסל / CSV) למסכי הרשימות: ייבוא כרשימה חדשה
@@ -612,5 +855,5 @@
     });
   })();
 
-  root.WorkLists = { render, sync, _t: { norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
+  root.WorkLists = { render, sync, _t: { geoStreet, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
 })(window);
