@@ -594,3 +594,9 @@ textarea.doc-text.b { font-weight: 700; }
 .wl-wrap { border-color: #8ea9db; border-radius: 4px; }
 .wl-table tbody tr.st-open td { background: #fff2cc; }
 .wl-table tbody tr.st-done td { background: #c6efce; }
+.wl-year { display: inline-block; min-width: 46px; text-align: center; padding: 2px 8px; border-radius: 6px; background: #4472c4; color: #fff; font-weight: 700; font-size: 14px; }
+/* סקר שהסתיים: ירוק בולט (כמו "ירוק" באקסל), הטקסט נשאר שחור וקריא */
+.wl-table tbody tr.st-done td, .wl-table tbody tr.st-done td.wl-act, .wl-table tbody tr.st-done:hover td { background: #92d050; }
+.wl-table tbody tr.st-done .wl-cell { color: #000; }
+.wl-table tbody tr.st-done .wl-badge.done { background: #1e5c22; color: #fff; }
+.wl-table tbody tr.st-done .wl-st, .wl-table tbody tr.st-done .link-btn { color: #1b3d14; }
