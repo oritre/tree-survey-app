@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.97.0';
+  const APP_VERSION = '1.98.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -168,7 +168,9 @@
   })();
 
   // רשימה שנפתחת מתחת לשדה עם ערכים שכבר נכתבו בעבר (עיר, רחוב, פרויקט), מסוננת לפי מה שמקלידים
-  function suggestCombo(input, values) {
+  function suggestCombo(input, values, opts) {
+    opts = opts || {};
+    let showAll = false;
     input.removeAttribute('list');
     input.setAttribute('autocomplete', 'off');
     const menu = h('div', { class: 'combo-menu hidden', role: 'listbox' });
@@ -176,10 +178,11 @@
     const hide = () => menu.classList.add('hidden');
     const show = () => {
       if (document.activeElement !== input) return;
-      const q = norm(input.value);
+      const q = showAll ? '' : norm(input.value);
       const all = values();
       const list = (q ? all.filter(v => norm(v) !== q && norm(v).includes(q))
-        .sort((a, b) => norm(b).startsWith(q) - norm(a).startsWith(q)) : all).slice(0, 8);
+        .sort((a, b) => norm(b).startsWith(q) - norm(a).startsWith(q)) : all).slice(0, showAll ? 60 : 8);
+      showAll = false;
       if (!list.length) return hide();
       menu.replaceChildren(...list.map(v => h('button', { type: 'button', class: 'combo-opt', role: 'option',
         onpointerdown: e => e.preventDefault(), onmousedown: e => e.preventDefault(),
@@ -190,7 +193,19 @@
     input.addEventListener('focus', show);
     input.addEventListener('blur', () => setTimeout(hide, 200));
     input.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+    // חץ פתיחה: כל הרשימה (למשל כל הפרויקטים, מהחדש לישן), גם כשבשדה כבר כתוב משהו
+    if (opts.arrow) return h('div', { class: 'combo' }, h('div', { class: 'combo-row' }, input,
+      h('button', { type: 'button', class: 'combo-btn', title: 'פתח רשימה', 'aria-label': 'פתח רשימה', onpointerdown: e => e.preventDefault(), onmousedown: e => e.preventDefault(),
+        onclick: () => { if (!menu.classList.contains('hidden')) { hide(); return; } showAll = true; if (document.activeElement !== input) input.focus(); else show(); } }, '▾')), menu);
     return h('div', { class: 'combo' }, input, menu);
+  }
+  // הפרויקטים מכל הסקרים ורשימות העבודה, מהאחרון שנעשה בו שימוש לישן
+  async function projectsRecent(exceptId) {
+    const m = new Map();
+    const add = (v, t) => { v = (v || '').trim(); if (v) m.set(v, Math.max(m.get(v) || 0, t || 0)); };
+    for (const x of await DB.allSurveys()) if (x.id !== exceptId && !x.deleted) add(x.project, x.updated || x.created);
+    for (const l of (await DB.getKV('workLists', [])) || []) if (!l.deleted) add(l.project, l.updated || l.created);
+    return [...m].sort((a, b) => b[1] - a[1]).map(([v]) => v);
   }
   // ערכים מכל הסקרים, הנפוץ ביותר ראשון (ובשוויון, האחרון שעודכן)
   const usedValues = (all, k) => {
@@ -345,7 +360,7 @@
     reportDirName: s => safeName(`${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${(s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : ''}`),
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
     ui: { h, icon, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, shareName, today, fmtDate,
-      app: () => $('#app'), composeSite: s => composeSite(s), pathOf: f => pathOf(f),
+      app: () => $('#app'), composeSite: s => composeSite(s), pathOf: f => pathOf(f), suggestCombo: (...a) => suggestCombo(...a), projectsRecent: id => projectsRecent(id),
       leaflet: () => loadLeaflet(), mapLayers: () => LAYERS,
       // עבודה לפי רשימה (js/worklists.js): apply(s) מכניס את פרטי השורה לסקר החדש לפני השמירה
       lists: {
@@ -1574,7 +1589,8 @@
     preset = preset && preset.siteName != null ? preset : null; // לחיצה רגילה מעבירה אירוע, לא סקר מתוכנן
     const type = await chooseType();
     if (!type) return;
-    const project = preset && preset.project ? preset.project : (projectFilter != null ? projectFilter : await DB.getKV('lastProject', ''));
+    // ori (1.98.0): פרויקט לא מתמלא לבד מהסקר האחרון. בוחרים מהרשימה (חץ בשדה), אלא אם המסך הראשי מסונן לפרויקט
+    const project = preset && preset.project ? preset.project : (projectFilter != null ? projectFilter : '');
     const s = { id: uid(), type, project, site: '', siteName: '', street: '', city: '', code: '', manager: '', date: today(), trees: [], created: Date.now() };
     if (preset) {
       for (const k of ['siteName', 'street', 'city', 'manager']) if (preset[k]) s[k] = preset[k];
@@ -1647,7 +1663,8 @@
     // הצעות מסקרים קודמים (בלי הסקר הנוכחי, כדי שמה שמקלידים עכשיו לא יופיע כהצעה)
     const used = { project: [], city: [], street: [] };
     DB.allSurveys().then(all => { all = all.filter(x => x.id !== cur.id); for (const k in used) used[k] = usedValues(all, k); });
-    const sugg = (key, attrs) => suggestCombo(inp(key, attrs), () => used[key]);
+    projectsRecent(cur.id).then(v => { used.projectRecent = v; });
+    const sugg = (key, attrs) => key === 'project' ? suggestCombo(inp(key, attrs), () => used.projectRecent || used.project, { arrow: true }) : suggestCombo(inp(key, attrs), () => used[key]);
     body.append(h('div', { class: 'card stack', style: 'max-width:720px;margin:0 auto' },
       field('סוג הסקר', h('select', { class: 'in', onchange: e => { cur.type = e.target.value; cur.site = composeSite(cur); saveSoon(); renderSurvey(); } },
         Object.entries(Construction.TYPES).map(([k, v]) => h('option', { value: k, selected: Construction.typeOf(cur) === k ? '' : null }, v)))),
