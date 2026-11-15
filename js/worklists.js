@@ -320,14 +320,15 @@
       h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
         h('div', { class: 'card stack' },
           h('div', { class: 'small' }, 'רשימת מוסדות מאקסל (למשל רשימת המעונות מהלקוח): אפשר לערוך את התאים כאן, לבחור איזו עמודה היא הכתובת, העיר, סמל המוסד והמנהל/ת, ולפתוח סקר מכל שורה. לפני הפתיחה האפליקציה מחפשת סקר קודם באותו מקום (גם בארכיון בגוגל דרייב), כדי להתחיל מהסקר של השנה שעברה עם העצים והתמונות.'),
-          h('button', { class: 'btn primary big', onclick: () => pick.click() }, '📥 ייבוא רשימה מאקסל'), pick),
+          h('button', { class: 'btn primary big', onclick: () => pick.click() }, '📥 ייבוא רשימה מאקסל'), pick,
+          h('div', { class: 'muted small', style: 'text-align:center' }, 'במחשב אפשר גם לגרור את קובץ האקסל לכאן')),
         lists.length ? lists.map(l => {
           const rs = l.rows.filter(r => !r.deleted);
           const st = rs.map(r => r.sid && local.get(r.sid)).filter(Boolean);
           return h('div', { class: 'card survey-item', role: 'button', tabindex: 0, onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id)) },
             h('div', { style: 'flex:1;min-width:0' },
               h('div', { class: 't' }, l.name || 'רשימה'),
-              h('div', { class: 'muted small' }, [l.project ? 'פרויקט ' + l.project : null, `${rs.length} שורות`, `${rs.filter(r => r.sid).length} נפתחו`, st.filter(s => s.finished).length ? `${st.filter(s => s.finished).length} הסתיימו` : null].filter(Boolean).join(' · '))),
+              h('div', { class: 'muted small' }, [l.project ? 'פרויקט ' + l.project : null, `${rs.length} שורות`, `${rs.filter(r => r.sid).length} נפתחו`, st.filter(s => s.finished || s.finishPending).length ? `✓ ${st.filter(s => s.finished || s.finishPending).length} הסתיימו` : null].filter(Boolean).join(' · '))),
             h('span', { class: 'arrow', 'aria-hidden': 'true' }, '‹'));
         }) : h('div', { class: 'empty' }, ui.icon('list'), 'עוד אין רשימות. ייבא קובץ אקסל של רשימת מוסדות.')));
     syncThen(renderLists);
@@ -423,11 +424,14 @@
     // סקר שנפתח מהשורה במכשיר אחר, לפני שהרשימה סונכרנה: לפי listRef
     for (const s of local.values()) if (s.listRef && s.listRef.list === l.id && !s.deleted) { const r = l.rows.find(x => x.id === s.listRef.row); if (r && !r.sid) { r.sid = s.id; r.u = Date.now(); save(l); } }
     let idx = new Map();
+    // סקר שהסתיים ("סיום סקר"): לפי הטאבלט או לפי האינדקס בענן (סקר שהסתיים במכשיר אחר)
     const stateOf = r => {
       if (!r.sid) return { k: 'todo', t: 'טרם' };
-      const s = local.get(r.sid) || idx.get(r.sid);
+      const a = local.get(r.sid), c = idx.get(r.sid), s = a || c;
       if (!s || s.deleted) return { k: 'todo', t: 'הסקר נמחק' };
-      return s.finished ? { k: 'done', t: '✓ ' + ui.fmtDate(s.date) } : { k: 'open', t: 'בעבודה ' + ui.fmtDate(s.date) };
+      if ((a && a.finished) || (c && c.finished)) return { k: 'done', t: '✓ הסתיים', d: ui.fmtDate(s.date) };
+      if (a && a.finishPending) return { k: 'done', t: '✓ הסתיים', d: 'ממתין להעלאה' };
+      return { k: 'open', t: 'בעבודה', d: ui.fmtDate(s.date) };
     };
     let filter = 'all';
     const q = h('input', { class: 'in', type: 'search', placeholder: 'חיפוש ברשימה', style: 'flex:1;min-width:160px' });
@@ -454,7 +458,7 @@
           return h('tr', { class: 'st-' + st.k },
             h('td', { class: 'wl-act' },
               h('button', { class: 'btn ' + (st.k === 'todo' ? 'primary' : ''), onclick: () => openRow(l, r) }, st.k === 'todo' ? 'פתח סקר' : 'פתח'),
-              h('div', { class: 'wl-st small' }, st.t),
+              h('div', { class: 'wl-badge ' + st.k }, st.t), st.d ? h('div', { class: 'wl-st small' }, st.d) : null,
               r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null),
             ...l.cols.map(c => h('td', {}, h('input', { class: 'wl-cell', value: r.cells[c.id] || '', 'aria-label': c.name, style: `width:${width.get(c.id)}ch`,
               oninput: e => { r.cells[c.id] = e.target.value; r.u = Date.now(); saveSoon(); } }))),
@@ -483,6 +487,28 @@
     if (navigator.onLine !== false && await OD.connected()) Sync.cloudIndex().then(list => { idx = new Map(list.map(e => [e.id, e])); if (!table.contains(document.activeElement)) draw(); }).catch(() => {});
     syncThen(async () => { const n = await byId(l.id); if (n) { Object.assign(l, n); draw(); } else ui.go('#/lists'); });
   }
+
+  // גרירת קובץ רשימה (אקסל / CSV) למסכי הרשימות: ייבוא כרשימה חדשה
+  (function initDrop() {
+    let depth = 0, mark = null;
+    const on = () => (location.hash || '').startsWith('#/lists');
+    const hasFiles = e => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+    const hide = () => { depth = 0; if (mark) { mark.remove(); mark = null; } };
+    window.addEventListener('dragenter', e => {
+      if (!hasFiles(e) || !on()) return;
+      e.preventDefault(); depth++;
+      if (!mark) { mark = document.createElement('div'); mark.className = 'drop-plan'; mark.innerHTML = '<div>📥 שחרר כדי לייבא את הרשימה</div>'; document.body.append(mark); }
+    });
+    window.addEventListener('dragover', e => { if (hasFiles(e) && on()) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+    window.addEventListener('dragleave', () => { if (mark && --depth <= 0) hide(); });
+    window.addEventListener('drop', async e => {
+      if (!hasFiles(e) || !on()) return;
+      e.preventDefault(); hide();
+      const f = [...e.dataTransfer.files].find(x => /\.(xlsx|xlsm|csv|xls)$/i.test(x.name));
+      if (!f) { U().toast('אפשר לגרור קובץ אקסל (xlsx) או CSV', 3500); return; }
+      await importFile(f);
+    });
+  })();
 
   root.WorkLists = { render, sync, _t: { norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
 })(window);

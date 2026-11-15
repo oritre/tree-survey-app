@@ -556,3 +556,41 @@ textarea.doc-text.b { font-weight: 700; }
 .wl-cell:focus { outline: none; border-color: var(--accent); background: var(--surface-2); }
 .wl-cand.best { border-color: var(--accent); }
 .link-btn { background: none; border: 0; color: var(--accent); text-decoration: underline; cursor: pointer; padding: 2px; }
+.wl-badge { display: inline-block; margin-top: 4px; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; white-space: nowrap; background: var(--surface-3); color: var(--muted); }
+.wl-badge.done { background: var(--accent); color: var(--accent-ink); }
+.wl-badge.open { background: #f6e3a8; color: #5a4300; }
+.wl-table tr.st-done td { background: var(--accent-soft); }
+.wl-table tr.st-done td.wl-act { background: var(--accent-soft); }
+/* מראה של אקסל: קווי רשת, כותרת צבועה ושורות בצבעים מתחלפים (1.96.1) */
+.wl-table { font-size: 15px; }
+.wl-table th, .wl-table td { border-bottom: 1px solid var(--border-strong); border-left: 1px solid var(--border-strong); }
+.wl-table th { background: var(--accent); color: var(--accent-ink); border-bottom: 2px solid var(--accent-strong); }
+.wl-table th.wl-act { background: var(--accent-strong); }
+.wl-table .wl-tag { color: var(--accent-ink); opacity: .85; }
+.wl-table td { padding: 2px 3px; background: var(--surface); }
+.wl-table tbody tr:nth-child(even) td { background: var(--surface-3); }
+.wl-table tbody tr:hover td { background: var(--accent-soft-2); }
+.wl-table tr.st-open td { background: #fbf1cf; }
+.wl-table tr.st-done td, .wl-table tr.st-done td.wl-act { background: var(--accent-soft); }
+.wl-table td.wl-act { border-left: 2px solid var(--border-strong); }
+.wl-cell { border-radius: 2px; padding: 6px 7px; }
+.wl-cell:focus { background: var(--surface); box-shadow: inset 0 0 0 2px var(--accent); border-color: transparent; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wl-table tr.st-open td { background: #3a3317; } }
+:root[data-theme="dark"] .wl-table tr.st-open td { background: #3a3317; }
+.wl-badge.todo { display: none; }
+.wl-table tbody tr:hover td.wl-act, .wl-table td.wl-act { position: sticky; }
+/* כמו טבלת האקסל של ori: כותרת כחולה, פסים כחול בהיר / לבן, טקסט מודגש */
+.wl-table th, .wl-table th.wl-act { background: #4472c4; color: #fff; border-bottom: 1px solid #2f528f; border-left: 1px solid #8ea9db; }
+.wl-table .wl-tag { color: #fff; }
+.wl-table td { background: #fff; border-color: #8ea9db; color: #111; }
+.wl-table tbody tr:nth-child(even) td { background: #d9e1f2; }
+.wl-table tbody tr:hover td { background: #eef3fb; }
+.wl-cell { color: #111; font-weight: 700; }
+.wl-table tr.st-open td { background: #fff2cc; }
+.wl-table tr.st-done td, .wl-table tr.st-done td.wl-act { background: #c6efce; }
+:root[data-theme="dark"] .wl-table tr.st-done td { background: #c6efce; }
+:root[data-theme="dark"] .wl-table tr.st-open td { background: #fff2cc; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wl-table tr.st-done td { background: #c6efce; } :root:not([data-theme="light"]) .wl-table tr.st-open td { background: #fff2cc; } }
+.wl-wrap { border-color: #8ea9db; border-radius: 4px; }
+.wl-table tbody tr.st-open td { background: #fff2cc; }
+.wl-table tbody tr.st-done td { background: #c6efce; }
