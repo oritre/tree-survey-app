@@ -183,41 +183,64 @@
     if (stHit) sc += numHit ? 4 : 3;
     return { sc, cityHit, stHit, numHit };
   }
-  // סקרים באפליקציה (בטאבלט ובאינדקס בענן) ובארכיון (קובצי אקסל) שמתאימים לשורה
-  async function candidates(l, v, onArchive) {
+  // כל המילים בכל התאים של השורה (בלי טלפונים): לחיפוש ולדירוג. מילים כלליות לא נספרות
+  const STOP = new Set(['מעון', 'גן', 'בית', 'ספר', 'סקר', 'עצים', 'יציבות', 'בטיחות', 'של', 'על', 'את', 'עם']);
+  function rowWords(l, r, v) {
+    const cells = [...Object.values(r.cells || {}), ...Object.values(v)].map(clean).filter(c => c && !/^\+?[\d\s\-()]{7,}$/.test(c));
+    const out = new Set();
+    for (const c of cells) for (const w of norm(c).split(' ')) {
+      if (!w || STOP.has(w)) continue;
+      if (/^\d+$/.test(w) ? w.length <= 6 : w.length >= 2) out.add(w);
+    }
+    return [...out];
+  }
+  // ציון: סמל מוסד, עיר, רחוב+מספר, ועוד נקודה לכל מילה מהשורה שמופיעה בשם / בתיקייה
+  function scoreAll(v, words, text, code) {
+    const x = scoreOf(v, text, code);
+    const hay = norm(text);
+    x.hits = words.filter(w => hasWord(hay, w)).length;
+    x.sc += x.hits;
+    return x;
+  }
+  const yearOf = (path, f) => { const yi = path.findIndex(n => /^\s*(19|20)\d\d\s*$/.test(n)); return yi >= 0 ? path[yi].trim() : (f.lastModifiedDateTime || '').slice(0, 4); };
+  // קבצים בארכיון (כמו בחיפוש הרגיל), עם התיקייה והשנה, בלי עותקי האפליקציה
+  async function archiveFiles(terms) {
+    const archive = await DB.getKV('gdArchive', null);
+    const files = new Map();
+    for (const res of await Promise.all(terms.map(t => OD.searchExcel(t, archive && archive.id).catch(() => []))))
+      for (const f of res) files.set(f.id, f);
+    const list = [...files.values()];
+    const paths = await Promise.all(list.map(f => U().pathOf(f).catch(() => [])));
+    return list.map((f, i) => ({ kind: 'file', f, path: paths[i], year: yearOf(paths[i], f) }))
+      .filter(x => !x.path.some(n => /^גיבוי אפליקציית סקרי עצים$/.test(n)) && !/^טעינת עצים/.test(x.f.name));
+  }
+  // סקרים באפליקציה (בטאבלט ובאינדקס בענן) ובארכיון (קובצי אקסל, מכל השנים) שמתאימים לשורה
+  async function candidates(l, r, v, onArchive) {
+    const words = rowWords(l, r, v);
     const local = await DB.allSurveys();
     let cloud = [];
     const odOn = navigator.onLine !== false && await OD.connected();
     if (odOn) cloud = await Sync.cloudIndex().catch(() => []);
     const ents = new Map(cloud.filter(e => !e.deleted).map(e => [e.id, Object.assign({ kind: 'app' }, e)]));
-    for (const s of local) if (!s.deleted) ents.set(s.id, Object.assign({}, ents.get(s.id) || {}, { kind: 'app', id: s.id, local: true, type: s.type, code: s.code, siteName: s.siteName || s.site, street: s.street, city: s.city, site: s.site, date: s.date, finished: s.finished, dataId: (ents.get(s.id) || {}).dataId || s.odDataId }));
+    for (const s of local) if (!s.deleted) ents.set(s.id, Object.assign({}, ents.get(s.id) || {}, { kind: 'app', id: s.id, local: true, type: s.type, code: s.code, siteName: s.siteName || s.site, street: s.street, city: s.city, site: s.site, manager: s.manager, date: s.date, finished: s.finished, dataId: (ents.get(s.id) || {}).dataId || s.odDataId }));
     const type = l.type === 'construction' ? 'construction' : 'safety';
     const app = [...ents.values()].filter(e => (e.type === 'construction' ? 'construction' : 'safety') === type)
-      .map(e => Object.assign(e, scoreOf(v, [e.siteName, e.street, e.city, e.site].join(' '), e.code)))
-      .filter(e => e.sc >= 10 || (e.cityHit && e.stHit))
-      .sort((a, b) => b.sc - a.sc || (b.date || '').localeCompare(a.date || '')).slice(0, 5);
+      .map(e => Object.assign(e, scoreAll(v, words, [e.siteName, e.street, e.city, e.site, e.manager].join(' '), e.code)))
+      .filter(e => e.sc >= 10 || (e.cityHit && e.stHit) || (e.cityHit && e.hits >= 3))
+      .sort((a, b) => b.sc - a.sc || (b.date || '').localeCompare(a.date || '')).slice(0, 8);
     let arch = [];
     if (odOn && onArchive) {
       onArchive();
-      const archive = await DB.getKV('gdArchive', null);
+      // שאילתות לדרייב: סמל, מילת הרחוב, העיר, ועוד המילים הארוכות מהתאים האחרים (גם בתוך תוכן הקבצים)
       const { word } = streetKey(v.street);
-      const terms = [...new Set([word && word.length >= 2 ? word : '', clean(v.city), v.code || ''].filter(Boolean))];
-      const files = new Map();
-      for (const res of await Promise.all(terms.map(t => OD.searchExcel(t, archive && archive.id).catch(() => []))))
-        for (const f of res) files.set(f.id, f);
-      const list = [...files.values()];
-      const paths = await Promise.all(list.map(f => U().pathOf(f).catch(() => [])));
-      arch = list.map((f, i) => ({ kind: 'file', f, path: paths[i] }))
-        .filter(x => !x.path.some(n => /^גיבוי אפליקציית סקרי עצים$/.test(n)) && !/^טעינת עצים/.test(x.f.name))
-        .map(x => {
-          const yi = x.path.findIndex(n => /^\s*(19|20)\d\d\s*$/.test(n));
-          x.year = yi >= 0 ? x.path[yi].trim() : (x.f.lastModifiedDateTime || '').slice(0, 4);
-          return Object.assign(x, scoreOf(v, x.f.name.replace(/\.xls[xm]$/i, '') + ' ' + x.path.slice(-2).join(' '), ''));
-        })
-        .filter(x => x.cityHit || x.numHit) // רחוב בלי עיר ובלי מספר הבית (למשל רחוב ירושלים) תופס יותר מדי קבצים
-        .sort((a, b) => b.sc - a.sc || (b.year || '').localeCompare(a.year || '') || (b.f.lastModifiedDateTime || '').localeCompare(a.f.lastModifiedDateTime || '')).slice(0, 6);
+      const extra = words.filter(w => !/^\d+$/.test(w) && w.length >= 3).sort((a, b) => b.length - a.length);
+      const terms = [...new Set([v.code || '', word && word.length >= 2 ? word : '', clean(v.city), ...extra].filter(Boolean))].slice(0, 7);
+      arch = (await archiveFiles(terms))
+        .map(x => Object.assign(x, scoreAll(v, words, x.f.name.replace(/\.xls[xm]$/i, '') + ' ' + x.path.slice(-2).join(' '), '')))
+        .filter(x => x.cityHit || x.numHit || x.hits >= 2)
+        .sort((a, b) => b.sc - a.sc || (b.year || '').localeCompare(a.year || '') || (b.f.lastModifiedDateTime || '').localeCompare(a.f.lastModifiedDateTime || '')).slice(0, 15);
     }
-    return { app, arch, odOn };
+    return { app, arch, odOn, words };
   }
 
   // ---------- פתיחת סקר משורה ----------
@@ -250,45 +273,64 @@
     const status = ui.h('div', { class: 'muted small' }, 'מחפש סקרים קודמים באפליקציה…');
     const box = ui.h('div', { class: 'stack' });
     const close = () => ov.remove();
+    // חיפוש חופשי בארכיון, כמו ב"חיפוש סקרים בענן", אם התוצאה הנכונה לא הופיעה
+    const q = ui.h('input', { class: 'in', type: 'search', value: [streetKey(v.street).word, v.city].filter(Boolean).join(' '), placeholder: 'שם קובץ, רחוב, עיר או סמל', style: 'flex:1;min-width:160px' });
+    const qBtn = ui.h('button', { class: 'btn', onclick: () => freeSearch() }, '🔎 חפש בארכיון');
+    q.addEventListener('keydown', e => { if (e.key === 'Enter') freeSearch(); });
     const ov = ui.h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
-      ui.h('div', { class: 'card stack', style: 'max-width:560px;width:94%' },
+      ui.h('div', { class: 'card stack', style: 'max-width:720px;width:96%' },
         ui.h('h2', { style: 'margin:0;font-size:21px' }, 'סקר עבור ' + title),
         ui.h('div', { class: 'muted small' }, [v.code ? 'סמל ' + v.code : null, v.manager ? 'מנהל/ת: ' + v.manager : null, l.project ? 'פרויקט ' + l.project : null].filter(Boolean).join(' · ')),
-        status, box,
         ui.h('button', { class: 'btn big block', onclick: () => { close(); ui.lists.blank(l.type || 'safety', applier(l, r, v, false)); } }, '➕ סקר חדש ריק (בלי סקר קודם)'),
+        status, box,
+        ui.h('div', { class: 'row', style: 'gap:8px' }, q, qBtn),
         ui.h('button', { class: 'btn', onclick: close }, 'ביטול')));
     document.body.append(ov);
     const busy = async (btn, fn) => { for (const b of ov.querySelectorAll('button')) b.disabled = true; try { await fn(); } finally { if (document.body.contains(ov)) { close(); } } };
-    let res;
-    try { res = await candidates(l, v, () => { status.textContent = 'מחפש גם בארכיון בגוגל דרייב…'; }); }
-    catch (e) { status.textContent = 'החיפוש נכשל: ' + e.message; return; }
-    if (!document.body.contains(ov)) return;
     const recent = e => e.date && (Date.now() - new Date(e.date).getTime()) < 120 * 864e5;
-    const rows = [];
-    for (const e of res.app) {
-      const sub = [e.code ? 'סמל ' + e.code : null, [e.street, e.city].filter(Boolean).join(', '), ui.fmtDate(e.date), e.finished ? '✓ הסתיים' : null].filter(Boolean).join(' · ');
+    const appCard = e => {
+      const sub = [e.code ? 'סמל ' + e.code : null, [e.street, e.city].filter(Boolean).join(', '), e.finished ? '✓ הסתיים' : null].filter(Boolean).join(' · ');
       const cont = recent(e);
-      rows.push(ui.h('div', { class: 'card stack wl-cand' + (e.sc >= 6 ? ' best' : '') },
-        ui.h('div', { style: 'font-weight:600' }, (cont ? '📋 ' : '🌳 ') + (e.siteName || e.site || 'סקר')), ui.h('div', { class: 'muted small' }, 'באפליקציה · ' + sub),
+      return ui.h('div', { class: 'card stack wl-cand' + (e.sc >= 7 ? ' best' : '') },
+        ui.h('div', { class: 'row', style: 'gap:8px;align-items:center' }, ui.h('span', { class: 'wl-year' }, (e.date || '').slice(0, 4) || '—'),
+          ui.h('b', { style: 'flex:1;min-width:0' }, (e.siteName || e.site || 'סקר')), ui.h('span', { class: 'muted small' }, ui.fmtDate(e.date))),
+        ui.h('div', { class: 'muted small' }, 'באפליקציה · ' + sub),
         ui.h('div', { class: 'row' },
           cont ? ui.h('button', { class: 'btn primary', onclick: ev => busy(ev.currentTarget, async () => {
             r.sid = e.id; r.u = Date.now(); await save(l);
             if (e.local) ui.go('#/s/' + e.id); else await ui.lists.fromCloud(e, false, ev.currentTarget);
           }) }, 'המשך את הסקר הזה') : null,
           ui.h('button', { class: 'btn' + (cont ? '' : ' primary'), onclick: ev => busy(ev.currentTarget, () => ui.lists.fromApp(e, ev.currentTarget, applier(l, r, v, true))) },
-            `סקר חדש מהיום על בסיסו (${ui.fmtDate(e.date)})`))));
+            'סקר חדש מהיום על בסיסו')));
+    };
+    const fileCard = x => ui.h('div', { class: 'card stack wl-cand' + (x.sc >= 7 ? ' best' : '') },
+      ui.h('div', { class: 'row', style: 'gap:8px;align-items:center' }, ui.h('span', { class: 'wl-year' }, x.year || '—'),
+        ui.h('b', { style: 'flex:1;min-width:0;overflow-wrap:anywhere' }, '📄 ' + x.f.name.replace(/\.xls[xm]$/i, ''))),
+      ui.h('div', { class: 'muted small' }, [x.path.join(' / '), x.f.lastModifiedDateTime ? 'עודכן ' + ui.fmtDate(x.f.lastModifiedDateTime.slice(0, 10)) : ''].filter(Boolean).join(' · ')),
+      ui.h('div', { class: 'row' },
+        ui.h('button', { class: 'btn primary', onclick: ev => busy(ev.currentTarget, () => ui.lists.fromArchive(x.f, x.path, ev.currentTarget, applier(l, r, v, true))) }, '📂 סקר חדש מהיום (עם העצים והתמונות)'),
+        ui.h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(x.f.id) + '/view', target: '_blank', rel: 'noopener' }, 'הצג את האקסל')));
+    async function freeSearch() {
+      const t = q.value.trim();
+      if (!t) return;
+      if (navigator.onLine === false || !(await OD.connected())) { ui.toast('החיפוש בארכיון צריך קליטה וחיבור לגוגל דרייב'); return; }
+      qBtn.disabled = true; status.textContent = 'מחפש בארכיון…';
+      try {
+        const words = norm(t).split(' ').filter(Boolean);
+        const found = (await archiveFiles([t])).sort((a, b) => (b.year || '').localeCompare(a.year || '') || (b.f.lastModifiedDateTime || '').localeCompare(a.f.lastModifiedDateTime || ''));
+        status.textContent = found.length ? `${found.length} קבצים בארכיון עבור "${t}" (מהשנה החדשה לישנה):` : `לא נמצאו קבצים עבור "${t}"`;
+        box.replaceChildren(...found.slice(0, 40).map(x => fileCard(Object.assign(x, { sc: words.every(w => hasWord(norm(x.f.name), w)) ? 7 : 0 }))));
+      } catch (e) { status.textContent = 'החיפוש נכשל: ' + e.message; }
+      finally { qBtn.disabled = false; }
     }
-    for (const x of res.arch) {
-      rows.push(ui.h('div', { class: 'card stack wl-cand' + (x.sc >= 6 ? ' best' : '') },
-        ui.h('div', { style: 'font-weight:600;overflow-wrap:anywhere' }, '📄 ' + x.f.name.replace(/\.xls[xm]$/i, '')),
-        ui.h('div', { class: 'muted small' }, ['ארכיון', x.path.join(' / '), x.f.lastModifiedDateTime ? ui.fmtDate(x.f.lastModifiedDateTime.slice(0, 10)) : ''].filter(Boolean).join(' · ')),
-        ui.h('div', { class: 'row' },
-          ui.h('button', { class: 'btn primary', onclick: ev => busy(ev.currentTarget, () => ui.lists.fromArchive(x.f, x.path, ev.currentTarget, applier(l, r, v, true))) }, 'סקר חדש מהיום על בסיסו (עם העצים והתמונות)'),
-          ui.h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(x.f.id) + '/view', target: '_blank', rel: 'noopener' }, 'הצג'))));
-    }
-    status.textContent = rows.length ? `נמצאו ${rows.length} סקרים קודמים שמתאימים (המתאים ביותר למעלה):`
-      : res.odOn ? 'לא נמצא סקר קודם באפליקציה או בארכיון.' : 'לא נמצא סקר קודם בטאבלט (בלי חיבור לגוגל דרייב אין חיפוש בארכיון).';
-    box.replaceChildren(...rows);
+    let res;
+    try { res = await candidates(l, r, v, () => { status.textContent = 'מחפש גם בארכיון בגוגל דרייב (לפי כל התאים בשורה)…'; }); }
+    catch (e) { status.textContent = 'החיפוש נכשל: ' + e.message; return; }
+    if (!document.body.contains(ov)) return;
+    const cards = [...res.app.map(appCard), ...res.arch.map(fileCard)];
+    status.textContent = cards.length ? `נמצאו ${cards.length} סקרים קודמים מכל השנים (המתאים ביותר למעלה):`
+      : res.odOn ? 'לא נמצא סקר קודם באפליקציה או בארכיון. אפשר לחפש למטה בעצמך.' : 'לא נמצא סקר קודם בטאבלט (בלי חיבור לגוגל דרייב אין חיפוש בארכיון).';
+    box.replaceChildren(...cards);
   }
 
   // ---------- מסכים ----------

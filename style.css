@@ -579,18 +579,12 @@ textarea.doc-text.b { font-weight: 700; }
 :root[data-theme="dark"] .wl-table tr.st-open td { background: #3a3317; }
 .wl-badge.todo { display: none; }
 .wl-table tbody tr:hover td.wl-act, .wl-table td.wl-act { position: sticky; }
-/* כמו טבלת האקסל של ori: כותרת כחולה, פסים כחול בהיר / לבן, טקסט מודגש */
-.wl-table th, .wl-table th.wl-act { background: #4472c4; color: #fff; border-bottom: 1px solid #2f528f; border-left: 1px solid #8ea9db; }
-.wl-table .wl-tag { color: #fff; }
-.wl-table td { background: #fff; border-color: #8ea9db; color: #111; }
-.wl-table tbody tr:nth-child(even) td { background: #d9e1f2; }
-.wl-table tbody tr:hover td { background: #eef3fb; }
-.wl-cell { color: #111; font-weight: 700; }
-.wl-table tr.st-open td { background: #fff2cc; }
-.wl-table tr.st-done td, .wl-table tr.st-done td.wl-act { background: #c6efce; }
-:root[data-theme="dark"] .wl-table tr.st-done td { background: #c6efce; }
-:root[data-theme="dark"] .wl-table tr.st-open td { background: #fff2cc; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wl-table tr.st-done td { background: #c6efce; } :root:not([data-theme="light"]) .wl-table tr.st-open td { background: #fff2cc; } }
-.wl-wrap { border-color: #8ea9db; border-radius: 4px; }
-.wl-table tbody tr.st-open td { background: #fff2cc; }
-.wl-table tbody tr.st-done td { background: #c6efce; }
+.wl-table tbody tr.st-open td { background: #fbf1cf; }
+.wl-year { display: inline-block; min-width: 46px; text-align: center; padding: 2px 8px; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 14px; }
+/* סקר שהסתיים: ירוק בולט (כמו "ירוק" באקסל), הטקסט נשאר שחור וקריא */
+.wl-table tbody tr.st-done td, .wl-table tbody tr.st-done td.wl-act, .wl-table tbody tr.st-done:hover td { background: #92d050; }
+.wl-table tbody tr.st-done .wl-cell { color: #000; }
+.wl-table tbody tr.st-done .wl-badge.done { background: #1e5c22; color: #fff; }
+.wl-table tbody tr.st-done .wl-st, .wl-table tbody tr.st-done .link-btn { color: #1b3d14; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wl-table tbody tr.st-open td { background: #3a3317; } }
+:root[data-theme="dark"] .wl-table tbody tr.st-open td { background: #3a3317; }
