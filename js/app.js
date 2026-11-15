@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.99.0';
+  const APP_VERSION = '1.99.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -252,7 +252,7 @@
     cur = null;
     if (hash.startsWith('#/cloud')) return renderCloud();
     if (hash.startsWith('#/health')) return renderHealth();
-    if (hash.startsWith('#/summary')) return renderSummary();
+    if (hash.startsWith('#/summary')) return renderSummary(decodeURIComponent(hash.slice('#/summary/'.length)));
     if (hash.startsWith('#/import')) return renderImport();
     if (hash.startsWith('#/settings')) return renderSettings();
     if (hash.startsWith('#/multi')) { const a = hash.split('/')[2]; return renderMultiSend(a ? decodeURIComponent(a) : null); }
@@ -433,10 +433,9 @@
     app.replaceChildren(
       bar('סקרי עצים', null, h('button', { class: 'icon-btn', title: 'הגדרות', 'aria-label': 'הגדרות', onclick: () => go('#/settings') }, icon('gear'))),
       h('main', { class: 'stack' },
-        h('div', { class: 'home-actions five' },
+        h('div', { class: 'home-actions' },
           h('button', { class: 'tile primary', onclick: newSurvey }, icon('plus'), 'סקר חדש'),
           h('button', { class: 'tile', onclick: () => go('#/cloud') }, icon('search'), 'חיפוש סקרים בענן'),
-          h('button', { class: 'tile', onclick: () => go('#/summary') }, icon('tree'), 'אורנים ומפות'),
           h('button', { class: 'tile', onclick: () => go('#/quotes') }, icon('money'), 'הצעות מחיר'),
           h('button', { class: 'tile', onclick: () => go('#/lists') }, icon('list'), 'עבודה לפי רשימה')),
         h('div', { id: 'plannedBox' }),
@@ -1472,7 +1471,10 @@
     } catch (e) { Sync.log('error', 'שמירת קובץ סיכום בגוגל דרייב נכשלה: ' + e.message); return ''; }
   }
 
-  async function renderSummary() {
+  // אורנים ומפות (מתוך "עבודה לפי רשימה", רלוונטי לירושלים): listId = הרשימה שממנה נכנסו, הסקרים שלה מסומנים מראש
+  async function renderSummary(listId) {
+    const wl = listId ? ((await DB.getKV('workLists', [])) || []).find(x => x.id === listId) : null;
+    const back = wl ? '#/lists/' + encodeURIComponent(wl.id) : '#/lists';
     const app = $('#app');
     const msg = h('div', { class: 'muted small', role: 'status' });
     const status = h('div', { class: 'small', role: 'status' });
@@ -1483,7 +1485,7 @@
     let entries = [];
     const btnP = h('button', { class: 'btn primary big', disabled: true }, '🌲 סיכום אורנים (אקסל)');
     const btnM = h('button', { class: 'btn primary big', disabled: true }, '🗺 מפה לשיתוף');
-    app.replaceChildren(bar('אורנים ומפות', '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
+    app.replaceChildren(bar(wl ? { title: 'אורנים ומפות', sub: wl.name } : 'אורנים ומפות', back), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
         h('div', { class: 'small' }, 'בחר פרויקט שלם או כמה סקרים. סיכום האורנים יוצא כאקסל: שורה לכל מוסד (לפי סמל מוסד, ובלי סמל לפי שם וכתובת). המפה היא דף אינטרנט: נקודה ירוקה לעץ תקין, אדומה לעץ שדורש טיפול, ולחיצה על נקודה מציגה את פרטי העץ.'),
         h('label', { class: 'row small', style: 'gap:8px' }, latest, 'רק הסקר האחרון בכל מוסד (כדי לא לספור פעמיים)'),
@@ -1528,6 +1530,11 @@
     const byId = new Map(cloud.filter(e => !e.deleted).map(e => [e.id, e]));
     for (const s of local) byId.set(s.id, Object.assign({}, byId.get(s.id) || {}, fromLocal(s)));
     entries = [...byId.values()];
+    if (wl) {
+      const sids = new Set(wl.rows.filter(r => !r.deleted && r.sid).map(r => r.sid));
+      for (const e of entries) if (sids.has(e.id) || (e.listRef && e.listRef.list === wl.id)) sel.add(key(e));
+      if (!sel.size && wl.project) q.value = wl.project;
+    }
     if (!entries.length) msg.textContent = 'אין סקרים.';
     draw();
 
