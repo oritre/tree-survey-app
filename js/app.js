@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.95.0';
+  const APP_VERSION = '1.96.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -38,6 +38,7 @@
   // אייקונים (SVG בקו, 24x24): נראים אותו דבר בכל טאבלט, בניגוד לאמוג'י שתלוי בגופן המכשיר
   const ICONS = {
     plus: 'M12 5v14M5 12h14',
+    list: 'M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01',
     search: 'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM20 20l-4-4',
     tree: 'M12 2l6 9h-3.5l4.5 7H5l4.5-7H6zM12 18v4',
     money: 'M3 7h18v10H3zM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM6 10h.01M18 14h.01',
@@ -241,6 +242,7 @@
     if (hash.startsWith('#/settings')) return renderSettings();
     if (hash.startsWith('#/multi')) { const a = hash.split('/')[2]; return renderMultiSend(a ? decodeURIComponent(a) : null); }
     if (hash.startsWith('#/quotes')) return QuotesUI.render(hash);
+    if (hash.startsWith('#/lists')) return WorkLists.render(hash);
     return renderHome();
   }
   function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
@@ -342,7 +344,29 @@
     // שם תת-התיקייה של סקר לבנייה בתיקיית הדוחות: כתובת - תאריך (כמו לפני 1.66, כדי שתיקיות קיימות לא ישנו שם)
     reportDirName: s => safeName(`${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${(s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : ''}`),
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
-    ui: { h, icon, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, shareName, today, fmtDate },
+    ui: { h, icon, bar, go, toast, askChoice: (...a) => askChoice(...a), downloadFile: (...a) => downloadFile(...a), debounce, safeName, shareName, today, fmtDate,
+      app: () => $('#app'), composeSite: s => composeSite(s), pathOf: f => pathOf(f),
+      // עבודה לפי רשימה (js/worklists.js): apply(s) מכניס את פרטי השורה לסקר החדש לפני השמירה
+      lists: {
+        async blank(type, apply) {
+          const s = { id: uid(), type, project: '', site: '', siteName: '', street: '', city: '', code: '', manager: '', date: today(), trees: [], created: Date.now() };
+          apply(s);
+          await DB.putSurvey(s);
+          go('#/s/' + s.id + '/details');
+        },
+        fromArchive: (f, path, btn, apply) => fromArchive(f, path, btn, false, apply),
+        fromCloud: (e, asNew, btn, apply) => fromCloud(e, asNew, btn, apply),
+        // סקר קודם באפליקציה: מהטאבלט אם הוא שם, אחרת מגוגל דרייב
+        async fromApp(e, btn, apply) {
+          const old = await DB.getSurvey(e.id);
+          if (!old || !old.trees) return fromCloud(e, true, btn, apply);
+          const s = await copySurvey(old, true, false);
+          apply(s);
+          await DB.putSurvey(s);
+          toast(`נפתח סקר חדש על בסיס הסקר מ-${fmtDate(old.date)}, עם העצים והתמונות שלו.`, 5000);
+          go('#/s/' + s.id + '/details');
+        },
+      } },
   };
 
   // ---------- מסך הבית ----------
@@ -393,11 +417,12 @@
     app.replaceChildren(
       bar('סקרי עצים', null, h('button', { class: 'icon-btn', title: 'הגדרות', 'aria-label': 'הגדרות', onclick: () => go('#/settings') }, icon('gear'))),
       h('main', { class: 'stack' },
-        h('div', { class: 'home-actions' },
+        h('div', { class: 'home-actions five' },
           h('button', { class: 'tile primary', onclick: newSurvey }, icon('plus'), 'סקר חדש'),
           h('button', { class: 'tile', onclick: () => go('#/cloud') }, icon('search'), 'חיפוש סקרים בענן'),
           h('button', { class: 'tile', onclick: () => go('#/summary') }, icon('tree'), 'אורנים ומפות'),
-          h('button', { class: 'tile', onclick: () => go('#/quotes') }, icon('money'), 'הצעות מחיר')),
+          h('button', { class: 'tile', onclick: () => go('#/quotes') }, icon('money'), 'הצעות מחיר'),
+          h('button', { class: 'tile', onclick: () => go('#/lists') }, icon('list'), 'עבודה לפי רשימה')),
         h('div', { id: 'plannedBox' }),
         chips, list,
         hiddenN ? h('div', { class: 'muted small', style: 'text-align:center' }, `עוד ${hiddenN} סקרים מימים קודמים שמורים בענן. `,
@@ -1091,7 +1116,7 @@
     finally { btn.disabled = false; }
   }
   // keepDate: עריכה של הסקר המקורי בתאריך שלו (הקובץ בארכיון לא משתנה; הסקר נשמר כקובץ של האפליקציה בתאריך המקורי)
-  async function fromArchive(f, path, btn, keepDate) {
+  async function fromArchive(f, path, btn, keepDate, apply) {
     btn.disabled = true; const label = btn.textContent;
     try {
       btn.textContent = 'מוריד…';
@@ -1106,6 +1131,7 @@
       const s = await copySurvey(old, false, false);
       if (keepDate) { delete s.prev; s.date = old.date || s.date; s.source = { file: f.name, fileId: f.id }; s.dateAskedDay = today(); } // בלי השאלה על עדכון התאריך
       else s.prev = { file: f.name, fileId: f.id, date: old.date };
+      if (apply) apply(s);
       btn.textContent = 'מוסיף את התמונות…';
       const n = await addOldPhotos(s, r.trees, old.date);
       const w = r.warnings.filter(x => !/^עץ בלי מספר/.test(x));
@@ -1364,7 +1390,7 @@
   }
 
   // asNew=true: סקר חדש עם אותם פרטי מוסד ואותם עצים (מספר, מין, הערות, אורנים, נ"צ), בתאריך של היום ובלי תמונות
-  async function fromCloud(e, asNew, btn) {
+  async function fromCloud(e, asNew, btn, apply) {
     btn.disabled = true;
     try {
       if (!e.dataId) throw new Error('לסקר הזה אין עדיין נתונים בענן');
@@ -1390,6 +1416,7 @@
           if (b) await addOldPhotos(s, (await Importer.parse(await b.arrayBuffer(), old.odSrcName, { photos: true })).trees, old.date);
         } catch (err) { toast('התמונות מהאקסל הישן לא נקראו: ' + err.message, 5000); }
       }
+      if (apply) apply(s);
       await DB.putSurvey(s);
       toast(`נפתח סקר חדש על בסיס הסקר מ-${fmtDate(old.date)}, עם התמונות שלו. עדכן את העצים והוסף תמונות חדשות.`, 5000);
       go('#/s/' + s.id + '/details');
@@ -1623,6 +1650,7 @@
     body.append(h('div', { class: 'card stack', style: 'max-width:720px;margin:0 auto' },
       field('סוג הסקר', h('select', { class: 'in', onchange: e => { cur.type = e.target.value; cur.site = composeSite(cur); saveSoon(); renderSurvey(); } },
         Object.entries(Construction.TYPES).map(([k, v]) => h('option', { value: k, selected: Construction.typeOf(cur) === k ? '' : null }, v)))),
+      cur.listRef ? h('div', { class: 'small' }, '📋 נפתח מהרשימה ', h('a', { href: '#/lists/' + encodeURIComponent(cur.listRef.list) }, cur.listRef.name || 'רשימה')) : null,
       field('פרויקט (למשל: ירושלים)', sugg('project', { placeholder: 'לניהול וסינון הסקרים, לא מופיע בדוח' })),
       build ? null : field('שם המוסד / האתר', inp('siteName', { placeholder: 'למשל: גן חצב' })),
       h('div', { class: 'row', style: 'align-items:stretch' },
