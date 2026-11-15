@@ -612,3 +612,9 @@ textarea.doc-text.b { font-weight: 700; }
 .wl-sec > summary { cursor: pointer; font-weight: 700; font-size: 17px; padding: 8px 2px; color: var(--muted); }
 .wl-sec[open] > summary { margin-bottom: 8px; }
 .wl-lcard.fin { opacity: .85; }
+.wl-mebtn { width: 34px; height: 34px; border-radius: 6px; border: 2px solid rgba(0,0,0,.25); background: #fff; color: #1a73e8; font-size: 22px; line-height: 1; cursor: pointer; }
+.wl-rin { width: 44px; border: 2px solid transparent; text-align: center; padding: 0; -moz-appearance: textfield; appearance: textfield; cursor: pointer; }
+.wl-rin::-webkit-inner-spin-button, .wl-rin::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.wl-rin:hover, .wl-rin:focus { border-color: var(--text); outline: none; }
+.wl-popup { font-size: 14px; min-width: 210px; }
+.wl-popup .btn { min-height: 32px; padding: 2px 10px; }
