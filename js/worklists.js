@@ -629,7 +629,7 @@
           const st = stateOf(r);
           return h('tr', { class: 'st-' + st.k },
             h('td', { class: 'wl-act' },
-              (l.route || []).includes(r.id) ? h('div', { class: 'wl-rnum', title: 'מספר במסלול' }, String(l.route.indexOf(r.id) + 1)) : null,
+              (l.route || []).includes(r.id) ? rnumInput(l, r.id, () => { save(l); draw(); }) : null,
               h('button', { class: 'btn ' + (st.k === 'todo' ? 'primary' : ''), onclick: () => openRow(l, r) }, st.k === 'todo' ? 'פתח סקר' : 'פתח'),
               h('div', { class: 'wl-badge ' + st.k }, st.t), st.d ? h('div', { class: 'wl-st small' }, st.d) : null,
               r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null),
@@ -738,6 +738,20 @@
     finally { btn.disabled = false; btn.textContent = label0; }
   }
 
+  // שינוי מקום בסדר הנסיעה (מהטבלה, מהרשימה או מהמפה)
+  function moveInRoute(l, id, pos) {
+    const i = l.route.indexOf(id);
+    if (i < 0 || !(pos >= 1)) return false;
+    pos = Math.min(Math.round(pos), l.route.length);
+    if (pos - 1 === i) return false;
+    l.route.splice(i, 1); l.route.splice(pos - 1, 0, id);
+    return true;
+  }
+  const rnumInput = (l, id, onMove) => U().h('input', { class: 'wl-rnum wl-rin', type: 'number', inputmode: 'numeric', min: 1, max: l.route.length, value: l.route.indexOf(id) + 1,
+    title: 'המקום בסדר הנסיעה: הקלד מספר אחר כדי להזיז', 'aria-label': 'מקום בסדר הנסיעה',
+    onclick: e => { e.stopPropagation(); e.target.select(); },
+    onchange: e => { if (moveInRoute(l, id, +e.target.value)) onMove(); else e.target.value = l.route.indexOf(id) + 1; },
+    onkeydown: e => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); } });
   // ---------- מסלול נסיעה (1.97.0): מפה עם המוסדות ממוספרים, סידור אוטומטי (הדרך הקצרה) או ידני, ופתיחה בגוגל מפות / וייז ----------
   // הכתובת לחיפוש במפה: הרחוב והמספר בלבד ("שכ' טירת צבי רח' חנה סנש 6" -> "חנה סנש 6"), והעיר
   function geoStreet(street) {
@@ -796,11 +810,12 @@
     return 12742 * Math.asin(Math.sqrt(x));
   }
   // הדרך הקצרה (בקו אווירי) שעוברת בכל הנקודות: שכן קרוב מכל נקודת התחלה + שיפור 2-opt. start: נקודה קבועה בהתחלה (המיקום שלי)
-  function bestOrder(pts, start) {
+  // cost(i, j): זמן/מרחק נסיעה מנקודה i לנקודה j (i = -1 = נקודת ההתחלה). בלי cost: קו אווירי
+  function bestOrder(pts, start, cost) {
     const n = pts.length;
     if (n < 2) return pts.map((_, i) => i);
-    const d = (i, j) => km(pts[i], pts[j]);
-    const len = o => (start ? km(start, pts[o[0]]) : 0) + o.slice(1).reduce((a, x, i) => a + d(o[i], x), 0);
+    const d = cost || ((i, j) => km(i < 0 ? start : pts[i], pts[j]));
+    const len = o => (start ? d(-1, o[0]) : 0) + o.slice(1).reduce((a, x, i) => a + d(o[i], x), 0);
     const improve = o => {
       let better = true;
       while (better) {
@@ -817,12 +832,11 @@
     for (const s0 of starts) {
       const left = new Set(pts.map((_, i) => i));
       const o = [];
-      let cur = s0 >= 0 ? s0 : null;
-      if (cur != null) { o.push(cur); left.delete(cur); }
+      let cur = s0;
+      if (cur >= 0) { o.push(cur); left.delete(cur); }
       while (left.size) {
-        const from = cur == null ? start : pts[cur];
         let bi = -1, bd = Infinity;
-        for (const j of left) { const x = km(from, pts[j]); if (x < bd) { bd = x; bi = j; } }
+        for (const j of left) { const x = d(cur, j); if (x < bd) { bd = x; bi = j; } }
         o.push(bi); left.delete(bi); cur = bi;
       }
       const im = improve(o);
@@ -831,6 +845,28 @@
     // בלי נקודת התחלה: מצפון לדרום
     if (!start && pts[best[0]].lat < pts[best[n - 1]].lat) best.reverse();
     return best;
+  }
+  // נסיעה בכבישים (OSRM, שירות חינמי בלי מפתח): טבלת זמני נסיעה לסידור, ומסלול לציור על המפה
+  const OSRM = 'https://router.project-osrm.org/';
+  const coordsOf = pts => pts.map(p => p.lon.toFixed(6) + ',' + p.lat.toFixed(6)).join(';');
+  async function osrm(path) {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const res = await fetch(OSRM + path, { signal: ctl.signal });
+      if (!res.ok) throw new Error('שירות הניתוב לא זמין (' + res.status + ')');
+      const j = await res.json();
+      if (j.code !== 'Ok') throw new Error('שירות הניתוב: ' + (j.message || j.code));
+      return j;
+    } finally { clearTimeout(t); }
+  }
+  async function driveTable(pts) {
+    const j = await osrm('table/v1/driving/' + coordsOf(pts) + '?annotations=duration');
+    return j.durations;
+  }
+  async function driveRoute(pts) {
+    const j = await osrm('route/v1/driving/' + coordsOf(pts) + '?overview=full&geometries=geojson');
+    const r = j.routes[0];
+    return { line: r.geometry.coordinates.map(([lo, la]) => [la, lo]), km: r.distance / 1000, min: r.duration / 60 };
   }
 
   async function renderRoute(l) {
@@ -850,7 +886,7 @@
     const mapEl = h('div', { class: 'wl-mapview' });
     const fromMe = h('input', { type: 'checkbox' });
     const linksBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
-    let map = null, layer = null;
+    let map = null, layer = null, pickAfter = null;
     const persist = () => save(l);
     const navUrl = r => { const g = geo.get(r.id), lb = label(r); return g && g.src === 'gps' ? `https://waze.com/ul?ll=${g.lat},${g.lon}&navigate=yes` : 'https://waze.com/ul?q=' + encodeURIComponent(lb.addr) + '&navigate=yes'; };
     const stopOf = r => { const g = geo.get(r.id); return g && g.src === 'gps' ? `${g.lat.toFixed(6)},${g.lon.toFixed(6)}` : label(r).addr; };
@@ -877,11 +913,32 @@
         if (!r || !g) return;
         const lb = label(r);
         const icon = L.divIcon({ className: 'wl-pin' + (done(r) ? ' done' : '') + (g.approx ? ' approx' : ''), html: String(i + 1), iconSize: [30, 30], iconAnchor: [15, 15] });
-        L.marker([g.lat, g.lon], { icon }).addTo(layer).bindPopup(`<b>${i + 1}. ${lb.name.replace(/</g, '&lt;')}</b><br>${lb.addr.replace(/</g, '&lt;')}${g.approx ? '<br><i>מיקום משוער (מרכז העיר)</i>' : ''}<br><a href="${navUrl(r)}" target="_blank" rel="noopener">נווט בוויז</a>`);
+        const mv = pos => { if (moveInRoute(l, id, pos)) { persist(); map.closePopup(); redraw(); } };
+        const pop = () => h('div', { class: 'wl-popup', dir: 'rtl' },
+          h('b', {}, lb.name), h('div', {}, lb.addr), g.approx ? h('i', {}, 'מיקום משוער (מרכז העיר)') : null,
+          h('div', { class: 'row', style: 'gap:6px;align-items:center;margin-top:6px' }, 'מקום בסדר:',
+            rnumInput(l, id, () => { persist(); map.closePopup(); redraw(); }),
+            h('button', { class: 'btn', title: 'מוקדם יותר', disabled: i === 0 ? true : null, onclick: () => mv(i) }, '↑'),
+            h('button', { class: 'btn', title: 'מאוחר יותר', disabled: i === l.route.length - 1 ? true : null, onclick: () => mv(i + 2) }, '↓'),
+            h('button', { class: 'btn', title: 'שים אחרי התחנה שנבחרה קודם', onclick: () => { if (pickAfter && pickAfter !== id) { const k = l.route.indexOf(pickAfter); mv(k + (k < i ? 2 : 1)); pickAfter = null; } else { pickAfter = id; ui.toast('עכשיו לחץ על התחנה שתבוא מיד אחרי זו, ובחר "שים אחרי…"', 3500); map.closePopup(); } } }, pickAfter && pickAfter !== id ? 'שים אחרי ' + label(l.rows.find(x => x.id === pickAfter)).name : '📌 מה בא אחרי זו?')),
+          h('a', { href: navUrl(r), target: '_blank', rel: 'noopener' }, 'נווט בוויז'));
+        L.marker([g.lat, g.lon], { icon }).addTo(layer).bindPopup(pop);
         ll.push([g.lat, g.lon]);
       });
-      if (ll.length > 1) L.polyline(ll, { color: '#2e6b33', weight: 3, opacity: .7, dashArray: '6 6' }).addTo(layer);
       if (ll.length) map.fitBounds(L.latLngBounds(ll).pad(0.15), { maxZoom: 15 });
+      if (ll.length < 2) { drive = null; return; }
+      const key = ll.map(x => x.join(',')).join(';');
+      const air = L.polyline(ll, { color: '#2e6b33', weight: 3, opacity: .6, dashArray: '6 6' }).addTo(layer);
+      const myLayer = layer;
+      drive = driveCache.get(key) || null; showStatus();
+      (driveCache.has(key) ? Promise.resolve(driveCache.get(key)) : driveRoute(ll.map(([lat, lon]) => ({ lat, lon }))).then(r => { driveCache.set(key, r); return r; }))
+        .then(r => {
+          if (layer !== myLayer) return;
+          air.remove();
+          L.polyline(r.line, { color: '#1a73e8', weight: 5, opacity: .8 }).addTo(layer);
+          drive = r; showStatus();
+        })
+        .catch(() => { drive = null; showStatus(); });
     }
     function drawList() {
       const idx = new Map(l.route.map((id, i) => [id, i]));
@@ -892,7 +949,7 @@
         const lb = label(r), g = geo.get(id);
         const move = dlt => { const j = i + dlt; if (j < 0 || j >= l.route.length) return; [l.route[i], l.route[j]] = [l.route[j], l.route[i]]; persist(); redraw(); };
         return h('div', { class: 'wl-stop' + (done(r) ? ' done' : '') },
-          h('span', { class: 'wl-rnum' }, String(i + 1)),
+          rnumInput(l, id, () => { persist(); redraw(); }),
           h('div', { style: 'flex:1;min-width:0' }, h('b', {}, lb.name), done(r) ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הסתיים') : null,
             h('div', { class: 'muted small' }, lb.addr + (g ? (g.approx ? ' · מיקום משוער' : '') : geo.has(id) ? '' : ' · לא נמצא במפה'))),
           h('button', { class: 'icon-btn', title: 'למעלה', 'aria-label': 'הזז למעלה', disabled: i === 0 ? true : null, onclick: () => move(-1) }, '↑'),
@@ -906,7 +963,13 @@
         h('button', { class: 'btn', onclick: async () => { l.route.push(r.id); persist(); await locateAll(); redraw(); } }, '➕ הוסף')))] : []));
       const links = gmapsLinks();
       linksBox.replaceChildren(...links.map((u, i) => h('a', { class: 'btn primary', href: u, target: '_blank', rel: 'noopener' }, '🧭 פתח בגוגל מפות' + (links.length > 1 ? ` (חלק ${i + 1})` : ''))));
-      status.textContent = `${l.route.length} תחנות במסלול` + (tot ? ` · כ-${Math.round(tot)} ק"מ בקו אווירי (בכביש יותר)` : '');
+      airKm = tot; showStatus();
+    }
+    let drive = null, airKm = 0;
+    const driveCache = new Map();
+    const hm = m => m >= 60 ? `${Math.floor(m / 60)} ש' ${Math.round(m % 60)} דק'` : `${Math.round(m)} דק'`;
+    function showStatus() {
+      status.textContent = `${l.route.length} תחנות במסלול` + (drive ? ` · ${Math.round(drive.km)} ק"מ נסיעה בכבישים · כ-${hm(drive.min)} (בלי עצירות)` : airKm ? ` · כ-${Math.round(airKm)} ק"מ בקו אווירי` : '');
     }
     const redraw = () => { drawList(); drawMap(); };
     async function locateAll() {
@@ -927,17 +990,50 @@
       let start = null;
       if (fromMe.checked) start = await new Promise(res => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lon: p.coords.longitude }), () => res(null), { timeout: 8000, maximumAge: 120000 }) : res(null));
       if (fromMe.checked && !start) ui.toast('המיקום שלך לא זמין, המסלול מסודר מצפון לדרום', 3500);
-      const ord = bestOrder(ids.map(id => geo.get(id)), start);
+      const pts = ids.map(id => geo.get(id));
+      let cost = null;
+      if (pts.length > 1 && pts.length < 99) {
+        status.textContent = 'מחשב זמני נסיעה בכבישים…';
+        try {
+          const m = await driveTable(start ? [start, ...pts] : pts), o = start ? 1 : 0;
+          if (m && m.every(row => row.every(x => x != null))) cost = (i, j) => m[i + o][j + o];
+        } catch (e) { /* בלי שירות ניתוב: קו אווירי */ }
+      }
+      const ord = bestOrder(pts, start, cost);
       l.route = [...ord.map(i => ids[i]), ...rest];
       persist(); redraw();
-      ui.toast('המסלול סודר לפי הדרך הקצרה', 2500);
+      ui.toast(cost ? 'המסלול סודר לפי זמן הנסיעה בכבישים' : 'שירות הניתוב לא זמין: המסלול סודר לפי קו אווירי', 3000);
+    }
+    // המיקום שלי על המפה (נקודה כחולה כמו בגוגל מפות) + כפתור למרכז אליו
+    let me = null, meDot = null, meAcc = null, watch = null, follow = false;
+    function showMe() {
+      if (!navigator.geolocation || !map) return;
+      const Btn = L.Control.extend({ options: { position: 'topleft' }, onAdd: () => {
+        const b = L.DomUtil.create('button', 'wl-mebtn');
+        b.type = 'button'; b.title = 'המיקום שלי'; b.setAttribute('aria-label', 'המיקום שלי'); b.textContent = '◎';
+        L.DomEvent.disableClickPropagation(b);
+        b.onclick = () => { follow = true; if (me) map.setView([me.lat, me.lon], Math.max(map.getZoom(), 15)); else ui.toast('מחפש את המיקום שלך…', 2000); };
+        return b;
+      } });
+      new Btn().addTo(map);
+      watch = navigator.geolocation.watchPosition(p => {
+        me = { lat: p.coords.latitude, lon: p.coords.longitude };
+        const ll = [me.lat, me.lon];
+        if (!meDot) {
+          meAcc = L.circle(ll, { radius: p.coords.accuracy, color: '#1a73e8', weight: 1, fillOpacity: .12, interactive: false }).addTo(map);
+          meDot = L.circleMarker(ll, { radius: 8, color: '#fff', weight: 3, fillColor: '#1a73e8', fillOpacity: 1 }).addTo(map).bindPopup('המיקום שלי');
+        } else { meDot.setLatLng(ll); meAcc.setLatLng(ll).setRadius(p.coords.accuracy); }
+        if (follow) { map.panTo(ll); follow = false; }
+      }, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
+      const stop = () => { if (watch != null) navigator.geolocation.clearWatch(watch); watch = null; window.removeEventListener('hashchange', stop); };
+      window.addEventListener('hashchange', stop);
     }
     ui.app().replaceChildren(ui.bar({ title: 'מסלול נסיעה', sub: l.name }, back),
       h('main', { class: 'wl-route' },
         mapEl,
         h('div', { class: 'stack' },
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' },
-            h('button', { class: 'btn primary', onclick: ev => { ev.currentTarget.disabled = true; auto().finally(() => { ev.target.disabled = false; }); } }, '⚡ סדר אוטומטי (הדרך הקצרה)'),
+            h('button', { class: 'btn primary', onclick: ev => { ev.currentTarget.disabled = true; auto().finally(() => { ev.target.disabled = false; }); } }, '⚡ סדר אוטומטי (הכי מהר בכבישים)'),
             h('label', { class: 'row small', style: 'gap:6px' }, fromMe, 'להתחיל מהמיקום שלי')),
           linksBox, status, listBox,
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
@@ -950,6 +1046,7 @@
       map = L.map(mapEl, { zoomControl: true }).setView([32.3, 35.0], 8);
       const g = ui.mapLayers()['גוגל – מפה'];
       L.tileLayer(g[0], g[1]).addTo(map);
+      showMe();
     } catch (e) { mapEl.replaceChildren(h('div', { class: 'muted small', style: 'padding:16px' }, 'המפה לא נטענה: ' + e.message)); }
     if (navigator.onLine === false) { status.textContent = 'אין קליטה: אי אפשר לאתר כתובות במפה'; for (const id of l.route) { const r = l.rows.find(x => x.id === id); if (r && r.geo) geo.set(id, r.geo); } redraw(); return; }
     await locateAll();
