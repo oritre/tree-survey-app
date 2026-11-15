@@ -333,5 +333,19 @@
     return { survey, trees, warnings: [...new Set(warnings)] };
   }
 
-  root.Importer = { parse, toIsoDate };
+  // טבלה כללית (רשימת עבודה, 1.96.0): כל הגיליונות כשורות של ערכים, עמודה A = מקום 0. תאריך שמור כמספר נשאר מספר
+  async function readTable(buffer) {
+    const zip = await JSZip.loadAsync(buffer);
+    return (await readSheets(zip)).map(sh => {
+      const rows = [];
+      for (const [ref, v] of sh.cells) {
+        const r = +ref.replace(/\D+/g, '') - 1, c = colNum(ref) - 1;
+        (rows[r] = rows[r] || [])[c] = typeof v === 'string' ? clean(v) : v;
+      }
+      for (let i = 0; i < rows.length; i++) rows[i] = rows[i] || [];
+      return { name: sh.name, rows };
+    });
+  }
+
+  root.Importer = { parse, toIsoDate, readTable };
 })(self);
