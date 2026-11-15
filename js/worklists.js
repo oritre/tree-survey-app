@@ -847,7 +847,7 @@
     const status = h('div', { class: 'muted small', role: 'status' });
     const listBox = h('div', { class: 'stack wl-route-list' });
     const outBox = h('div', { class: 'stack' });
-    const mapEl = h('div', { class: 'wl-map' });
+    const mapEl = h('div', { class: 'wl-mapview' });
     const fromMe = h('input', { type: 'checkbox' });
     const linksBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
     let map = null, layer = null;
