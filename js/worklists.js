@@ -349,6 +349,7 @@
     sync(false).then(ch => { if (ch && !(document.activeElement && document.activeElement.matches('input, textarea, select'))) redraw(); }).catch(() => {});
   }
 
+  let listQuery = '';
   async function renderLists() {
     const ui = U(), { h } = ui;
     const lists = (await live()).sort((a, b) => (b.updated || 0) - (a.updated || 0));
@@ -359,6 +360,26 @@
     };
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
     const active = lists.filter(l => !l.finished && !l.offHome), finished = lists.filter(l => l.finished), hidden = lists.filter(l => !l.finished && l.offHome);
+    // חיפוש בכל הרשימות (גם שהסתיימו או הוסרו), לפי שם, פרויקט, קובץ או כל תא, כמו "חיפוש סקרים בענן"
+    const sq = h('input', { class: 'in', type: 'search', placeholder: 'חיפוש ברשימות: שם, פרויקט, מוסד, סמל, עיר…', style: 'font-size:17px', value: listQuery });
+    const found = h('div', { class: 'stack' });
+    const normal = h('div', { class: 'stack' });
+    const doSearch = () => {
+      listQuery = sq.value;
+      const words = norm(sq.value).split(' ').filter(Boolean);
+      if (!words.length) { found.replaceChildren(); normal.classList.remove('hidden'); return; }
+      const hits = lists.map(l => {
+        const meta = norm([l.name, l.project, l.file].join(' '));
+        const rowsHit = l.rows.filter(r => !r.deleted && words.every(w => (meta + ' ' + norm(Object.values(r.cells).join(' '))).includes(w)));
+        return { l, ok: words.every(w => meta.includes(w)) || rowsHit.length, rowsHit };
+      }).filter(x => x.ok);
+      normal.classList.add('hidden');
+      found.replaceChildren(h('div', { class: 'muted small' }, hits.length ? `${hits.length} רשימות` : 'לא נמצאו רשימות'),
+        ...hits.map(x => h('div', { class: 'stack', style: 'gap:4px' }, card(x.l),
+          x.rowsHit.length && x.rowsHit.length < x.l.rows.filter(r => !r.deleted).length ? h('div', { class: 'muted small', style: 'padding-inline-start:12px' },
+            'נמצא בשורות: ' + x.rowsHit.slice(0, 6).map(r => Object.values(r.cells).filter(Boolean).slice(0, 3).join(' ')).join(' · ') + (x.rowsHit.length > 6 ? ' …' : '')) : null)));
+    };
+    sq.addEventListener('input', doSearch);
     // כמו בסקרים: סיום רשימה, הסרה מהמסך (בלי מחיקה), החזרה ומחיקה (עם ביטול)
     const act = (label, title, fn, cls) => h('button', { class: 'btn ' + (cls || ''), title, onclick: e => { e.stopPropagation(); fn(); }, onkeydown: e => e.stopPropagation() }, label);
     const card = l => {
@@ -399,10 +420,14 @@
           h('div', { class: 'small' }, 'רשימת מוסדות מאקסל (למשל רשימת המעונות מהלקוח): אפשר לערוך את התאים כאן, לבחור איזו עמודה היא הכתובת, העיר, סמל המוסד והמנהל/ת, ולפתוח סקר מכל שורה. לפני הפתיחה האפליקציה מחפשת סקר קודם באותו מקום (גם בארכיון בגוגל דרייב), כדי להתחיל מהסקר של השנה שעברה עם העצים והתמונות.'),
           h('button', { class: 'btn primary big', onclick: () => pick.click() }, '📥 ייבוא רשימה מאקסל'), pick,
           h('div', { class: 'muted small', style: 'text-align:center' }, 'במחשב אפשר גם לגרור את קובץ האקסל לכאן')),
-        lists.length ? null : h('div', { class: 'empty' }, ui.icon('list'), 'עוד אין רשימות. ייבא קובץ אקסל של רשימת מוסדות.'),
-        active.map(card),
-        finished.length ? h('details', { class: 'wl-sec' }, h('summary', {}, `רשימות שהסתיימו (${finished.length})`), h('div', { class: 'stack' }, finished.map(card))) : null,
-        hidden.length ? h('details', { class: 'wl-sec' }, h('summary', {}, `הוסרו מהמסך (${hidden.length}), לא נמחקו`), h('div', { class: 'stack' }, hidden.map(card))) : null));
+        lists.length ? sq : h('div', { class: 'empty' }, ui.icon('list'), 'עוד אין רשימות. ייבא קובץ אקסל של רשימת מוסדות.'),
+        found,
+        h('div', { class: 'stack' }, normal),
+        ));
+    normal.append(...active.map(card),
+      finished.length ? h('details', { class: 'wl-sec' }, h('summary', {}, `רשימות שהסתיימו (${finished.length})`), h('div', { class: 'stack' }, finished.map(card))) : '',
+      hidden.length ? h('details', { class: 'wl-sec' }, h('summary', {}, `הוסרו מהמסך (${hidden.length}), לא נמחקו`), h('div', { class: 'stack' }, hidden.map(card))) : '');
+    if (listQuery) doSearch();
     syncThen(renderLists);
   }
 
@@ -413,18 +438,22 @@
       if (!sheets.length) throw new Error('הקובץ ריק');
       const sh = sheets[0];
       const title = sh.rows.slice(0, guessHeader(sh.rows)).flat().map(cellText).filter(t => t.length > 8).sort((a, b) => b.length - a.length)[0];
-      const l = { id: uid(), name: (title || f.name.replace(/\.[^.]+$/, '')).slice(0, 120), file: f.name, project: (await DB.getKV('lastProject', '')) || '', type: 'safety',
+      const l = { id: uid(), name: (title || f.name.replace(/\.[^.]+$/, '')).slice(0, 120), file: f.name, project: '', type: 'safety',
         raw: sh.rows.map(r => Array.from(r, v => cellText(v))), headerRow: guessHeader(sh.rows), created: Date.now() };
       buildFromRaw(l);
       await addCityColumn(l);
+      // פרויקט: רק אם שם של פרויקט קיים מופיע בכותרת או בשם הקובץ (למשל "אמונה"), לא הפרויקט האחרון
+      const hay = norm(l.name + ' ' + f.name);
+      l.project = (await ui.projectsRecent()).filter(p => norm(p).length >= 3).find(p => hasWord(hay, norm(p)) || hay.includes(norm(p))) || '';
       await save(l);
       ui.go('#/lists/' + encodeURIComponent(l.id) + '/setup');
     } catch (e) { ui.toast('הייבוא נכשל: ' + e.message, 5000); }
   }
 
   // הגדרות הרשימה: שם, פרויקט, סוג הסקר, העמודות (שם, הוספה, מחיקה) והשיוך לשדות הסקר
-  function renderSetup(l) {
+  async function renderSetup(l) {
     const ui = U(), { h } = ui;
+    const projects = await ui.projectsRecent();
     const draft = JSON.parse(JSON.stringify(l));
     const main = h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' });
     const back = '#/lists/' + encodeURIComponent(l.id);
@@ -450,7 +479,7 @@
         h('div', { class: 'card stack' },
           field('שם הרשימה', h('input', { class: 'in', value: draft.name || '', oninput: e => { draft.name = e.target.value; } })),
           h('div', { class: 'row', style: 'gap:8px;align-items:stretch' },
-            h('div', { style: 'flex:1;min-width:200px' }, field('פרויקט לסקרים (למשל: אמונה)', h('input', { class: 'in', value: draft.project || '', oninput: e => { draft.project = e.target.value; } }))),
+            h('div', { style: 'flex:1;min-width:200px' }, field('פרויקט לסקרים (למשל: אמונה)', ui.suggestCombo(h('input', { class: 'in', value: draft.project || '', placeholder: 'בחר מהרשימה או כתוב', oninput: e => { draft.project = e.target.value; } }), () => projects, { arrow: true }))),
             h('div', { style: 'flex:1;min-width:200px' }, field('סוג הסקר', h('select', { class: 'in', onchange: e => { draft.type = e.target.value; draw(); } },
               Object.entries(Construction.TYPES).map(([k, v]) => h('option', { value: k, selected: (draft.type || 'safety') === k ? '' : null }, v)))))),
           draft.raw ? field('שורת הכותרות בקובץ', h('select', { class: 'in', onchange: e => {
@@ -534,7 +563,17 @@
       const outside = e => { if (!pop.contains(e.target) && e.target !== btn) done(); };
       const sortBtn = (dir, label) => h('button', { class: 'btn block' + (view.sort && view.sort.col === cid && view.sort.dir === dir ? ' primary' : ''), onclick: () => { view.sort = { col: cid, dir }; saveView(); done(); draw(); } }, label);
       const pop = h('div', { class: 'wl-pop card stack' },
-        h('b', {}, name),
+        h('b', {}, cid === '_st' ? 'סטטוס הסקר וסדר הנסיעה' : name),
+        cid === '_st' && (l.route || []).length ? h('button', { class: 'btn block' + (view.sort && view.sort.col === '_route' ? ' primary' : ''), onclick: () => { view.sort = { col: '_route', dir: 1 }; saveView(); done(); draw(); } }, '🚗 מיון לפי סדר הנסיעה (1, 2, 3…)') : null,
+        cid === '_st' ? null : h('label', { class: 'small', style: 'display:block' }, 'העמודה הזו היא (לפתיחת סקר):',
+          h('select', { class: 'in', style: 'margin-top:4px', onchange: e => {
+            for (const f of FIELDS) { const m = l.map[f.key] = l.map[f.key] || { col: '', pre: '', prev: !!f.prev }; if (m.col === cid) m.col = ''; }
+            if (e.target.value) l.map[e.target.value].col = cid;
+            save(l); done(); draw();
+            ui.toast(e.target.value ? `"${name}" שויכה ל${FIELDS.find(f => f.key === e.target.value).label}` : `"${name}" לא משויכת לשדה`, 2500);
+          } },
+            h('option', { value: '' }, '— לא משויכת —'),
+            ...fieldsOf(l).map(f => h('option', { value: f.key, selected: (l.map[f.key] || {}).col === cid ? '' : null }, f.label + ((l.map[f.key] || {}).col && l.map[f.key].col !== cid ? ' (במקום "' + ((l.cols.find(c => c.id === l.map[f.key].col) || {}).name || '') + '")' : ''))))),
         sortBtn(1, '↓ מיון מהקטן לגדול (א→ת)'), sortBtn(-1, '↑ מיון מהגדול לקטן (ת→א)'),
         search, listBox,
         h('div', { class: 'row', style: 'gap:6px' },
@@ -575,7 +614,8 @@
         && Object.entries(view.filt).every(([cid, set]) => (cid !== '_st' && !l.cols.some(c => c.id === cid)) || set.has(valOf(r, cid))));
       if (view.sort && (view.sort.col === '_st' || view.sort.col === '_route' || l.cols.some(c => c.id === view.sort.col))) {
         const { col, dir } = view.sort;
-        shown.sort((a, b) => { const x = valOf(a, col), y = valOf(b, col); return (x === '') - (y === '') || dir * cmp(x, y); });
+        const rn = r => { const k = (l.route || []).indexOf(r.id); return k < 0 ? 1e9 : k; };
+        shown.sort((a, b) => { const x = valOf(a, col), y = valOf(b, col); return (x === '') - (y === '') || dir * cmp(x, y) || (col === '_st' ? rn(a) - rn(b) : 0); });
       }
       const active = Object.keys(view.filt).length || view.sort;
       clearBox.replaceChildren(active ? h('button', { class: 'btn', onclick: () => { view.filt = {}; view.sort = null; saveView(); draw(); } }, '✕ נקה מיון וסינון') : '');
@@ -608,16 +648,19 @@
       const blob = await Reports.xlsx(rows, { sheet: 'רשימה', widths: [...l.cols.map(() => 20), 18] });
       ui.downloadFile(blob, ui.safeName(l.name || 'רשימה') + '.xlsx');
     };
+    const missing = fieldsOf(l).filter(f => ['street', 'city'].includes(f.key) && !(l.map[f.key] || {}).col && !clean((l.map[f.key] || {}).pre)).map(f => f.label);
     ui.app().replaceChildren(ui.bar({ title: l.name || 'רשימה', sub: [l.project ? 'פרויקט ' + l.project : null, Construction.TYPES[l.type || 'safety']].filter(Boolean).join(' · ') }, '#/lists'),
       h('main', { class: 'stack' },
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, q,
-          h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/setup') }, ui.icon('gear'), 'שיוך עמודות והגדרות'),
+          h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/setup') }, ui.icon('gear'), 'שיוך עמודות (כתובת, עיר, סמל…) והגדרות'),
           h('button', { class: 'btn', onclick: () => { l.rows.push({ id: uid(), cells: {}, u: Date.now() }); save(l); filter = 'all'; q.value = ''; draw(); const ins = table.querySelectorAll('tbody tr:last-child input'); if (ins[0]) ins[0].focus(); } }, '➕ שורה'),
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/route') }, '🗺 מסלול ומפה'),
           h('button', { class: 'btn', onclick: exportXlsx }, '⬇ אקסל'),
+          h('button', { class: 'btn', onclick: ev => managersReport(l, ev.currentTarget) }, '📊 דוח מנהלים'),
           l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox),
         l.finished ? h('div', { class: 'card row', style: 'gap:10px;align-items:center;background:var(--accent-soft)' }, h('b', { style: 'flex:1' }, '✓ הרשימה הסתיימה ' + new Date(l.finished).toLocaleDateString('he-IL')),
           h('button', { class: 'btn', onclick: async () => { delete l.finished; delete l.offHome; await save(l); renderList(l); } }, '↩ החזר לפעילות')) : null,
+        missing.length ? h('div', { class: 'card small', style: 'background:#fff2cc;color:#5a4300' }, `⚠ עוד לא נבחרה עמודה ל: ${missing.join(', ')}. לחץ על החץ ▾ בכותרת של העמודה ובחר "העמודה הזו היא", או ב"שיוך עמודות".`) : null,
         chipsBox, counts, table));
     draw();
     // סקרים שנפתחו במכשיר אחר: הסטטוס מהאינדקס בענן
@@ -625,6 +668,75 @@
     syncThen(async () => { const n = await byId(l.id); if (n) { Object.assign(l, n); draw(); } else ui.go('#/lists'); });
   }
 
+
+  // ---------- דוח מנהלים (1.98.0): כמו "דו"ח מנהלים, סקר יציבות עצים" של ori: שורה לכל עץ שדורש טיפול בכל מוסד ברשימה ----------
+  const xesc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  function colL(n) { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+  // rows: [[ערך או {v, s}]] s: 1 כותרת ראשית, 2 כותרת טבלה, 3 מודגש
+  async function reportXlsx(rows, widths, headRow) {
+    const cell = (v, ref) => {
+      const o = v && typeof v === 'object' ? v : { v };
+      const st = o.s ? ` s="${o.s}"` : (headRow != null ? ' s="4"' : '');
+      if (o.v == null || o.v === '') return `<c r="${ref}"${st}/>`;
+      if (typeof o.v === 'number') return `<c r="${ref}"${st}><v>${o.v}</v></c>`;
+      return `<c r="${ref}"${st} t="inlineStr"><is><t xml:space="preserve">${xesc(o.v)}</t></is></c>`;
+    };
+    const data = rows.map((r, i) => `<row r="${i + 1}">` + r.map((v, j) => cell(i > headRow ? v : (v && typeof v === 'object' ? v : { v, s: i === headRow ? 2 : 0 }), colL(j + 1) + (i + 1))).join('') + '</row>').join('');
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>');
+    zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
+    zip.file('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="דוח מנהלים" sheetId="1" r:id="rId1"/></sheets></workbook>');
+    zip.file('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
+    zip.file('xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="4"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="16"/><name val="Arial"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Arial"/></font><font><b/><sz val="12"/><name val="Arial"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"><color rgb="FF8EA9DB"/></left><right style="thin"><color rgb="FF8EA9DB"/></right><top style="thin"><color rgb="FF8EA9DB"/></top><bottom style="thin"><color rgb="FF8EA9DB"/></bottom></border></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="5"><xf/><xf fontId="1" applyFont="1"/><xf fontId="2" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf fontId="3" applyFont="1"/><xf borderId="1" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf></cellXfs></styleSheet>');
+    const cols = widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('');
+    const last = rows.length;
+    zip.file('xl/worksheets/sheet1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><sheetViews><sheetView rightToLeft="1" workbookViewId="0"><pane ySplit="${headRow + 1}" topLeftCell="A${headRow + 2}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${cols}</cols><sheetData>${data}</sheetData><autoFilter ref="A${headRow + 1}:${colL(widths.length)}${Math.max(last, headRow + 2)}"/><pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`);
+    return new Blob([await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+  async function managersReport(l, btn) {
+    const ui = U();
+    const label0 = btn.textContent; btn.disabled = true;
+    try {
+      const nameCol = l.cols.find(c => /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר)/.test(c.name)) || null;
+      let idx = null;
+      const rows = [], missing = [];
+      let inst = 0, trees = 0, i = 0;
+      const rs = l.rows.filter(r => !r.deleted);
+      for (const r of rs) {
+        btn.textContent = `טוען סקרים… ${++i}/${rs.length}`;
+        if (!r.sid) { missing.push(r); continue; }
+        let s = await DB.getSurvey(r.sid);
+        if (!s || !s.trees) {
+          if (!idx) idx = navigator.onLine !== false && await OD.connected() ? await Sync.cloudIndex().catch(() => []) : [];
+          const e = idx.find(x => x.id === r.sid);
+          s = e ? await Sync.loadSurvey(e).catch(() => null) : null;
+        }
+        if (!s || s.deleted) { missing.push(r); continue; }
+        const v = valuesOf(l, r);
+        const name = (nameCol && clean(r.cells[nameCol.id])) || s.siteName || v.siteName || '';
+        const care = Core.sortTrees(s.trees.filter(t => Core.hasContent(t) && Reports.needsCare(t)));
+        inst++;
+        for (const t of care) {
+          trees++;
+          const num = String(t.num || '').trim();
+          rows.push([s.code || v.code || '', name, s.street || geoStreet(v.street), s.city || v.city || '', /^\d+$/.test(num) ? +num : num, t.species || '', (t.notes || '').trim(), String(t.urgency || '').trim()]);
+        }
+      }
+      if (!inst) { ui.toast('אין עדיין סקרים שנפתחו מהרשימה', 3500); return; }
+      const d = new Date(), date = `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+      const head = ['סמל מוסד', 'שם המוסד', 'כתובת', 'עיר', 'מספר עץ', 'מין העץ', 'הערות וטיפול מומלץ', 'דחיפות'];
+      const out = [
+        [{ v: 'בס"ד', s: 0 }, '', '', '', '', '', { v: 'תאריך', s: 3 }, { v: date, s: 3 }],
+        [{ v: 'דו"ח מנהלים, סקר יציבות עצים', s: 1 }],
+        [{ v: [l.project, l.name].filter(Boolean).join(' - '), s: 3 }],
+        [],
+        head, ...rows];
+      const blob = await reportXlsx(out, [11, 24, 22, 14, 9, 16, 50, 9], 4);
+      ui.downloadFile(blob, ui.safeName('דוח מנהלים - ' + (l.project || l.name || 'רשימה')) + ' ' + date.replace(/\//g, '.') + '.xlsx');
+      ui.toast(`✓ דוח מנהלים: ${inst} מוסדות, ${trees} עצים לטיפול` + (missing.length ? `. ${missing.length} מוסדות עוד בלי סקר ולא נכללו` : ''), 6000);
+    } catch (e) { ui.toast('הדוח נכשל: ' + e.message, 5000); }
+    finally { btn.disabled = false; btn.textContent = label0; }
+  }
 
   // ---------- מסלול נסיעה (1.97.0): מפה עם המוסדות ממוספרים, סידור אוטומטי (הדרך הקצרה) או ידני, ופתיחה בגוגל מפות / וייז ----------
   // הכתובת לחיפוש במפה: הרחוב והמספר בלבד ("שכ' טירת צבי רח' חנה סנש 6" -> "חנה סנש 6"), והעיר
@@ -647,20 +759,31 @@
     const j = await res.json();
     return j && j[0] ? { lat: +j[0].lat, lon: +j[0].lon } : null;
   }
-  // מיקום לשורה: נ"צ של עצים בסקר המקושר, אחרת חיפוש הכתובת (נשמר בשורה, ומתחדש כשהכתובת משתנה)
+  // שמות קצרים של ערים שבשירות המפה מתבלבלים עם מקום אחר (חצור -> חצור אשדוד)
+  const CITY_FULL = { 'חצור': 'חצור הגלילית', 'מעלות': 'מעלות תרשיחא', 'קרית מוצקין': 'קריית מוצקין', 'קרית שמונה': 'קריית שמונה', 'קרית גת': 'קריית גת', 'קרית ביאליק': 'קריית ביאליק', 'קרית אתא': 'קריית אתא', 'קרית ים': 'קריית ים', 'קרית מלאכי': 'קריית מלאכי', 'קרית ארבע': 'קריית ארבע', 'קרית טבעון': 'קריית טבעון', 'קרית עקרון': 'קריית עקרון' };
+  const fullCity = c => CITY_FULL[clean(c)] || clean(c);
+  const cityCenter = new Map();
+  async function cityGeo(city) {
+    if (!cityCenter.has(city)) cityCenter.set(city, await nominatim(city));
+    return cityCenter.get(city);
+  }
+  // מיקום לשורה: נ"צ של עצים בסקר המקושר, אחרת חיפוש הכתובת (נשמר בשורה, ומתחדש כשהכתובת משתנה).
+  // תוצאה של רחוב שרחוקה מהעיר (רחוב "טבריה" בירושלים במקום רחוב ירושלים בטבריה) נפסלת ונשאר מרכז העיר
   async function locate(l, r, local) {
     const s = r.sid && local.get(r.sid);
     const pts = s ? s.trees.filter(t => typeof t.lat === 'number' && typeof t.lon === 'number') : [];
     if (pts.length) return { lat: pts.reduce((a, t) => a + t.lat, 0) / pts.length, lon: pts.reduce((a, t) => a + t.lon, 0) / pts.length, src: 'gps' };
     const v = valuesOf(l, r);
-    const st = geoStreet(v.street), city = clean(v.city);
-    const key = st + '|' + city;
+    const st = geoStreet(v.street), city = fullCity(v.city);
+    const key = 'v2|' + st + '|' + city;
     if (r.geo && r.geo.key === key) return r.geo;
     if (!st && !city) return null;
+    const c = city ? await cityGeo(city) : null;
+    const near = g => g && (!c || km(c, g) <= 12);
     let g = null, approx = false;
-    if (st && city) g = await nominatim(st + ', ' + city);
-    if (!g && st && city) { const w = st.replace(/\s*\d+\s*$/, ''); if (w && w !== st) g = await nominatim(w + ', ' + city); }
-    if (!g && city) { g = await nominatim(city); approx = true; }
+    if (st && city) { g = await nominatim(st + ', ' + city); if (!near(g)) g = null; }
+    if (!g && st && city) { const w = st.replace(/\s*\d+\s*$/, ''); if (w && w !== st) { g = await nominatim(w + ', ' + city); if (!near(g)) g = null; } }
+    if (!g && c) { g = c; approx = true; }
     if (!g && st && !city) g = await nominatim(st);
     if (!g) return null;
     r.geo = { lat: g.lat, lon: g.lon, key, approx };
@@ -719,7 +842,7 @@
     if (!Array.isArray(l.route) || !l.route.length) l.route = live().filter(r => !done(r)).map(r => r.id);
     l.route = l.route.filter(id => live().some(r => r.id === id));
     const nameCol = l.cols.find(c => /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר)/.test(c.name)) || null;
-    const label = r => { const v = valuesOf(l, r); return { name: (nameCol && clean(r.cells[nameCol.id])) || v.siteName || 'שורה', addr: [geoStreet(v.street), v.city].filter(Boolean).join(', ') }; };
+    const label = r => { const v = valuesOf(l, r); return { name: (nameCol && clean(r.cells[nameCol.id])) || v.siteName || 'שורה', addr: [geoStreet(v.street), fullCity(v.city)].filter(Boolean).join(', ') }; };
     const geo = new Map();
     const status = h('div', { class: 'muted small', role: 'status' });
     const listBox = h('div', { class: 'stack wl-route-list' });
@@ -729,8 +852,8 @@
     const linksBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
     let map = null, layer = null;
     const persist = () => save(l);
-    const navUrl = r => { const g = geo.get(r.id), lb = label(r); return g && !g.approx ? `https://waze.com/ul?ll=${g.lat},${g.lon}&navigate=yes` : 'https://waze.com/ul?q=' + encodeURIComponent(lb.addr) + '&navigate=yes'; };
-    const stopOf = r => { const g = geo.get(r.id); return g && !g.approx ? `${g.lat.toFixed(6)},${g.lon.toFixed(6)}` : label(r).addr; };
+    const navUrl = r => { const g = geo.get(r.id), lb = label(r); return g && g.src === 'gps' ? `https://waze.com/ul?ll=${g.lat},${g.lon}&navigate=yes` : 'https://waze.com/ul?q=' + encodeURIComponent(lb.addr) + '&navigate=yes'; };
+    const stopOf = r => { const g = geo.get(r.id); return g && g.src === 'gps' ? `${g.lat.toFixed(6)},${g.lon.toFixed(6)}` : label(r).addr; };
     // גוגל מפות: עד 10 תחנות בקישור, ולכן מסלול ארוך מתחלק לכמה קישורים (כל חלק מתחיל איפה שהקודם נגמר)
     function gmapsLinks() {
       const rs = l.route.map(id => l.rows.find(r => r.id === id)).filter(Boolean);
