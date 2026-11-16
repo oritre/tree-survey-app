@@ -1915,12 +1915,17 @@
     if (none) none.classList.toggle('hidden', shown > 0 || !q);
   }
   // בחירה של כמה עצים ומחיקה ביחד (ori). selFor = הסקר שהבחירה שייכת לו
-  let selMode = false, selIds = new Set(), selFor = null;
+  let selMode = false, selIds = new Set(), selFor = null, lastPick = null;
   function togglePick(id) {
     if (selIds.has(id)) selIds.delete(id); else selIds.add(id);
+    lastPick = id;
     renderTreeList();
   }
-  function endPick() { selMode = false; selIds = new Set(); renderTreeList(); renderEditor(); }
+  // ori (1.107.0): ביציאה מהבחירה נשארים בעץ האחרון שסומן, ולא חוזרים לראש הרשימה
+  function endPick() {
+    if (lastPick && treeById(lastPick)) curTreeId = lastPick;
+    lastPick = null; selMode = false; selIds = new Set(); renderTreeList(); renderEditor();
+  }
   async function deletePicked() {
     const ts = cur.trees.filter(t => selIds.has(t.id));
     if (!ts.length) return;
