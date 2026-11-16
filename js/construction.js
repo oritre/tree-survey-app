@@ -147,6 +147,8 @@
       const miss = SCORES.filter(([k]) => num(t[k]) == null).map(x => x[1]);
       if (miss.length) w.push(`${name}: חסר ניקוד ${miss.join(', ')}.`);
       if (!(t.photos || []).length && !covered.has(Core.firstNum(t.num))) w.push(`${name}: אין תמונה.`);
+      // ori (1.108.0): גם עץ בלי היתכנות העתקה
+      if (!transplantOf(t)) w.push(`${name}: אין היתכנות העתקה.`);
       if (s.warnGps && t.lat == null) w.push(`${name}: אין נ"צ.`);
     }
     return w;
