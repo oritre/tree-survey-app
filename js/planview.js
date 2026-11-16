@@ -304,6 +304,8 @@
         const on = selPoly === poly.id;
         cx.fillStyle = poly.ref ? 'rgba(120,120,120,.10)' : on ? 'rgba(156,39,176,.22)' : 'rgba(156,39,176,.10)'; cx.fill();
         cx.lineWidth = on ? 3 : 2; cx.strokeStyle = '#9c27b0'; cx.setLineDash([8, 5]); cx.stroke(); cx.setLineDash([]);
+        // תחום נבחר: נקודות שאפשר לגרור
+        if (on && mode === 'area' && !drawing) for (const p of pts) { cx.beginPath(); cx.arc(p.x, p.y, 7, 0, 7); cx.fillStyle = '#fff'; cx.fill(); cx.lineWidth = 2.5; cx.strokeStyle = '#9c27b0'; cx.stroke(); }
         // שם התחום מעל הקודקוד העליון, כדי לא לכסות את העצים שבתוכו
         const top = pts.reduce((a, p) => p.y < a.y ? p : a, pts[0]);
         const n = myTrees().filter(t => root.Plan.inside([t.px, t.py], poly.pts)).length;
@@ -525,6 +527,47 @@
       map.dragging.disable();
       try { mapEl.setPointerCapture(e.pointerId); } catch (_) {}
     }, true);
+    // גרירת קודקוד של התחום הנבחר (מצב תחימה): לוחצים על הנקודה ומושכים
+    let vdrag = null;
+    mapEl.addEventListener('pointerdown', e => {
+      if (mode !== 'area' || drawing || pickBound || calStep || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      const poly = s.planPolys.find(p => p.id === selPoly);
+      if (!poly) return;
+      const pt = cPt(e);
+      let k = -1, bd = 22;
+      poly.pts.forEach((q, i) => { const p = map.latLngToContainerPoint(llOf('a', q[0], q[1])); const d = Math.hypot(p.x - pt.x, p.y - pt.y); if (d < bd) { bd = d; k = i; } });
+      if (k < 0) return;
+      e.stopPropagation();
+      vdrag = { poly, k, id: e.pointerId, start: pt, old: poly.pts[k].slice(), moved: false };
+      map.dragging.disable();
+      try { mapEl.setPointerCapture(e.pointerId); } catch (_) {}
+    }, true);
+    mapEl.addEventListener('pointermove', e => {
+      if (!vdrag || e.pointerId !== vdrag.id) return;
+      const pt = cPt(e);
+      if (!vdrag.moved && Math.hypot(pt.x - vdrag.start.x, pt.y - vdrag.start.y) < 6) return;
+      vdrag.moved = true;
+      e.stopPropagation(); e.preventDefault();
+      // הצמדה לקודקוד של תחום אחר או לקו הכחול, כמו בציור
+      const sn = snapAt(pt, vdrag.poly);
+      const xy = sn ? sn.q : fromMap(map.containerPointToLatLng(pt));
+      vdrag.poly.pts[vdrag.k] = [Math.round(xy[0] * 100) / 100, Math.round(xy[1] * 100) / 100];
+      redraw();
+    }, true);
+    const endVdrag = e => {
+      if (!vdrag || e.pointerId !== vdrag.id) return;
+      const d = vdrag; vdrag = null;
+      map.dragging.enable();
+      if (!d.moved) return;
+      e.stopPropagation();
+      skipClick = true; setTimeout(() => { skipClick = false; }, 400);
+      const t = polyTree(d.poly), oldXY = t && [t.px, t.py, t.lat, t.lon, t.gpsSrc];
+      if (t) { const c = d.poly.pts.reduce((a, q) => [a[0] + q[0] / d.poly.pts.length, a[1] + q[1] / d.poly.pts.length], [0, 0]); setXY(t, c[0], c[1]); }
+      undo.push({ what: 'הזזת נקודה בתחום', run: () => { d.poly.pts[d.k] = d.old; if (t) [t.px, t.py, t.lat, t.lon, t.gpsSrc] = oldXY; } });
+      changed(); renderSheet(); flash('הנקודה הוזזה');
+    };
+    mapEl.addEventListener('pointerup', endVdrag, true);
+    mapEl.addEventListener('pointercancel', endVdrag, true);
     mapEl.addEventListener('pointermove', e => {
       if (!drag || e.pointerId !== drag.id) return;
       const pt = cPt(e);
@@ -674,8 +717,36 @@
     // פוליגון עצים: רשומה רגילה בסקר עם המספר P1, P2... (כמות העצים בשדה הכמות), מקושרת לתחום
     const polyTree = poly => poly && s.trees.find(t => t.polyId === poly.id);
     function nextPolyNum() { let m = 0; for (const t of s.trees) { const r = /^P(\d+)$/i.exec(String(t.num || '').trim()); if (r) m = Math.max(m, +r[1]); } return 'P' + (m + 1); }
-    function openPolyTree(poly) {
+    // רשומות פוליגון שכבר בסקר (למשל P256 שהגיע מהאקסל) ועוד לא קשורות לתחום
+    const freePolyRecs = () => s.trees.filter(t => !t.polyId && /^P\d+$/i.test(String(t.num || '').trim()));
+    function linkPolyTree(poly, t) {
+      const was = polyTree(poly), old = { polyId: t.polyId, name: poly.name, xy: [t.px, t.py, t.lat, t.lon, t.gpsSrc] };
+      // רשומה ריקה שנוצרה אוטומטית לתחום הזה נמחקת, כדי שלא יישאר פוליגון כפול
+      const drop = was && was !== t && !hasData(was) ? was : null;
+      if (was && !drop) was.polyId = undefined;
+      if (drop) s.trees.splice(s.trees.indexOf(drop), 1);
+      t.polyId = poly.id;
+      const c = poly.pts.reduce((a, q) => [a[0] + q[0] / poly.pts.length, a[1] + q[1] / poly.pts.length], [0, 0]);
+      setXY(t, c[0], c[1]);
+      if (!poly.name || (was && poly.name === was.num) || /^קטע \d+$/.test(poly.name)) poly.name = String(t.num).trim();
+      undo.push({ what: `שיוך לפוליגון ${t.num}`, run: () => {
+        t.polyId = old.polyId; poly.name = old.name; [t.px, t.py, t.lat, t.lon, t.gpsSrc] = old.xy;
+        if (drop) s.trees.push(drop); else if (was) was.polyId = poly.id;
+      } });
+      changed();
+      return t;
+    }
+    async function openPolyTree(poly) {
       let t = polyTree(poly);
+      const free = freePolyRecs();
+      // תחום בלי רשומה, או עם רשומה ריקה, כשיש בסקר רשומת פוליגון פנויה: שואלים לאיזו רשומה הוא שייך
+      if (free.length && ctx.askChoice && (!t || !hasData(t))) {
+        const v = await ctx.askChoice('לאיזה פוליגון בסקר שייך התחום?', 'רשומות פוליגון שכבר בסקר ועוד לא סומנו במדידה',
+          free.map(x => ({ value: x.id, label: x.num + (x.species ? ' · ' + x.species : '') + (x.qty ? ` · ${x.qty} עצים` : ''), primary: free.length === 1 }))
+            .concat([{ value: '', label: t ? `להשאיר ${t.num}` : 'פוליגון חדש' }]));
+        const pick = v && s.trees.find(x => x.id === v);
+        if (pick) { renderSheet(); return close(linkPolyTree(poly, pick).id); }
+      }
       if (!t) {
         t = ctx.makeTree();
         t.num = nextPolyNum(); t.polyId = poly.id;
@@ -854,7 +925,7 @@
       if (pickBound) {
         const c = pickLine(xy);
         if (!c) { flash('לא נמצא כאן קו סגור. אפשר לגעת ישר על הקו, או לשרטט אותו ידנית'); return; }
-        boundCand = c.pts; boundCand.open = c.open;
+        boundCand = c.pts; boundCand.open = c.open; boundCand.gap = c.gap;
         renderSheet(); redraw(); return;
       }
       if (drawing) {
@@ -871,16 +942,16 @@
     }
     // הקודקוד הקרוב לנגיעה (בפיקסלים): הנקודה הראשונה של התחום בציור, נקודה שכבר סומנה בו, או קודקוד של תחום קיים
     const SNAP_PX = 28;
-    function snapAt(pt) {
+    function snapAt(pt, skip) {
       let best = null, bd = SNAP_PX;
       const test = (q, info) => {
         const p = map.latLngToContainerPoint(llOf('a', q[0], q[1])), d = Math.hypot(p.x - pt.x, p.y - pt.y);
         if (d < bd) { bd = d; best = Object.assign({ q }, info); }
       };
-      drawing.forEach((q, i) => test(q, i === 0 ? { first: true } : i === drawing.length - 1 ? { last: true } : {}));
+      (drawing || []).forEach((q, i) => test(q, i === 0 ? { first: true } : i === drawing.length - 1 ? { last: true } : {}));
       // סגירה מקבלת עדיפות כשהנקודה הראשונה בטווח
       if (best && best.first) return best;
-      for (const poly of s.planPolys) for (const q of poly.pts) test(q, {});
+      for (const poly of s.planPolys) if (poly !== skip) for (const q of poly.pts) test(q, {});
       if (s.planBound) for (const q of s.planBound.pts) test(q, {});
       // פינות של קווי השרטוט (למשל גבול המגרש)
       if (!best) for (const q of cadVertsNear(fromMap(map.containerPointToLatLng(pt)), SNAP_PX / ppm() * root.Plan.upm(s.plan))) test(q, {});
@@ -917,11 +988,21 @@
         const r = chainFrom(i);
         if (r && !r.open && polyArea(r.pts) >= minA) return { pts: r.pts.map(q => [Math.round((q[0] + g.ox) * 100) / 100, Math.round((q[1] + g.oy) * 100) / 100]), open: r.open };
       }
+      // אין קו סגור: קו פתוח שהפער בין הקצוות שלו קטן ביחס לאורכו נסגר בקו ישר (מוצג לאישור, עם אורך הסגירה)
+      for (const [, i] of cand.slice(0, 12)) {
+        const r = chainFrom(i);
+        if (!r || r.pts.length < 3) continue;
+        const P = r.pts, a = P[0], b = P[P.length - 1];
+        let per = 0; for (let k = 1; k < P.length; k++) per += Math.hypot(P[k][0] - P[k - 1][0], P[k][1] - P[k - 1][1]);
+        const gap = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        if (gap <= 0.15 * per && polyArea(P) >= minA) return { pts: P.map(q => [Math.round((q[0] + g.ox) * 100) / 100, Math.round((q[1] + g.oy) * 100) / 100]), open: true, gap: gap / root.Plan.upm(s.plan) };
+      }
       return null;
     }
     function polyArea(P) { let a = 0; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[(i + 1) % P.length]; a += p[0] * q[1] - q[0] * p[1]; } return Math.abs(a / 2); }
     function chainFrom(bi) {
-      const eps = 0.05 * root.Plan.upm(s.plan);
+      // קו כחול של מודד בנוי לפעמים מכמה קווים שהקצוות שלהם לא נפגשים בדיוק (נמצאו פערים של 4 ו-27 ס"מ): מחברים עד חצי מטר
+      const eps = 0.5 * root.Plan.upm(s.plan);
       const toPts = p => { const o = []; for (let k = 0; k < p.length; k += 2) o.push([p[k], p[k + 1]]); return o; };
       const same = (a, b) => Math.abs(a[0] - b[0]) <= eps && Math.abs(a[1] - b[1]) <= eps;
       let chain = toPts(cadPaths[bi]);
@@ -1072,7 +1153,7 @@
         sheet.replaceChildren(
           h('div', { class: 'plan-sheet-head' }, h('b', {}, 'קו כחול'),
             h('span', { class: 'muted small' }, boundCand
-              ? `נבחר קו (${boundCand.length} פינות, ${area.toLocaleString()} מ"ר)`
+              ? `נבחר קו (${boundCand.length} פינות, ${area.toLocaleString()} מ"ר)` + (boundCand.open ? `. הקו בשרטוט לא סגור: נסגר בקו ישר של ${Math.round(boundCand.gap * 10) / 10} מ'` : '')
               : fileBounds.length ? 'גע בקו הכחול בשרטוט, או בחר קו שנמצא במדידה' : 'גע בקו הכחול (או בגבול המגרש) בשרטוט')),
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
             ...fileBoundBtns(),
@@ -1111,7 +1192,7 @@
       const n = myTrees().filter(t => root.Plan.inside([t.px, t.py], poly.pts));
       sheet.replaceChildren(
         h('div', { class: 'plan-sheet-head' }, h('b', {}, poly.name || 'תחום'),
-          h('span', { class: 'muted small' }, `${n.length} עצים` + (n.length ? ': ' + root.Core.sortTrees(n).map(t => t.num).join(', ') : '')),
+          h('span', { class: 'muted small' }, `${n.length} עצים` + (n.length ? ': ' + root.Core.sortTrees(n).map(t => t.num).join(', ') : '') + '. אפשר לגרור נקודה של התחום'),
           h('button', { class: 'icon-btn plan-x', 'aria-label': 'סגור', onclick: () => { selPoly = null; renderSheet(); redraw(); } }, '✕')),
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
           h('button', { class: 'btn', onclick: () => { const v = prompt('שם התחום', poly.name || ''); if (v == null) return; const old = poly.name; poly.name = v.trim(); undo.push({ what: 'שם תחום', run: () => { poly.name = old; } }); changed(); renderSheet(); } }, 'שם'),
