@@ -51,7 +51,7 @@
     (4 "TREE-KRITA" 2)))
 (setq *ts-num-layer* '("TREE-NUM" 7))
 (setq *ts-area-layer* '("TREE-AREAS" 6))
-;; area fill as ori draws it: blue TRIANGLES hatch, scale 5 (block units = meters); name in the middle, white (prints black)
+;; area fill as ori draws it: blue TRIANGLES hatch, scale 5 in drawing units (his cm drawings); name in the middle, white (prints black)
 (setq *ts-area-hatch* '("TRIANGLES" 5.0 5))
 (setq *ts-area-name-color* 7)
 
@@ -456,7 +456,7 @@
              (setq lp (vlax-make-safearray vlax-vbObject '(0 . 0)))
              (vlax-safearray-put-element lp 0 k)
              (vla-AppendOuterLoop h lp)
-             (vla-put-PatternScale h (cadr *ts-area-hatch*))
+             (vla-put-PatternScale h (/ (cadr *ts-area-hatch*) S)) ; the block is scaled by S, so the triangles look as in the drawing
              (vla-put-PatternAngle h (- (cond (*ts-rot*) (0.0))))
              (vla-Evaluate h)
              (ts:on h lay)
