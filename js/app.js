@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.101.1';
+  const APP_VERSION = '1.102.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2348,14 +2348,16 @@
     const markNoteChips = () => { const parts = noteParts(); for (const c of notesChips.children) c.classList.toggle('on', parts.includes(c.textContent)); };
     // בסקר מוצגות לפי א-ב, בלי קשר לסדר שבהגדרות
     const isCons = Construction.isConstruction(cur);
-    const notesChips = h('div', { class: isCons ? 'chips' : 'chips safety-notes' }, heSort(isCons ? sug.constructionNotes || CONSTRUCTION_NOTES_SEED : sug.phrasesTop).map(p => h('button', { class: !isCons && sug.phrasesHot && sug.phrasesHot.has(p) ? 'chip chip-top' : 'chip', type: 'button',
+    const notesChips = h('div', { class: isCons ? 'chips' : 'chips safety-notes' }, heSort(isCons ? sug.constructionNotes || CONSTRUCTION_NOTES_SEED : sug.phrasesTop)
+      // האות הראשונה של ההערה הראשונה בכל אות מודגשת קצת, כדי למצוא מהר איפה מתחילה כל אות
+      .map((p, i, arr) => h('button', { class: !isCons && sug.phrasesHot && sug.phrasesHot.has(p) ? 'chip chip-top' : 'chip', type: 'button',
       onclick: () => {
         const parts = noteParts();
         if (parts.includes(p)) notesIn.value = parts.filter(x => x !== p).join(', ');
         else { const cur0 = notesIn.value.trim(); notesIn.value = cur0 ? cur0.replace(/[,.]$/, '') + ', ' + p : p; }
         t.notes = notesIn.value; markNoteChips(); changed(); notesIn.dispatchEvent(new Event('fit'));
         refreshSuggestions();
-      } }, p)));
+      } }, i && arr[i - 1].trim()[0] === p.trim()[0] ? p : [h('b', { class: 'chip-l' }, p.slice(0, 1)), p.slice(1)])));
     markNoteChips();
 
     // דחיפות
