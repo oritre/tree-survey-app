@@ -148,15 +148,15 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .chip:active { background: var(--accent-soft); }
 @media (hover: hover) { .chip:hover { border-color: var(--border-strong); background: var(--surface-3); } }
 .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--chip-ink); font-weight: 700; }
-/* "הפחתת משקלים" בולט ברקע אדום בהיר, גם כשנבחר וגם במצב כהה */
-.chip.chip-weights { background: #fde2e2; border-color: #f0a8a8; color: #8a1c1c; }
-.chip.chip-weights.on { background: #f8b4b4; border-color: #c62828; color: #6b0f0f; }
+/* 5 ההערות הנפוצות בסקר בטיחות: רקע אדום בהיר, גם כשנבחרו וגם במצב כהה */
+.chip.chip-top { background: #fde2e2; border-color: #f0a8a8; color: #8a1c1c; }
+.chip.chip-top.on { background: #f8b4b4; border-color: #c62828; color: #6b0f0f; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .chip.chip-weights { background: #4a1f22; border-color: #8a3a3f; color: #ffd4d4; }
-  :root:not([data-theme="light"]) .chip.chip-weights.on { background: #7a2a30; border-color: #e57373; color: #fff; }
+  :root:not([data-theme="light"]) .chip.chip-top { background: #4a1f22; border-color: #8a3a3f; color: #ffd4d4; }
+  :root:not([data-theme="light"]) .chip.chip-top.on { background: #7a2a30; border-color: #e57373; color: #fff; }
 }
-:root[data-theme="dark"] .chip.chip-weights { background: #4a1f22; border-color: #8a3a3f; color: #ffd4d4; }
-:root[data-theme="dark"] .chip.chip-weights.on { background: #7a2a30; border-color: #e57373; color: #fff; }
+:root[data-theme="dark"] .chip.chip-top { background: #4a1f22; border-color: #8a3a3f; color: #ffd4d4; }
+:root[data-theme="dark"] .chip.chip-top.on { background: #7a2a30; border-color: #e57373; color: #fff; }
 
 /* בורר מקטעים (דחיפות, ציונים) */
 .seg { display: flex; border: 1.5px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }

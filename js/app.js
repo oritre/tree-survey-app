@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.100.0';
+  const APP_VERSION = '1.101.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2180,11 +2180,16 @@
 
   // רשימות מההגדרות מוצגות בסקר לפי א-ב (סדר ההגדרות עצמו לא משתנה)
   const heSort = a => [...new Set(a)].sort((x, y) => x.trim().localeCompare(y.trim(), 'he'));
-  let sugCache = { speciesAll: SPECIES_SEED, speciesTop: null, phrasesTop: PHRASE_SEED, constructionNotes: CONSTRUCTION_NOTES_SEED };
-  function refreshSuggestions() { suggestions().then(s => { sugCache = s; }).catch(() => {}); }
+  let sugCache = { speciesAll: SPECIES_SEED, speciesTop: null, phrasesTop: PHRASE_SEED, phrasesHot: new Set(), constructionNotes: CONSTRUCTION_NOTES_SEED };
+  function refreshSuggestions() { suggestions().then(s => { sugCache = s; markHotNotes(); }).catch(() => {}); }
+  // מעדכן את הרקע של 5 ההערות הנפוצות בטופס הפתוח, בלי לבנות אותו מחדש
+  function markHotNotes() {
+    for (const c of document.querySelectorAll('.chips.safety-notes .chip')) c.classList.toggle('chip-top', sugCache.phrasesHot.has(c.textContent));
+  }
 
   async function suggestions() {
-    const all = await DB.allSurveys();
+    // הסקר הפתוח נלקח מהזיכרון, כי השמירה שלו למסד מתעכבת קצת אחרי כל שינוי
+    const all = (await DB.allSurveys()).map(x => cur && x.id === cur.id ? cur : x);
     const sp = new Map(), gen = new Map();
     // לומדים רק מסקרי בטיחות: ההערות והמינים של סקרי בנייה לא נכנסים להצעות
     for (const s of all.filter(x => !Construction.isConstruction(x))) for (const t of s.trees) {
@@ -2197,11 +2202,20 @@
     const phrases = await DB.getKV('phrases', null);
     const top = m => [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]);
     const uniq = a => [...new Set(a)];
+    // 5 ההערות שנכתבו הכי הרבה בסקרי הבטיחות שבמכשיר מקבלות רקע אדום בהיר. כשהערה אחרת עוקפת, היא נכנסת והשישית חוזרת לרגילה.
+    // שוויון (או מכשיר בלי סקרים) נשבר לפי סדר 40 ההערות הנפוצות של 2026
+    const plist = phrases || PHRASE_SEED, pset = new Set(plist), pc = new Map();
+    for (const s of all.filter(x => !Construction.isConstruction(x) && !x.deleted)) for (const t of s.trees || []) {
+      for (const part of new Set(String(t.notes || '').split(/\s*[,.]\s*/).map(x => x.trim()))) if (pset.has(part)) pc.set(part, (pc.get(part) || 0) + 1);
+    }
+    const rank = p => { const i = TOP_SAFETY_NOTES.indexOf(p); return i < 0 ? 999 : i; };
+    const phrasesHot = new Set(uniq(plist).sort((a, b) => (pc.get(b) || 0) - (pc.get(a) || 0) || rank(a) - rank(b)).slice(0, 5));
     return {
       speciesAll: uniq(top(sp).concat(custom || SPECIES_SEED)),
       speciesTop: uniq(top(gen).concat((custom || SPECIES_SEED).map(genusOf).filter(Boolean))),
       // הערות: רק הרשימה הקבועה מההגדרות, בלי למידה מהסקרים
       phrasesTop: phrases || PHRASE_SEED,
+      phrasesHot,
       constructionNotes: (await DB.getKV('constructionNotes', null)) || CONSTRUCTION_NOTES_SEED,
     };
   }
@@ -2325,12 +2339,14 @@
     const noteParts = () => notesIn.value.split(/\s*[,.]\s*/).map(s => s.trim()).filter(Boolean);
     const markNoteChips = () => { const parts = noteParts(); for (const c of notesChips.children) c.classList.toggle('on', parts.includes(c.textContent)); };
     // בסקר מוצגות לפי א-ב, בלי קשר לסדר שבהגדרות
-    const notesChips = h('div', { class: 'chips' }, heSort(Construction.isConstruction(cur) ? sug.constructionNotes || CONSTRUCTION_NOTES_SEED : sug.phrasesTop).map(p => h('button', { class: /הפחת\S*\s+משקל/.test(p) ? 'chip chip-weights' : 'chip', type: 'button',
+    const isCons = Construction.isConstruction(cur);
+    const notesChips = h('div', { class: isCons ? 'chips' : 'chips safety-notes' }, heSort(isCons ? sug.constructionNotes || CONSTRUCTION_NOTES_SEED : sug.phrasesTop).map(p => h('button', { class: !isCons && sug.phrasesHot && sug.phrasesHot.has(p) ? 'chip chip-top' : 'chip', type: 'button',
       onclick: () => {
         const parts = noteParts();
         if (parts.includes(p)) notesIn.value = parts.filter(x => x !== p).join(', ');
         else { const cur0 = notesIn.value.trim(); notesIn.value = cur0 ? cur0.replace(/[,.]$/, '') + ', ' + p : p; }
         t.notes = notesIn.value; markNoteChips(); changed(); notesIn.dispatchEvent(new Event('fit'));
+        refreshSuggestions();
       } }, p)));
     markNoteChips();
 
