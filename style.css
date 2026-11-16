@@ -149,6 +149,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 @media (hover: hover) { .chip:hover { border-color: var(--border-strong); background: var(--surface-3); } }
 .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--chip-ink); font-weight: 700; }
 /* 5 ההערות הנפוצות בסקר בטיחות: רקע אדום בהיר, גם כשנבחרו וגם במצב כהה */
+/* האות הראשונה בהערה הראשונה של כל אות */
+.chip .chip-l { font-weight: 800; }
 .chip.chip-top { background: #fde2e2; border-color: #f0a8a8; color: #8a1c1c; }
 .chip.chip-top.on { background: #f8b4b4; border-color: #c62828; color: #6b0f0f; }
 @media (prefers-color-scheme: dark) {
