@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.99.1';
+  const APP_VERSION = '1.100.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2325,7 +2325,7 @@
     const noteParts = () => notesIn.value.split(/\s*[,.]\s*/).map(s => s.trim()).filter(Boolean);
     const markNoteChips = () => { const parts = noteParts(); for (const c of notesChips.children) c.classList.toggle('on', parts.includes(c.textContent)); };
     // בסקר מוצגות לפי א-ב, בלי קשר לסדר שבהגדרות
-    const notesChips = h('div', { class: 'chips' }, heSort(Construction.isConstruction(cur) ? sug.constructionNotes || CONSTRUCTION_NOTES_SEED : sug.phrasesTop).map(p => h('button', { class: 'chip', type: 'button',
+    const notesChips = h('div', { class: 'chips' }, heSort(Construction.isConstruction(cur) ? sug.constructionNotes || CONSTRUCTION_NOTES_SEED : sug.phrasesTop).map(p => h('button', { class: /הפחת\S*\s+משקל/.test(p) ? 'chip chip-weights' : 'chip', type: 'button',
       onclick: () => {
         const parts = noteParts();
         if (parts.includes(p)) notesIn.value = parts.filter(x => x !== p).join(', ');
