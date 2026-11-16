@@ -138,8 +138,15 @@
     const v = g.view;
     const fit = L.latLngBounds([toMap(v[0] + g.ox, v[1] + g.oy), toMap(v[2] + g.ox, v[3] + g.oy)]);
     // חוזרים למקום האחרון שבו עבדו על הסקר הזה
-    const last = await DB.getKV('planView:' + s.id, null);
-    const focus = ctx.focusId && s.trees.find(t => t.id === ctx.focusId && t.px != null);
+    // מיקום שמור שלא בתוך המדידה (מקובץ מדידה אחר, או ערך שבור) נפתח בכל המדידה, כדי שהמסך לא ייתקע ריק
+    let last = await DB.getKV('planView:' + s.id, null);
+    const viewOk = l => {
+      const F = Number.isFinite; if (!l || !l.c || !F(l.c.lat) || !F(l.c.lng) || !F(l.z)) return false;
+      if (!fit.pad(3).contains(L.latLng(l.c.lat, l.c.lng))) return false;
+      try { const q = fromMap(L.latLng(l.c.lat, l.c.lng)); return Number.isFinite(q[0]) && Number.isFinite(q[1]); } catch (_) { return false; }
+    };
+    if (!viewOk(last)) last = null;
+    const focus = ctx.focusId && s.trees.find(t => t.id === ctx.focusId && isFinite(t.px) && isFinite(t.py) && t.px !== null && t.py !== null);
     if (focus) { map.setView(toMap(focus.px, focus.py), Math.max(last ? last.z : 0, itm ? 21 : 4)); selId = focus.id; }
     else if (last) map.setView(last.c, last.z); else map.fitBounds(fit, { padding: [20, 20] });
     await setBase();
@@ -197,7 +204,9 @@
     function drawCad(cx, size, pad, dpr) {
       if (!cad.n) return;
       // מטריצה מקואורדינטות השרטוט (יחסית ל-ox,oy) לפיקסלים במסך. האזור קטן, אז ההיטל כמעט ליניארי
-      const c = fromMap(map.getCenter()), P = ll => map.latLngToContainerPoint(ll), d0 = 10 / root.Plan.upm(s.plan);
+      let c; try { c = fromMap(map.getCenter()); } catch (_) { return; }
+      if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) return;
+      const P = ll => map.latLngToContainerPoint(ll), d0 = 10 / root.Plan.upm(s.plan);
       const p0 = P(toMap(c[0], c[1])), p1 = P(toMap(c[0] + d0, c[1])), p2 = P(toMap(c[0], c[1] + d0));
       const a = (p1.x - p0.x) / d0, b = (p1.y - p0.y) / d0, cc = (p2.x - p0.x) / d0, dd = (p2.y - p0.y) / d0;
       const wx = c[0] - g.ox, wy = c[1] - g.oy, e = p0.x - a * wx - cc * wy, f = p0.y - b * wx - dd * wy;
@@ -1458,7 +1467,7 @@
       stopGps();
       endTyping();
       document.removeEventListener('keydown', onKey, true);
-      DB.setKV('planView:' + s.id, { c: map.getCenter(), z: map.getZoom() });
+      { const c0 = map.getCenter(), z0 = map.getZoom(); if (Number.isFinite(c0.lat) && Number.isFinite(c0.lng) && Number.isFinite(z0)) DB.setKV('planView:' + s.id, { c: c0, z: z0 }); }
       map.remove(); ov.remove();
       $$('.plan-flash').forEach(x => x.remove());
       done(openId || null);
