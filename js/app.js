@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.101.0';
+  const APP_VERSION = '1.101.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2184,7 +2184,15 @@
   function refreshSuggestions() { suggestions().then(s => { sugCache = s; markHotNotes(); }).catch(() => {}); }
   // מעדכן את הרקע של 5 ההערות הנפוצות בטופס הפתוח, בלי לבנות אותו מחדש
   function markHotNotes() {
-    for (const c of document.querySelectorAll('.chips.safety-notes .chip')) c.classList.toggle('chip-top', sugCache.phrasesHot.has(c.textContent));
+    const box = document.querySelector('.chips.safety-notes');
+    if (!box) return;
+    // הטופס נפתח לפני שהרשימה מההגדרות נטענה (למשל מיד אחרי עדכון גרסה): בונים אותו מחדש עם הרשימה של המשתמש
+    const want = heSort(sugCache.phrasesTop).join('\n'), have = [...box.children].map(c => c.textContent).join('\n');
+    if (want !== have) {
+      if (document.activeElement && document.activeElement.matches('input, textarea, select')) { setTimeout(markHotNotes, 1500); return; }
+      renderEditor(); return;
+    }
+    for (const c of box.children) c.classList.toggle('chip-top', sugCache.phrasesHot.has(c.textContent));
   }
 
   async function suggestions() {
