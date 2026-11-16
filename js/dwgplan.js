@@ -617,9 +617,12 @@
   // עצים (עם מיקום ומספר) ותחומים בקואורדינטות של המדידה (שרטוט על דף: לפי קנה המידה או הכיול), ומקום המספר של כל עץ.
   // משותף לגיליון "מדידה" ולקובץ הנתונים של BricsCAD (1.95.0)
   // רשומה של תחום (פוליגון, t.polyId) היא לא עץ: לא נכנסת כסימון עץ לגיליון "מדידה" ול-BricsCAD, רק התחום עצמו (ori, 1.108.1)
+  // גם רשומה ששמה כשם של תחום (P256) ולא קושרה אליו היא התחום, לא עץ (ori, 1.108.3)
+  const polyNames = survey => new Set((survey.planPolys || []).map(p => String(p.name || '').trim().toUpperCase()).filter(Boolean));
+  const isPolyRec = (t, names) => !!t.polyId || names.has(String(t.num || '').trim().toUpperCase());
   async function placed(survey, keep) {
-    const W = (x, y) => world(survey.plan, x, y);
-    const trees = root.Core.sortTrees(survey.trees.filter(t => t.px != null && !t.polyId && String(t.num || '').trim() && (!keep || keep(t))))
+    const W = (x, y) => world(survey.plan, x, y), names = polyNames(survey);
+    const trees = root.Core.sortTrees(survey.trees.filter(t => t.px != null && !isPolyRec(t, names) && String(t.num || '').trim() && (!keep || keep(t))))
       .map(t => { const w = W(t.px, t.py); return Object.assign({}, t, { px: w[0], py: w[1], src: t }); });
     const polys = (survey.planPolys || []).filter(p => p.pts && p.pts.length >= 3).map(p => Object.assign({}, p, { pts: p.pts.map(q => W(q[0], q[1])) }));
     const lab = trees.length ? layoutLabels(trees, await othersFor(survey)) : new Map();
@@ -722,8 +725,9 @@
       for (const q of pts) put(0, 'VERTEX', 8, lay, 10, f(q[0]), 20, f(q[1]), 30, 0);
       put(0, 'SEQEND', 8, lay);
     };
+    const pNames = polyNames(survey);
     for (const t of survey.trees || []) {
-      if (t.px == null || t.polyId) continue;
+      if (t.px == null || isPolyRec(t, pNames)) continue;
       const [x, y] = W(t.px, t.py);
       const lay = t.ref ? 'TREES_REF' : statusOf(root.Construction ? root.Construction.statusOf(t, root.Construction.settingsOf(survey)) : t.status).layer;
       // "לא להתייחסות" לא באקסל, אז בלי זיהוי (אחרת TREES ימחק אותם)
