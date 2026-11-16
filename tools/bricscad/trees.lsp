@@ -51,9 +51,13 @@
     (4 "TREE-KRITA" 2)))
 (setq *ts-num-layer* '("TREE-NUM" 7))
 (setq *ts-area-layer* '("TREE-AREAS" 6))
-;; area fill as ori draws it: blue TRIANGLES hatch, scale 5 in drawing units (his cm drawings); name in the middle, white (prints black)
-(setq *ts-area-hatch* '("TRIANGLES" 5.0 5))
+;; area as ori draws it: black boundary, TRIANGLES hatch (scale 5 in drawing units, his cm drawings) colored by the
+;; area's designation like his tree blocks, name in the middle (color 7 = black on his background and in print)
+(setq *ts-area-hatch* '("TRIANGLES" 5.0))
 (setq *ts-area-name-color* 7)
+(setq *ts-area-line-color* 7)
+;; designation code -> triangles color: none/not required blue, transplant orange, preserve red, cut yellow
+(setq *ts-area-colors* '((0 . 5) (1 . 5) (2 . 30) (3 . 1) (4 . 2)))
 
 (defun ts:layer (spec)
   (if (not (tblsearch "LAYER" (car spec)))
@@ -105,7 +109,7 @@
       (setq sh s)))
   (if sh
     (progn
-      (setq val (vlax-variant-value (vlax-get-property (vlax-get-property sh 'Range "A1:K2000") 'Value2)))
+      (setq val (vlax-variant-value (vlax-get-property (vlax-get-property sh 'Range "A1:L2000") 'Value2)))
       (setq rows (mapcar '(lambda (r) (mapcar 'ts:val r)) (cdr (vlax-safearray->list val))))))
   (if opened (vlax-invoke-method wb 'Close :vlax-false))
   (if (and (null was) opened) (vl-catch-all-apply 'vlax-invoke-method (list xl 'Quit)))
@@ -143,6 +147,13 @@
   (setq d (entget e))
   (if (and (= (cdr (assoc 72 d)) 0) (= (cdr (assoc 73 d)) 0)) (cdr (assoc 10 d)) (cdr (assoc 11 d))))
 
+;; color of an area's triangles: its designation code from the sheet (column L), else from its own record (same
+;; number as the area's name, e.g. P256: a T line in the app's file)
+(defun ts:areacolor (r rows / code nm)
+  (setq code (ts:num (nth 11 r)) nm (strcase (ts:str (nth 9 r))))
+  (if (null code)
+    (foreach q rows (if (and (null code) (= (strcase (ts:str (nth 0 q))) nm)) (setq code (ts:num (nth 8 q))))))
+  (cdr (cond ((assoc (fix (cond (code) (0))) *ts-area-colors*)) ((assoc 0 *ts-area-colors*)))))
 ;; area centre (polygon centroid), for the area's name
 (defun ts:centroid (pts / a cx cy p q f n)
   (setq a 0.0 cx 0.0 cy 0.0 n (length pts))
@@ -417,6 +428,29 @@
   ;; an area's own record (e.g. P256) is the area, not a tree: no tree mark for it
   (setq anames nil)
   (foreach r rows (if (/= (ts:str (nth 9 r)) "") (setq anames (cons (strcase (ts:str (nth 9 r))) anames))))
+  ;; areas first, so the tree marks are drawn over the boundary and the fill
+  (foreach r rows
+    (if (and (nth 10 r) (> (length (setq pts (ts:pts (nth 10 r)))) 2))
+      (progn
+        (setq lay (ts:layer *ts-area-layer*) k (vla-AddLightWeightPolyline blk (ts:arr pts)))
+        (vla-put-Closed k :vlax-true) (ts:on k lay)
+        (vla-put-Color k *ts-area-line-color*)
+        ;; triangles fill inside the boundary (skipped if the pattern is missing)
+        (vl-catch-all-apply
+          '(lambda (/ h lp)
+             (setq h (vla-AddHatch blk acHatchPatternTypePreDefined (car *ts-area-hatch*) :vlax-false))
+             (setq lp (vlax-make-safearray vlax-vbObject '(0 . 0)))
+             (vlax-safearray-put-element lp 0 k)
+             (vla-AppendOuterLoop h lp)
+             (vla-put-PatternScale h (/ (cadr *ts-area-hatch*) S)) ; the block is scaled by S, so the triangles look as in the drawing
+             (vla-put-PatternAngle h (- (cond (*ts-rot*) (0.0))))
+             (vla-Evaluate h)
+             (ts:on h lay)
+             (vla-put-Color h (ts:areacolor r rows))))
+        (if (/= (ts:str (nth 9 r)) "")
+          (vla-put-Color (ts:addtext blk (cond ((ts:centroid pts)) ((ts:top pts))) (ts:str (nth 9 r)) (* 1.5 *ts-txt*) lay)
+                         *ts-area-name-color*))
+        (setq areas (1+ areas)))))
   (foreach r rows
     (setq num (ts:str (nth 0 r)) x (ts:num (nth 1 r)) y (ts:num (nth 2 r)))
     (if (and (/= num "") x y (not (member (strcase num) anames)))
@@ -443,28 +477,6 @@
             (if (> (distance c tp) (+ *ts-r* (* 1.4 *ts-txt*)))
               (ts:on (vla-AddLine blk (ts:pt (polar c (angle c tp) *ts-r*)) (ts:pt (polar c (angle c tp) (- (distance c tp) (* 0.6 *ts-txt*)))))
                      (ts:layer *ts-num-layer*))))))))
-  ;; areas
-  (foreach r rows
-    (if (and (nth 10 r) (> (length (setq pts (ts:pts (nth 10 r)))) 2))
-      (progn
-        (setq lay (ts:layer *ts-area-layer*) k (vla-AddLightWeightPolyline blk (ts:arr pts)))
-        (vla-put-Closed k :vlax-true) (ts:on k lay)
-        ;; triangles fill inside the boundary (skipped if the pattern is missing)
-        (vl-catch-all-apply
-          '(lambda (/ h lp)
-             (setq h (vla-AddHatch blk acHatchPatternTypePreDefined (car *ts-area-hatch*) :vlax-false))
-             (setq lp (vlax-make-safearray vlax-vbObject '(0 . 0)))
-             (vlax-safearray-put-element lp 0 k)
-             (vla-AppendOuterLoop h lp)
-             (vla-put-PatternScale h (/ (cadr *ts-area-hatch*) S)) ; the block is scaled by S, so the triangles look as in the drawing
-             (vla-put-PatternAngle h (- (cond (*ts-rot*) (0.0))))
-             (vla-Evaluate h)
-             (ts:on h lay)
-             (vla-put-Color h (caddr *ts-area-hatch*))))
-        (if (/= (ts:str (nth 9 r)) "")
-          (vla-put-Color (ts:addtext blk (cond ((ts:centroid pts)) ((ts:top pts))) (ts:str (nth 9 r)) (* 1.5 *ts-txt*) lay)
-                         *ts-area-name-color*))
-        (setq areas (1+ areas)))))
   ;; the one insert of the block: kept where you put it; new = where the older loose marks were, else in place
   (if ins
     (vla-Update (vlax-ename->vla-object ins))

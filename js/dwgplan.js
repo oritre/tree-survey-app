@@ -636,7 +636,7 @@
     const tcell = (c, r, v) => v ? `<c r="${c}${r}" t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>` : '';
     const cell = (i, r, v) => v == null || v === '' ? '' : typeof v === 'number'
       ? `<c r="${col(i)}${r}"><v>${v}</v></c>` : `<c r="${col(i)}${r}" t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
-    const rows = [`<row r="1">${SHEET_HEAD.map((t, i) => cell(i, 1, t)).join('')}${tcell('J', 1, 'תחום')}${tcell('K', 1, 'נקודות התחום (X,Y;X,Y;...)')}</row>`];
+    const rows = [`<row r="1">${SHEET_HEAD.map((t, i) => cell(i, 1, t)).join('')}${tcell('J', 1, 'תחום')}${tcell('K', 1, 'נקודות התחום (X,Y;X,Y;...)')}${tcell('L', 1, 'קוד ייעוד התחום')}</row>`];
     const r3 = v => Math.round(v * 1000) / 1000;
     // תחומים בעמודות J:K, באותן שורות (שורה 2 והלאה)
     const n = Math.max(trees.length, polys.length);
@@ -652,10 +652,12 @@
           // קוד הייעוד (לפקודה ב-BricsCAD): 1 לא נדרש ברישיון, 2 העתקה, 3 שימור, 4 כריתה, 0 בלי. באותו סדר כמו הצבעים באקסל
           `<c r="I${r}"><f>IF(G${r}="",0,IF(ISNUMBER(SEARCH("לא נדרש ברישיון",G${r})),1,IF(ISNUMBER(SEARCH("העתקה",G${r})),2,IF(ISNUMBER(SEARCH("שימור",G${r})),3,IF(ISNUMBER(SEARCH("כריתה",G${r})),4,0)))))</f><v>0</v></c>`;
       }
-      if (p) x += tcell('J', r, p.name || 'תחום ' + (i + 1)) + tcell('K', r, p.pts.map(q => r3(q[0]) + ',' + r3(q[1])).join(';'));
+      // L = קוד הייעוד של התחום (לפי הרשומה שלו בגיליון "סקר", למשל P256): צבע המשולשים ב-BricsCAD (ori, 1.108.5)
+      if (p) x += tcell('J', r, p.name || 'תחום ' + (i + 1)) + tcell('K', r, p.pts.map(q => r3(q[0]) + ',' + r3(q[1])).join(';')) +
+        `<c r="L${r}"><f>IFERROR(IF(INDEX('סקר'!$BC:$BC,MATCH(J${r},'סקר'!$B:$B,0))="",0,IF(ISNUMBER(SEARCH("לא נדרש ברישיון",INDEX('סקר'!$BC:$BC,MATCH(J${r},'סקר'!$B:$B,0)))),1,IF(ISNUMBER(SEARCH("העתקה",INDEX('סקר'!$BC:$BC,MATCH(J${r},'סקר'!$B:$B,0)))),2,IF(ISNUMBER(SEARCH("שימור",INDEX('סקר'!$BC:$BC,MATCH(J${r},'סקר'!$B:$B,0)))),3,IF(ISNUMBER(SEARCH("כריתה",INDEX('סקר'!$BC:$BC,MATCH(J${r},'סקר'!$B:$B,0)))),4,0))))),0)</f><v>0</v></c>`;
       rows.push(`<row r="${r}">${x}</row>`);
     }
-    const widths = [10, 13, 13, 13, 13, 12, 18, 14, 6, 14, 60];
+    const widths = [10, 13, 13, 13, 13, 12, 18, 14, 6, 14, 60, 8];
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
       '<sheetViews><sheetView rightToLeft="1" workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
