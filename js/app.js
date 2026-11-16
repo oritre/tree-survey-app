@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.106.0';
+  const APP_VERSION = '1.106.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1659,9 +1659,22 @@
   function renderDetails(body) {
     const build = Construction.isConstruction(cur);
     if (build) cur.site = composeSite(cur);
+    // ori: "הר/מק/1400/2א" התהפך בזמן ההקלדה (1400/2 מתחבר למספר אחד). בכתובת ובמספר תכנית השדה מציג סימן כיוון (RLM)
+    // סביב כל "/", והסמן נשאר במקומו. בסקר נשמר הטקסט בלי הסימנים (שמות קבצים, חיפוש); באקסל ובדוח הם נוספים שוב
+    const RTL_SLASH = new Set(['street', 'planNo']);
+    const slashView = el => {
+      const v = el.value, pos = el.selectionStart == null ? v.length : el.selectionStart;
+      const before = Construction.plainSlash(v.slice(0, pos)).length, nv = Construction.rtlSlash(v);
+      if (nv === v) return;
+      let np = 0, cnt = 0; while (np < nv.length && cnt < before) { if (nv[np] !== '\u200f') cnt++; np++; }
+      if (nv[np] === '\u200f' && nv[np - 1] === '/') np++;
+      el.value = nv;
+      try { if (document.activeElement === el) el.setSelectionRange(np, np); } catch (_) {}
+    };
     const inp = (key, attrs) => h('input', Object.assign({
-      class: 'in', value: cur[key] || '',
+      class: 'in', value: RTL_SLASH.has(key) ? Construction.rtlSlash(cur[key] || '') : cur[key] || '',
       oninput: e => {
+        if (RTL_SLASH.has(key)) { slashView(e.target); cur[key] = Construction.plainSlash(e.target.value); } else
         cur[key] = e.target.value; saveSoon();
         if (key === 'siteName' || key === 'street' || key === 'city') {
           cur.site = composeSite(cur);
@@ -1721,18 +1734,7 @@
           const pv = h('div', { class: 'muted small', dir: 'rtl' });
           const upd = () => { const l = Construction.idLine(cur); pv.textContent = l ? 'בכותרת: ' + l : ''; };
           const el = inp('planNo', { placeholder: 'למשל הר/מק/1400/2א', dir: 'rtl' });
-          // ori: בהקלדה "1400/2א" התהפך בשדה. סימן כיוון (RLM) סביב כל "/" כבר בזמן ההקלדה, והסמן נשאר במקומו
-          const fixSlashes = () => {
-            const v = el.value, pos = el.selectionStart == null ? v.length : el.selectionStart;
-            const RL = /[\u200e\u200f]/g, plain = v.replace(RL, ''), before = v.slice(0, pos).replace(RL, '').length;
-            const nv = plain.replace(/\//g, '\u200f/\u200f');
-            if (nv === v) return;
-            let np = 0, cnt = 0; while (np < nv.length && cnt < before) { if (nv[np] !== '\u200f') cnt++; np++; }
-            if (nv[np] === '\u200f' && nv[np - 1] === '/') np++;
-            el.value = nv; cur.planNo = nv; saveSoon();
-            try { el.setSelectionRange(np, np); } catch (_) {}
-          };
-          el.addEventListener('input', () => { fixSlashes(); upd(); }); fixSlashes(); upd();
+          el.addEventListener('input', upd); upd();
           return h('div', {}, field('מספר תכנית', el), pv);
         })()
         : h('div', { class: 'row', style: 'align-items:stretch' },
