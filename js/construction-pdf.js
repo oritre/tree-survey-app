@@ -96,9 +96,9 @@
       `<td>${esc(C().transplantOf(t))}</td><td class="r">${esc((t.notes || '').trim())}</td></tr>`;
   }
   function mainPages(s, d) {
-    const gush = String(s.gush || '').trim(), helka = String(s.helka || '').trim();
+    const idl = C().idLine(s);
     const title = `<div class="date">תאריך: <span class="ltr">${esc(fmtDate(s.date))}</span></div>` +
-      `<h1>סקר  עצים להיתר בניה</h1><h1>גוש ${esc(gush)}${gush ? ' ' : '  '}חלקה ${esc(helka)}</h1><h1 style="margin-bottom:6pt">${esc(s.site || '')}</h1>`;
+      `<h1>${esc(C().titleOf(s))}</h1>${idl ? `<h1>${esc(idl)}</h1>` : ''}<h1 style="margin-bottom:6pt">${esc(s.site || '')}</h1>`;
     const notes = `<div class="notes">` +
       (d.st.root4 ? 'אזור שורשים מוגן חושב לעד 4 מ\', לכל היותר, כפי המקובל.<br>' : '') +
       'העצים המסומנים בכחול במפת המדידה, אינם עצים/ אינם קיימים/ אינם עצים בוגרים כהגדרתם בתיקון 89 לחוק התכנון והבניה.<br>' +

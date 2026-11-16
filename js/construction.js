@@ -3,6 +3,18 @@
 (function (root) {
   'use strict';
   const TYPES = { safety: 'סקר יציבות עצים', construction: 'סקר עצים לבנייה' };
+  // סקר לבנייה: להיתר בניה (גוש וחלקה) או לתב"ע (מספר תכנית). survey.purpose = 'taba' לתב"ע
+  const isTaba = s => !!s && s.purpose === 'taba';
+  const titleOf = s => isTaba(s) ? 'סקר עצים לתב"ע' : 'סקר  עצים להיתר בניה';
+  // שורה 2 בכותרת: גוש וחלקה, או מספר תכנית. כשלא מולא כלום: ריקה
+  function idLine(s) {
+    // מספר תכנית כמו "הר/מק/1400/2א": סימן כיוון מימין לשמאל (RLM) סביב כל "/", כדי שהחלקים יוצגו לפי הסדר מימין לשמאל
+    // ולא יתחברו למספר אחד ("1400/2" היה מתהפך)
+    if (isTaba(s)) { const n = String(s.planNo || '').replace(/[\u200e\u200f]/g, '').trim(); return n ? `תכנית מס' ${n.replace(/\s*\/\s*/g, '\u200f/\u200f')}` : ''; }
+    const gush = String(s.gush || '').trim(), helka = String(s.helka || '').trim();
+    if (!gush && !helka) return '';
+    return 'גוש' + (gush ? ' ' + gush + ' ' : '  ') + 'חלקה' + (helka ? ' ' + helka : '');
+  }
   const typeOf = s => (s && s.type) || 'safety';
   const isConstruction = s => typeOf(s) === 'construction';
   const D = root.ConstructionData;
@@ -513,8 +525,9 @@
 
     // כותרת: B3 גוש וחלקה, B7 כתובת, Q1 תאריך קבוע (בתבנית NOW() שמתעדכן)
     // גוש וחלקה: תמיד בשורה, גם כשלא מולאו. מספר חסר = 2 רווחים במקומו, כדי להקליד אותו ידנית באקסל
-    const gush = String(survey.gush || '').trim(), helka = String(survey.helka || '').trim();
-    sheet.set('B3', 'גוש' + (gush ? ' ' + gush + ' ' : '  ') + 'חלקה' + (helka ? ' ' + helka : ''));
+    // ori (1.105.0): בלי גוש וחלקה השורה ריקה. בסקר לתב"ע: "תכנית מס'" במקום גוש וחלקה, והכותרת "סקר עצים לתב"ע"
+    sheet.set('B2', titleOf(survey));
+    sheet.set('B3', idLine(survey) || null);
     sheet.set('B7', survey.site || null);
     if (survey.date) sheet.set('Q1', dateSerial(survey.date));
 
@@ -805,7 +818,7 @@
   }
 
   root.Construction = {
-    TYPES, typeOf, TRANSPLANT, transplantOf, STATUSES, statusOf, autoStatus, manualStatus, validStatus, readStatuses, patchStatuses, dateSerial, markOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
+    TYPES, typeOf, isTaba, titleOf, idLine, TRANSPLANT, transplantOf, STATUSES, statusOf, autoStatus, manualStatus, validStatus, readStatuses, patchStatuses, dateSerial, markOf, isConstruction, SETTINGS, settingsOf, MEASURES, SCORES, FIELDS, SPECIES, canonSpecies,
     compute, category, warnings, buildWorkbook, buildYaala, yaalaRow, PHOTO_ASPECT, TREE_ROWS: TREE_ROWS.slice(0, MAX_TREES), MAX_TREES, pagesFor, photoSlots, SLOT_CELLS, pictureName, coveredNums, photoName, manualName,
   };
 })(this);

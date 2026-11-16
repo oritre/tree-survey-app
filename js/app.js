@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.104.0';
+  const APP_VERSION = '1.105.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -533,7 +533,7 @@
     const keep = ['num', 'okNum', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS,
       'px', 'py', 'pref', 'pname', 'polyId'];
     const s = { id: uid(), type: Construction.typeOf(old), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
-      code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', cset: old.cset ? Object.assign({}, old.cset) : undefined, warnGps: !!old.warnGps, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
+      code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', purpose: old.purpose || undefined, planNo: old.planNo || undefined, cset: old.cset ? Object.assign({}, old.cset) : undefined, warnGps: !!old.warnGps, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
     for (const t of old.trees || []) {
       const nt = Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, t[k]])));
       if (withPhotos) for (const p of t.photos || []) {
@@ -1587,6 +1587,7 @@
           h('h2', { style: 'margin:0;font-size:22px' }, 'איזה סקר?'),
           opt('safety', '🌳 ' + Construction.TYPES.safety, 'דחיפות טיפול, אורנים, דוח בטיחות ומכתב אישור'),
           opt('construction', '🏗 ' + Construction.TYPES.construction, 'לפי התבנית "סקר עצים להיתר בניה": גובה, גזעים, ניקוד, סך ערך, אזור שורשים ושווי'),
+          opt('taba', '📐 סקר עצים לתב"ע', 'אותו סקר כמו לבנייה, ובכותרת מספר תכנית במקום גוש וחלקה'),
           h('button', { class: 'btn', onclick: () => close(null) }, 'ביטול')));
       document.body.append(ov);
     });
@@ -1594,8 +1595,9 @@
 
   async function newSurvey(preset) {
     preset = preset && preset.siteName != null ? preset : null; // לחיצה רגילה מעבירה אירוע, לא סקר מתוכנן
-    const type = await chooseType();
+    let type = await chooseType();
     if (!type) return;
+    const taba = type === 'taba'; if (taba) type = 'construction';
     // ori (1.98.0): פרויקט לא מתמלא לבד מהסקר האחרון. בוחרים מהרשימה (חץ בשדה), אלא אם המסך הראשי מסונן לפרויקט
     const project = preset && preset.project ? preset.project : (projectFilter != null ? projectFilter : '');
     const s = { id: uid(), type, project, site: '', siteName: '', street: '', city: '', code: '', manager: '', date: today(), trees: [], created: Date.now() };
@@ -1607,6 +1609,7 @@
       const used = await DB.getKV('plannedUsed', []);
       if (!used.includes(preset.id)) await DB.setKV('plannedUsed', [...used, preset.id].slice(-200));
     }
+    if (taba) s.purpose = 'taba';
     s.site = composeSite(s);
     await DB.putSurvey(s);
     go('#/s/' + s.id + '/details');
@@ -1707,9 +1710,23 @@
       field('קוטר נדרש לזית וחרוב (ס"מ)', h('input', { class: 'in', inputmode: 'decimal', value: cur.cset.oliveDiam || '', style: 'max-width:160px',
         oninput: e => { cur.cset.oliveDiam = e.target.value.trim(); saveSoon(); } })));
     return h('div', { class: 'stack' },
-      h('div', { class: 'row', style: 'align-items:stretch' },
-        h('div', { style: 'flex:1;min-width:160px' }, field('גוש', inp('gush', { inputmode: 'numeric' }))),
-        h('div', { style: 'flex:1;min-width:160px' }, field('חלקה', inp('helka', { inputmode: 'numeric' })))),
+      // להיתר בניה (גוש וחלקה) או לתב"ע (מספר תכנית): משנה את הכותרת באקסל ובדוח
+      h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' },
+        h('span', { class: 'muted' }, 'הסקר:'),
+        ...[['', 'להיתר בניה'], ['taba', 'לתב"ע']].map(([v, label]) => h('button', { class: 'btn' + ((cur.purpose || '') === v ? ' primary' : ''),
+          onclick: () => { if (v) cur.purpose = v; else delete cur.purpose; saveSoon(); renderSurvey(); } }, label))),
+      Construction.isTaba(cur)
+        ? (() => {
+          // תצוגה כמו בכותרת באקסל (החלקים מימין לשמאל)
+          const pv = h('div', { class: 'muted small', dir: 'rtl' });
+          const upd = () => { const l = Construction.idLine(cur); pv.textContent = l ? 'בכותרת: ' + l : ''; };
+          const el = inp('planNo', { placeholder: 'למשל הר/מק/1400/2א', dir: 'rtl' });
+          el.addEventListener('input', upd); upd();
+          return h('div', {}, field('מספר תכנית', el), pv);
+        })()
+        : h('div', { class: 'row', style: 'align-items:stretch' },
+          h('div', { style: 'flex:1;min-width:160px' }, field('גוש', inp('gush', { inputmode: 'numeric' }))),
+          h('div', { style: 'flex:1;min-width:160px' }, field('חלקה', inp('helka', { inputmode: 'numeric' })))),
       planCard(),
       h('div', { class: 'card stack', style: 'background:var(--surface-2)' },
         h('label', { class: 'set-row' },
