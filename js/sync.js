@@ -154,13 +154,25 @@
       const j = await OD.api('GET', `/files/${s.odReportDir}?fields=id,trashed&supportsAllDrives=true`).catch(() => null);
       if (j && !j.trashed) OD._verified.add(s.odReportDir); else s.odReportDir = null;
     }
-    if (s.odReportDir && isBuild(s) && s.odReportDirName !== buildDirName(s)) {
+    // ori (1.108.2): הקבצים של הסקר הועברו בדרייב לתיקייה אחרת: מעלים מעכשיו לשם, ולא שוב ל"סקרי עצים"
+    if (isBuild(s) && s.odReportDir && !followChecked.has(s.id)) {
+      followChecked.add(s.id);
+      const moved = await movedReportDir(s).catch(() => null);
+      if (moved && moved !== s.odReportDir) {
+        s.odReportDir = moved; s.odReportOwn = true; OD._verified.add(moved);
+        await DB.putSurvey(s, false);
+        log('ok', 'קובצי הסקר הועברו בגוגל דרייב: ההעלאות הבאות לתיקייה שאליה הועברו', s);
+      }
+    }
+    // תיקייה שאורי בחר (הקבצים הועברו אליה): לא משנים את השם שלה
+    if (s.odReportDir && isBuild(s) && !s.odReportOwn && s.odReportDirName !== buildDirName(s)) {
       // שם הסקר השתנה: משנים את שם התיקייה (הקבצים הקודמים נשארים בה)
       const name = buildDirName(s);
       if (await OD.rename(s.odReportDir, name).catch(() => null)) { s.odReportDirName = name; await DB.putSurvey(s, false); }
       else s.odReportDir = null;
     }
     if (!s.odReportDir) {
+      s.odReportOwn = false;
       const proj = await OD.folder(await reportRoot(), s.project || 'ללא פרויקט');
       if (isBuild(s)) {
         const name = buildDirName(s);
@@ -171,8 +183,30 @@
     }
     return s.odReportDir;
   }
+  // האקסל הראשי של הסקר (מההעלאה האחרונה) כבר לא בתיקיית הדוחות אלא בתיקייה אחרת: התיקייה ההיא
+  const followChecked = new Set();
+  async function movedReportDir(s) {
+    const pin = new Set(s.xlPin || []), skip = new Set(s.xlSkip || []);
+    const base = root.App && root.App.fileBase ? OD.clean(root.App.fileBase(s) + '.xlsm') : null;
+    // סקר מלפני 1.108.2 (בלי xlMain): רק אם בתיקיית הדוחות אין יותר את האקסל
+    if (!s.xlMain) {
+      if (!base || await OD.findFile(s.odReportDir, base).catch(() => null)) return null;
+    }
+    const ids = [...new Set([s.xlMain, ...(s.xlIds || [])])].filter(id => id && !pin.has(id) && !skip.has(id));
+    for (const id of ids) {
+      const j = await OD.api('GET', `/files/${id}?fields=id,name,parents,trashed&supportsAllDrives=true`).catch(() => null);
+      if (!j || j.trashed || !(j.parents || []).length) continue;
+      if (j.parents.includes(s.odReportDir)) return null;
+      // אחד שאינו הראשי: רק קובץ בשם של הסקר
+      if (id !== s.xlMain && base && j.name !== base) continue;
+      if ((j.parents || []).includes(s.odFolderId)) continue; // לא תיקיית הגיבוי של האפליקציה
+      return j.parents[0];
+    }
+    return null;
+  }
   // הנתיב לתצוגה: סקרי עצים / פרויקט [/ שם הסקר]
   async function reportPath(s) {
+    if (s.odReportOwn && s.odReportDir && OD.folderPath) { const p = await OD.folderPath(s.odReportDir, 4).catch(() => null); if (p && p.length) return [].concat(p).join(' / '); }
     return [(await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים', s.project || 'ללא פרויקט'].concat(isBuild(s) ? [s.odReportDirName || buildDirName(s)] : []).join(' / ');
   }
 
@@ -857,6 +891,7 @@
       const fresh = s.odReportDir ? await OD.findFile(s.odReportDir, OD.clean(r.name)).catch(() => null) : null;
       s.xlIds = [...new Set([...(fresh ? [fresh.id] : []), ...(s.xlIds || [])])].filter(id => !(s.xlSkip || []).includes(id));
       s.xlOk = fresh ? { [fresh.id]: Date.parse(fresh.lastModifiedDateTime) || 0 } : {};
+      if (fresh) s.xlMain = fresh.id;
       s.xlDirty = true;
     }
     DB.delKV('xlsm:' + s.id).catch(() => {});
