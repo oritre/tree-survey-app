@@ -616,9 +616,10 @@
   // הגיליון עצמו (XML). עמודה G = הייעוד מעמודה BC בגיליון "סקר" לפי מספר העץ, כך שהפקודה ב-BricsCAD קוראת גיליון אחד
   // עצים (עם מיקום ומספר) ותחומים בקואורדינטות של המדידה (שרטוט על דף: לפי קנה המידה או הכיול), ומקום המספר של כל עץ.
   // משותף לגיליון "מדידה" ולקובץ הנתונים של BricsCAD (1.95.0)
+  // רשומה של תחום (פוליגון, t.polyId) היא לא עץ: לא נכנסת כסימון עץ לגיליון "מדידה" ול-BricsCAD, רק התחום עצמו (ori, 1.108.1)
   async function placed(survey, keep) {
     const W = (x, y) => world(survey.plan, x, y);
-    const trees = root.Core.sortTrees(survey.trees.filter(t => t.px != null && String(t.num || '').trim() && (!keep || keep(t))))
+    const trees = root.Core.sortTrees(survey.trees.filter(t => t.px != null && !t.polyId && String(t.num || '').trim() && (!keep || keep(t))))
       .map(t => { const w = W(t.px, t.py); return Object.assign({}, t, { px: w[0], py: w[1], src: t }); });
     const polys = (survey.planPolys || []).filter(p => p.pts && p.pts.length >= 3).map(p => Object.assign({}, p, { pts: p.pts.map(q => W(q[0], q[1])) }));
     const lab = trees.length ? layoutLabels(trees, await othersFor(survey)) : new Map();
