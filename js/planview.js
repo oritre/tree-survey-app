@@ -940,6 +940,7 @@
       if (drawing) {
         // הצמדה כמו OSNAP באוטוקאד: נגיעה ליד הנקודה הראשונה סוגרת את התחום, ליד קודקוד קיים נצמדת אליו
         const sn = snapAt(pt);
+        if (drawKind === 'bound' && traceOn) return boundTap(xy, sn);
         if (sn && sn.first) { if (drawing.length >= 3) finishPoly(); else flash('צריך לפחות 3 נקודות כדי לסגור'); return; }
         if (sn && sn.last) return;
         drawing.push(sn ? sn.q.slice() : [Math.round(xy[0] * 100) / 100, Math.round(xy[1] * 100) / 100]);
@@ -1041,6 +1042,108 @@
       if (isClosed) chain.pop();
       if (chain.length < 3) return null;
       return { pts: chain, open: !isClosed };
+    }
+    // ---------- קו כחול מנקודה לנקודה: הקטע שבין שתי נגיעות נבחר לאורך הקו בשרטוט ----------
+    let traceOn = true;
+    // הנקודה הקרובה על קו בשרטוט (הטלה על הקטע), עד 16 פיקסלים מהנגיעה. בקואורדינטות השרטוט (יחסית ל-ox,oy)
+    function lineSnap(xy) {
+      const tol = 16 / ppm() * root.Plan.upm(s.plan), x = xy[0] - g.ox, y = xy[1] - g.oy;
+      let best = null, bd = tol;
+      for (let i = 0; i < cadPaths.length; i++) {
+        if (cad.bb[i * 4] > x + tol || cad.bb[i * 4 + 2] < x - tol || cad.bb[i * 4 + 1] > y + tol || cad.bb[i * 4 + 3] < y - tol || !pathOn(i)) continue;
+        const p = cadPaths[i];
+        for (let k = 0; k + 3 < p.length; k += 2) {
+          const ax = p[k], ay = p[k + 1], dx = p[k + 2] - ax, dy = p[k + 3] - ay, L = dx * dx + dy * dy;
+          const u = L ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L)) : 0;
+          const d = Math.hypot(x - ax - u * dx, y - ay - u * dy);
+          if (d < bd) { bd = d; best = { i, k, x: ax + u * dx, y: ay + u * dy }; }
+        }
+      }
+      return best;
+    }
+    // הדרך הקצרה לאורך קווי השרטוט מנקודה A לנקודה B (שתיהן מ-lineSnap). קצוות קרובים עד חצי מטר מתחברים.
+    // כששתי הנקודות על קווים באותו סגנון (צבע/שכבה), הולכים רק על קווים בסגנון הזה, כדי לא לקפוץ לקו אחר שחוצה
+    // avoid: נקודות שכבר בקו (לא חוזרים על אותו קטע, למשל בסגירה חוזרים מהצד השני)
+    function tracePath(A, B, avoid) {
+      const upm = root.Plan.upm(s.plan), eps = 0.5 * upm;
+      const m = Math.hypot(B.x - A.x, B.y - A.y) + 40 * upm;
+      const x0 = Math.min(A.x, B.x) - m, x1 = Math.max(A.x, B.x) + m, y0 = Math.min(A.y, B.y) - m, y1 = Math.max(A.y, B.y) + m;
+      const st = g.ps && g.ps[A.i] === g.ps[B.i] ? g.ps[A.i] : null;
+      const X = [], Y = [], adj = [], grid = new Map(), key = (cx, cy) => cx + ',' + cy;
+      const node = (x, y) => {
+        const cx = Math.floor(x / eps), cy = Math.floor(y / eps);
+        for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (const j of grid.get(key(cx + a, cy + b)) || []) if (Math.abs(X[j] - x) <= eps && Math.abs(Y[j] - y) <= eps) return j;
+        const j = X.length; X.push(x); Y.push(y); adj.push([]);
+        const kk = key(cx, cy); (grid.get(kk) || grid.set(kk, []).get(kk)).push(j);
+        return j;
+      };
+      const edge = (a, b) => { if (a === b) return; const w = Math.hypot(X[a] - X[b], Y[a] - Y[b]); adj[a].push([b, w]); adj[b].push([a, w]); };
+      // A ו-B נקודות משלהן (לא מתמזגות), מחוברות לשני קצוות הקטע שעליו הן
+      const sp = q => { const j = X.length; X.push(q.x); Y.push(q.y); adj.push([]); return j; };
+      const ia = sp(A), ib = sp(B);
+      for (let i = 0; i < cadPaths.length; i++) {
+        if (cad.bb[i * 4] > x1 || cad.bb[i * 4 + 2] < x0 || cad.bb[i * 4 + 1] > y1 || cad.bb[i * 4 + 3] < y0 || !pathOn(i)) continue;
+        if (st != null && g.ps[i] !== st) continue;
+        const p = cadPaths[i];
+        if (p.length < 4) continue;
+        let prev = node(p[0], p[1]);
+        for (let k = 0; k + 3 < p.length; k += 2) {
+          const cur = node(p[k + 2], p[k + 3]);
+          edge(prev, cur);
+          if (i === A.i && k === A.k) { edge(prev, ia); edge(ia, cur); }
+          if (i === B.i && k === B.k) { edge(prev, ib); edge(ib, cur); }
+          if (i === A.i && k === A.k && i === B.i && k === B.k) edge(ia, ib);
+          prev = cur;
+        }
+      }
+      // Dijkstra עם ערימה בינארית
+      const dist = new Float64Array(X.length).fill(Infinity), from = new Int32Array(X.length).fill(-1), heap = [[0, ia]];
+      dist[ia] = 0;
+      while (heap.length) {
+        let top = heap[0]; const last = heap.pop();
+        if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let mi = i; if (l < heap.length && heap[l][0] < heap[mi][0]) mi = l; if (r < heap.length && heap[r][0] < heap[mi][0]) mi = r; if (mi === i) break; [heap[i], heap[mi]] = [heap[mi], heap[i]]; i = mi; } }
+        const [d, u] = top;
+        if (d > dist[u]) continue;
+        if (u === ib) break;
+        for (const [v, w] of adj[u]) if (d + w < dist[v] && !(avoid && v !== ib && avoid.has(toW([X[v], Y[v]]).join(',')))) {
+          dist[v] = d + w; from[v] = u; heap.push([dist[v], v]);
+          let i = heap.length - 1; while (i > 0) { const pa = (i - 1) >> 1; if (heap[pa][0] <= heap[i][0]) break; [heap[i], heap[pa]] = [heap[pa], heap[i]]; i = pa; }
+        }
+      }
+      if (!isFinite(dist[ib])) return null;
+      const out = []; for (let u = ib; u !== -1; u = from[u]) out.push([X[u], Y[u]]);
+      return out.reverse();
+    }
+    const r2 = v => Math.round(v * 100) / 100;
+    const toW = q => [r2(q[0] + g.ox), r2(q[1] + g.oy)];
+    // נגיעה בציור קו כחול: נקודה על הקו, והקטע מהנקודה הקודמת אליה לאורך הקו. נגיעה מחוץ לקו = קו ישר (דילוג על חלק)
+    function boundTap(xy, sn) {
+      const steps = drawing.st || (drawing.st = []);
+      const used = new Set(drawing.map(q => q.join(',')));
+      const prev = steps[steps.length - 1];
+      if (sn && sn.first) {
+        if (drawing.length < 3) { flash('צריך לפחות 3 נקודות כדי לסגור'); return; }
+        const f = steps[0];
+        if (prev && prev.snap && f && f.snap) { used.delete(drawing[0].join(',')); const p = tracePath(prev.snap, f.snap, used); if (p) drawing.push(...p.slice(1, -1).map(toW)); }
+        finishPoly(); return;
+      }
+      if (sn && sn.last) return;
+      const ls = lineSnap(xy);
+      let pts;
+      if (ls && prev && prev.snap) {
+        const p = tracePath(prev.snap, ls, used);
+        if (p) pts = p.slice(1).map(toW);
+        else { pts = [toW([ls.x, ls.y])]; flash('אין קו רציף בין שתי הנקודות: חובר בקו ישר', 2500); }
+      } else pts = [ls ? toW([ls.x, ls.y]) : sn ? sn.q.slice() : [r2(xy[0]), r2(xy[1])]];
+      // נקודות כפולות ברצף (הנגיעה הקודמת) לא נכנסות
+      pts = pts.filter((q, k) => { const o = k ? pts[k - 1] : drawing[drawing.length - 1]; return !o || Math.abs(o[0] - q[0]) > 0.005 || Math.abs(o[1] - q[1]) > 0.005; });
+      drawing.push(...pts);
+      steps.push({ n: pts.length, snap: ls });
+      renderSheet(); redraw();
+    }
+    function popDrawStep() {
+      const st = drawing.st && drawing.st.pop();
+      drawing.splice(drawing.length - (st ? st.n : 1));
     }
     // קווי גבול סגורים שנמצאו בקובץ (למשל גבול חלקה, שכבה 1602)
     const fileBounds = (g.bounds || []).map(b => ({ name: /1602/.test(b.layer) ? 'גבול חלקה' : b.layer, pts: b.pts.map(q => [Math.round((q[0] + g.ox) * 100) / 100, Math.round((q[1] + g.oy) * 100) / 100]) }))
@@ -1150,9 +1253,14 @@
       sheet.classList.remove('hidden'); hint.classList.add('hidden');
       if (drawing) {
         sheet.replaceChildren(
-          h('div', { class: 'plan-sheet-head' }, h('b', {}, drawKind === 'bound' ? 'קו כחול' : 'תחום חדש'), h('span', { class: 'muted small' }, drawing.length >= 3 ? `${drawing.length} נקודות. נגיעה בעיגול הירוק סוגרת את התחום` : `גע בפינות התחום לפי הסדר (${drawing.length} נקודות)`)),
+          h('div', { class: 'plan-sheet-head' }, h('b', {}, drawKind === 'bound' ? 'קו כחול' : 'תחום חדש'), h('span', { class: 'muted small' },
+            drawKind === 'bound' && traceOn
+              ? (!drawing.length ? 'גע בנקודה על הקו הכחול שממנה מתחילים'
+                : `גע בנקודה הבאה על הקו: הקטע ביניהן נבחר לאורך הקו. נגיעה מחוץ לקו = קו ישר (מדלג על חלק).${drawing.length >= 3 ? ' נגיעה בעיגול הירוק סוגרת' : ''}`)
+              : drawing.length >= 3 ? `${drawing.length} נקודות. נגיעה בעיגול הירוק סוגרת את התחום` : `גע בפינות התחום לפי הסדר (${drawing.length} נקודות)`)),
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
-            h('button', { class: 'btn', disabled: drawing.length ? null : '', onclick: () => { drawing.pop(); renderSheet(); redraw(); } }, 'בטל נקודה'),
+            h('button', { class: 'btn', disabled: drawing.length ? null : '', onclick: () => { if (drawKind === 'bound') popDrawStep(); else drawing.pop(); renderSheet(); redraw(); } }, 'בטל נקודה'),
+            drawKind === 'bound' ? h('button', { class: 'btn' + (traceOn ? ' primary' : ''), title: 'כשפועל, הקטע בין שתי נגיעות הולך לאורך הקו בשרטוט', onclick: () => { traceOn = !traceOn; renderSheet(); } }, traceOn ? '✓ לאורך הקו' : 'לאורך הקו') : null,
             h('button', { class: 'btn', onclick: () => { drawing = null; drawKind = 'poly'; renderSheet(); redraw(); } }, 'ביטול'),
             h('button', { class: 'btn primary', disabled: drawing.length >= 3 ? null : '', onclick: finishPoly }, 'סיום')));
         return;
@@ -1166,7 +1274,7 @@
               : fileBounds.length ? 'גע בקו הכחול בשרטוט, או בחר קו שנמצא במדידה' : 'גע בקו הכחול (או בגבול המגרש) בשרטוט')),
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
             ...fileBoundBtns(),
-            h('button', { class: 'btn', onclick: () => { pickBound = false; boundCand = null; drawKind = 'bound'; drawing = []; renderSheet(); redraw(); } }, 'לשרטט ידנית'),
+            h('button', { class: 'btn', onclick: () => { pickBound = false; boundCand = null; drawKind = 'bound'; drawing = []; renderSheet(); redraw(); } }, 'מנקודה לנקודה'),
             h('button', { class: 'btn', onclick: () => { pickBound = false; boundCand = null; renderSheet(); redraw(); } }, 'ביטול'),
             boundCand ? h('button', { class: 'btn primary', onclick: () => setBound(boundCand.map(q => q.slice())) }, 'אישור') : null));
         return;
@@ -1217,7 +1325,7 @@
           h('button', { class: 'btn primary', onclick: () => { drawing = []; selPoly = null; renderSheet(); } }, '+ תחום חדש')));
     }
     function finishPoly() {
-      if (drawKind === 'bound') return setBound(drawing);
+      if (drawKind === 'bound') return setBound(drawing.slice());
       const name = prompt('שם התחום (לא חובה)', `קטע ${s.planPolys.length + 1}`);
       if (name == null) return;
       const poly = { id: ctx.uid(), pts: drawing, name: name.trim() };
