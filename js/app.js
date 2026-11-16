@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.105.0';
+  const APP_VERSION = '1.105.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1721,7 +1721,18 @@
           const pv = h('div', { class: 'muted small', dir: 'rtl' });
           const upd = () => { const l = Construction.idLine(cur); pv.textContent = l ? 'בכותרת: ' + l : ''; };
           const el = inp('planNo', { placeholder: 'למשל הר/מק/1400/2א', dir: 'rtl' });
-          el.addEventListener('input', upd); upd();
+          // ori: בהקלדה "1400/2א" התהפך בשדה. סימן כיוון (RLM) סביב כל "/" כבר בזמן ההקלדה, והסמן נשאר במקומו
+          const fixSlashes = () => {
+            const v = el.value, pos = el.selectionStart == null ? v.length : el.selectionStart;
+            const RL = /[\u200e\u200f]/g, plain = v.replace(RL, ''), before = v.slice(0, pos).replace(RL, '').length;
+            const nv = plain.replace(/\//g, '\u200f/\u200f');
+            if (nv === v) return;
+            let np = 0, cnt = 0; while (np < nv.length && cnt < before) { if (nv[np] !== '\u200f') cnt++; np++; }
+            if (nv[np] === '\u200f' && nv[np - 1] === '/') np++;
+            el.value = nv; cur.planNo = nv; saveSoon();
+            try { el.setSelectionRange(np, np); } catch (_) {}
+          };
+          el.addEventListener('input', () => { fixSlashes(); upd(); }); fixSlashes(); upd();
           return h('div', {}, field('מספר תכנית', el), pv);
         })()
         : h('div', { class: 'row', style: 'align-items:stretch' },
