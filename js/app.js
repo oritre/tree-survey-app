@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.107.0';
+  const APP_VERSION = '1.107.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2082,9 +2082,31 @@
     saveNow();
     curTreeId = id;
     history.replaceState(null, '', `#/s/${cur.id}/trees/t/${encodeURIComponent(id)}`);
+    // ori (1.107.1): במחשב, מעבר לעץ אחר לא מזיז את המסך. אותו שדה שהיה בראש המסך נשאר באותו מקום,
+    // גם כשלעץ החדש יש יותר או פחות תמונות. בלי זה הדף (והרשימה הצמודה) קפצו למעלה או למטה
+    const wide = window.innerWidth >= 900, ed = $('.editor');
+    const keep = wide && ed ? editorAnchor(ed) : null;
     renderTreeList();
     renderEditor();
-    if (window.innerWidth < 900) $('.editor').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (!wide) { $('.editor').scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+    if (keep) restoreAnchor($('.editor'), keep);
+  }
+  // השדה (כותרת שדה) הראשון שנראה במסך באזור העורך, והמקום שלו
+  function editorAnchor(ed) {
+    const top = (document.querySelector('.tabs') || {}).getBoundingClientRect ? document.querySelector('.tabs').getBoundingClientRect().bottom : 0;
+    const ls = [...ed.querySelectorAll('label.f, h3, .photos')];
+    const i = ls.findIndex(el => el.getBoundingClientRect().top >= top);
+    const el = ls[i];
+    return { y: scrollY, h: ed.offsetHeight, key: el ? (el.classList.contains('photos') ? '#photos' : el.textContent) : null,
+      nth: el ? ls.slice(0, i).filter(x => x.textContent === el.textContent).length : 0, top: el ? el.getBoundingClientRect().top : 0 };
+  }
+  function restoreAnchor(ed, a) {
+    ed.style.minHeight = Math.max(a.h, ed.offsetHeight) + 'px'; // שהדף לא יתקצר מתחת למקום שבו עמדו
+    window.scrollTo(0, a.y);
+    if (!a.key) return;
+    const ls = [...ed.querySelectorAll('label.f, h3, .photos')].filter(el => a.key === '#photos' ? el.classList.contains('photos') : el.textContent === a.key);
+    const el = ls[a.nth] || ls[0];
+    if (el) window.scrollBy(0, el.getBoundingClientRect().top - a.top);
   }
 
   // סקר בטיחות: עץ חדש מתחיל בדחיפות 2 (ori). urgencyAuto = עוד לא נבחרה דחיפות בפועל
