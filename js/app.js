@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.105.1';
+  const APP_VERSION = '1.106.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1927,6 +1927,26 @@
     renderTreeList();
     renderEditor();
   }
+  // ori (1.106.0): היתכנות העתקה או ייעוד לכל העצים שנבחרו ביחד (סקר לבנייה)
+  async function setPicked(kind) {
+    const ts = cur.trees.filter(t => selIds.has(t.id));
+    if (!ts.length) return;
+    const tr = kind === 'transplant';
+    const opts = tr
+      ? [...Construction.TRANSPLANT.map(v => ({ value: v, label: v })), { value: '', label: 'לנקות (ריק)' }]
+      : [...Construction.STATUSES.map(x => ({ value: x.key, label: x.key })), { value: 'auto', label: 'ייעוד אוטומטי', hint: 'לפי הגדרות הסקר (פטור, קוטר קטן), ובלי ייעוד כשאין כלל שמתאים' }, { value: '', label: 'בלי ייעוד' }];
+    const v = await askChoice(tr ? 'היתכנות העתקה' : 'ייעוד', `ל-${ts.length} העצים שנבחרו`, [...opts, { value: null, label: 'ביטול' }]);
+    if (v == null) return;
+    const now = Date.now();
+    for (const t of ts) {
+      if (tr) t.transplant = v;
+      else { if (v === 'auto') delete t.status; else t.status = v; t.statusAt = now; }
+    }
+    await saveNow();
+    if (!tr) Sync.statusChanged(cur);
+    toast(`${tr ? 'היתכנות העתקה' : 'ייעוד'} עודכן ב-${ts.length} עצים`, 2500);
+    renderTreeList(); renderEditor();
+  }
   // אחרי מחיקה: העץ שהיה אחרי המחוק ברשימה (או לפניו בסוף הרשימה), כדי לא לקפוץ לראש הרשימה
   function neighborTree(sortedBefore, idx) {
     const left = sortedBefore.filter(t => cur.trees.includes(t));
@@ -1956,13 +1976,15 @@
       h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > maxTrees(cur) ? ` (בתבנית יש מקום ל-${maxTrees(cur)})` : '')),
         trees.length > 1 && !selMode ? h('button', { class: 'btn small', onclick: () => { saveNow(); selMode = true; selIds = new Set(); renderTreeList(); } }, icon('check'), 'בחירה') : null),
       selMode ? h('div', { class: 'pick-bar' },
-        h('span', { class: 'pick-count' }, selIds.size ? `נבחרו ${selIds.size}` : 'סמן עצים למחיקה'),
+        h('span', { class: 'pick-count' }, selIds.size ? `נבחרו ${selIds.size}` : 'סמן עצים'),
         h('button', { class: 'btn small', onclick: () => {
           const shown = [...list.querySelectorAll('.tree-row:not(.hidden)')].map(r => r.dataset.id);
           const all = shown.every(id => selIds.has(id));
           shown.forEach(id => all ? selIds.delete(id) : selIds.add(id));
           renderTreeList();
         } }, 'בחר הכל'),
+        Construction.isConstruction(cur) ? h('button', { class: 'btn small', disabled: !selIds.size, onclick: () => setPicked('transplant') }, 'היתכנות העתקה') : null,
+        Construction.isConstruction(cur) ? h('button', { class: 'btn small', disabled: !selIds.size, onclick: () => setPicked('status') }, 'ייעוד') : null,
         h('button', { class: 'btn small danger', disabled: !selIds.size, onclick: deletePicked }, icon('trash'), 'מחק'),
         h('button', { class: 'btn small', onclick: endPick }, 'ביטול')) : null,
       search,
