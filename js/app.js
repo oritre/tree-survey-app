@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.106.1';
+  const APP_VERSION = '1.107.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1889,7 +1889,15 @@
         t.ref ? h('span', { class: 'badge soft', title: 'לא להתייחסות: נשמר בסקר בלבד, לא נכנס לקבצים' }, 'לא להתייחסות') : null,
         pineMissing ? h('span', { class: 'badge alert', title: 'חסרה כמות אורנים' }, 'אורנים?') : null,
         (t.photos || []).length ? h('span', { class: 'badge soft', title: 'תמונות' }, icon('camera'), (t.photos || []).length) : null,
-        t.lat != null ? h('span', { class: 'badge soft', title: 'יש נ"צ' }, icon('pin')) : null));
+        t.lat != null ? h('span', { class: 'badge soft', title: 'יש נ"צ' }, icon('pin')) : null,
+        Construction.isConstruction(cur) ? transplantDot(t) : null));
+  }
+  // ori (1.107.0): היתכנות העתקה כעיגול רמזור ברשימה: ירוק גבוהה, כתום בינונית, אדום נמוכה, כחול "-"
+  const TR_COLORS = { 'גבוהה': '#2e9e44', 'בינונית': '#f39c12', 'נמוכה': '#e53935', '-': '#1e73d8' };
+  function transplantDot(t) {
+    const v = Construction.transplantOf(t);
+    if (!v) return null;
+    return h('span', { class: 'tr-dot', style: `background:${TR_COLORS[v]}`, title: 'היתכנות העתקה: ' + v, 'aria-label': 'היתכנות העתקה: ' + v });
   }
 
   // סינון רשימת העצים (מספר, מין או הערה). נשמר בין רענונים של הרשימה
@@ -1907,12 +1915,17 @@
     if (none) none.classList.toggle('hidden', shown > 0 || !q);
   }
   // בחירה של כמה עצים ומחיקה ביחד (ori). selFor = הסקר שהבחירה שייכת לו
-  let selMode = false, selIds = new Set(), selFor = null;
+  let selMode = false, selIds = new Set(), selFor = null, lastPick = null;
   function togglePick(id) {
     if (selIds.has(id)) selIds.delete(id); else selIds.add(id);
+    lastPick = id;
     renderTreeList();
   }
-  function endPick() { selMode = false; selIds = new Set(); renderTreeList(); renderEditor(); }
+  // ori (1.107.0): ביציאה מהבחירה נשארים בעץ האחרון שסומן, ולא חוזרים לראש הרשימה
+  function endPick() {
+    if (lastPick && treeById(lastPick)) curTreeId = lastPick;
+    lastPick = null; selMode = false; selIds = new Set(); renderTreeList(); renderEditor();
+  }
   async function deletePicked() {
     const ts = cur.trees.filter(t => selIds.has(t.id));
     if (!ts.length) return;
