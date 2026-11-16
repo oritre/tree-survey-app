@@ -241,6 +241,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tree-row.picked .pick-box { background: var(--danger); border-color: var(--danger); color: #fff; }
 .pick-box .ic { width: 14px; height: 14px; }
 .badges { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 120px; }
+.badges .tr-dot { display: inline-block; width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(255,255,255,.85); box-shadow: 0 0 0 1px rgba(0,0,0,.35); flex: none; }
 .badge { font-size: 13px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap; line-height: 1.5; }
 .badge.u-כ, .badge.u-1 { background: var(--danger-soft); color: var(--danger); border-color: transparent; font-weight: 700; }
 .badge.u-2 { background: var(--warn-soft); color: var(--warn); border-color: transparent; font-weight: 700; }
