@@ -638,3 +638,4 @@ textarea.doc-text.b { font-weight: 700; }
 .wl-prev { margin-top: 4px; max-width: 170px; color: var(--accent); font-weight: 600; overflow-wrap: anywhere; line-height: 1.3; }
 .wl-prev.none { color: var(--muted); font-weight: 400; }
 .wl-prev .link-btn { margin-inline-start: 6px; }
+.wl-find { display: block; margin: 4px auto 0; white-space: nowrap; }
