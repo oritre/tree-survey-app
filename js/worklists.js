@@ -9,11 +9,11 @@
   const FILE = 'רשימות עבודה.json';
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
-  // שדות הסקר שאפשר לשייך להם עמודה. prev: כשפותחים על בסיס סקר קודם, הערך מהסקר הקודם נשאר (ברירת מחדל)
+  // שדות הסקר שאפשר לשייך להם עמודה. prev: כשפותחים על בסיס סקר קודם, הערך מהסקר הקודם נשאר (כבוי כברירת מחדל: הפרטים מהרשימה)
   const FIELDS = [
-    { key: 'siteName', label: 'שם המוסד / האתר', re: /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר|בי"ס)|^שם$|^מוסד|^מעון/, prev: true, safetyOnly: true },
-    { key: 'street', label: 'רחוב ומספר', re: /כתובת|רחוב/, prev: true },
-    { key: 'city', label: 'עיר', re: /^עיר|ישוב|יישוב|רשות|^מקום$/, prev: true },
+    { key: 'siteName', label: 'שם המוסד / האתר', re: /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר|בי"ס)|^שם$|^מוסד|^מעון/, safetyOnly: true },
+    { key: 'street', label: 'רחוב ומספר', re: /כתובת|רחוב/ },
+    { key: 'city', label: 'עיר', re: /^עיר|ישוב|יישוב|רשות|^מקום$/ },
     { key: 'code', label: 'סמל מוסד', re: /סמל/, safetyOnly: true },
     { key: 'manager', label: 'מנהל/ת', re: /מנהל|אחראי|איש\s*קשר/, safetyOnly: true },
     { key: 'gush', label: 'גוש', re: /^גוש/, buildOnly: true },
@@ -147,7 +147,7 @@
     }
     if (!found) { for (const r of l.rows) delete r.cells[id]; return; }
     l.cols.push({ id, name: 'עיר' });
-    l.map.city = { col: id, pre: '', prev: true };
+    l.map.city = { col: id, pre: '', prev: false };
   }
 
   // ערכי הסקר לשורה, לפי השיוך
@@ -259,7 +259,51 @@
       save(l);
     };
   }
-  async function openRow(l, r) {
+  // ---------- קישור שורות לסקרים משנים קודמות (1.109) ----------
+  // לכל שורה בלי סקר: הסקר הקודם הכי מתאים (באפליקציה / בענן / בארכיון), כדי ש"פתח סקר" ימשיך ממנו ישר
+  const goodMatch = x => x.sc >= 10 || (x.cityHit && x.stHit);
+  const xYear = x => x.kind === 'file' ? (x.year || '') : (x.date || '').slice(0, 4);
+  function pickPrev(res) {
+    const pool = [...res.app, ...res.arch].filter(goodMatch);
+    pool.sort((a, b) => b.sc - a.sc || xYear(b).localeCompare(xYear(a)));
+    const x = pool[0];
+    if (!x) return { none: true, t: Date.now() };
+    return x.kind === 'file'
+      ? { kind: 'file', year: x.year, name: x.f.name.replace(/\.xls[xm]$/i, ''), f: { id: x.f.id, name: x.f.name, parents: x.f.parents, lastModifiedDateTime: x.f.lastModifiedDateTime }, path: x.path, t: Date.now() }
+      : { kind: 'app', year: xYear(x), name: x.siteName || x.site || 'סקר', e: { id: x.id, local: !!x.local, type: x.type, dataId: x.dataId, code: x.code, siteName: x.siteName, street: x.street, city: x.city, site: x.site, date: x.date, project: x.project }, t: Date.now() };
+  }
+  let linking = null;
+  async function linkPrev(l, onStep, all) {
+    if (linking) return linking;
+    linking = (async () => {
+      const rows = l.rows.filter(r => !r.deleted && !r.sid && (all || !r.prev));
+      let i = 0, found = 0;
+      for (const r of rows) {
+        onStep(++i, rows.length);
+        const v = valuesOf(l, r);
+        if (!v.street && !v.city && !v.code && !v.siteName) continue;
+        try {
+          const res = await candidates(l, r, v, () => {});
+          if (!res.odOn && !res.app.length) continue; // בלי חיבור: לא מסמנים "לא נמצא"
+          r.prev = pickPrev(res); r.u = Date.now();
+          if (!r.prev.none) found++;
+        } catch (e) { /* ננסה בפעם הבאה */ }
+      }
+      if (rows.length) await save(l);
+      return { n: rows.length, found };
+    })();
+    try { return await linking; } finally { linking = null; }
+  }
+  async function openFromPrev(l, r) {
+    const ui = U(), v = valuesOf(l, r), p = r.prev, b = ui.h('button');
+    ui.toast(`פותח סקר חדש מהיום על בסיס הסקר מ-${p.year || 'שנה קודמת'}: העצים וההערות משם, הפרטים מהרשימה…`, 4000);
+    try {
+      if (p.kind === 'file') await ui.lists.fromArchive(p.f, p.path || [], b, applier(l, r, v, true));
+      else await ui.lists.fromApp(p.e, b, applier(l, r, v, true));
+    } catch (e) { ui.toast('הפתיחה מהסקר הקודם נכשלה: ' + e.message + '. בחר סקר אחר.', 5000); openRow(l, r, true); }
+  }
+  async function openRow(l, r, choose) {
+    if (!choose && !r.sid && r.prev && !r.prev.none) return openFromPrev(l, r);
     const ui = U();
     if (r.sid) {
       const s = await DB.getSurvey(r.sid);
@@ -340,6 +384,8 @@
     if (id) {
       const l = await byId(id);
       if (!l) { U().go('#/lists'); return; }
+      // 1.109: פרטי הסקר (שם, כתובת, סמל…) תמיד מהרשימה החדשה; העצים וההערות מהסקר הקודם
+      if (!l.mapV) { for (const m of Object.values(l.map || {})) if (m) m.prev = false; l.mapV = 2; await save(l); }
       return parts[3] === 'setup' ? renderSetup(l) : parts[3] === 'route' ? renderRoute(l) : renderList(l);
     }
     return renderLists();
@@ -630,7 +676,10 @@
           return h('tr', { class: 'st-' + st.k },
             h('td', { class: 'wl-act' },
               (l.route || []).includes(r.id) ? rnumInput(l, r.id, () => { save(l); draw(); }) : null,
-              h('button', { class: 'btn ' + (st.k === 'todo' ? 'primary' : ''), onclick: () => openRow(l, r) }, st.k === 'todo' ? 'פתח סקר' : 'פתח'),
+              h('button', { class: 'btn ' + (st.k === 'todo' ? 'primary' : ''), title: !r.sid && r.prev && !r.prev.none ? 'סקר חדש מהיום עם העצים וההערות מהסקר הקודם, והפרטים מהרשימה' : null, onclick: () => openRow(l, r) },
+                st.k !== 'todo' ? 'פתח' : r.prev && !r.prev.none ? `פתח (מ-${r.prev.year || 'קודם'})` : 'פתח סקר'),
+              !r.sid && r.prev ? h('div', { class: 'wl-prev small' + (r.prev.none ? ' none' : '') }, r.prev.none ? 'אין סקר קודם' : '↩ ' + r.prev.name,
+                h('button', { class: 'link-btn small', onclick: () => openRow(l, r, true) }, r.prev.none ? 'חפש' : 'החלף')) : null,
               h('div', { class: 'wl-badge ' + st.k }, st.t), st.d ? h('div', { class: 'wl-st small' }, st.d) : null,
               r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null),
             ...l.cols.map(c => h('td', {}, h('input', { class: 'wl-cell', value: r.cells[c.id] || '', 'aria-label': c.name, style: `width:${width.get(c.id)}ch`,
@@ -648,6 +697,15 @@
       const blob = await Reports.xlsx(rows, { sheet: 'רשימה', widths: [...l.cols.map(() => 20), 18] });
       ui.downloadFile(blob, ui.safeName(l.name || 'רשימה') + '.xlsx');
     };
+    const linkStatus = h('div', { class: 'muted small', role: 'status' });
+    async function runLink(btn, all) {
+      if (btn) btn.disabled = true;
+      try {
+        const res = await linkPrev(l, (i, n) => { linkStatus.textContent = `מחפש סקרים משנים קודמות… ${i} מתוך ${n}`; }, all);
+        linkStatus.textContent = res.n ? `נמצאו סקרים קודמים ל-${res.found} מתוך ${res.n} מוסדות. "פתח" ממשיך מהם: העצים וההערות מהסקר הקודם, הפרטים מהרשימה.` : '';
+        if (!table.contains(document.activeElement)) draw();
+      } finally { if (btn) btn.disabled = false; }
+    }
     const missing = fieldsOf(l).filter(f => ['street', 'city'].includes(f.key) && !(l.map[f.key] || {}).col && !clean((l.map[f.key] || {}).pre)).map(f => f.label);
     ui.app().replaceChildren(ui.bar({ title: l.name || 'רשימה', sub: [l.project ? 'פרויקט ' + l.project : null, Construction.TYPES[l.type || 'safety']].filter(Boolean).join(' · ') }, '#/lists'),
       h('main', { class: 'stack' },
@@ -656,14 +714,17 @@
           h('button', { class: 'btn', onclick: () => { l.rows.push({ id: uid(), cells: {}, u: Date.now() }); save(l); filter = 'all'; q.value = ''; draw(); const ins = table.querySelectorAll('tbody tr:last-child input'); if (ins[0]) ins[0].focus(); } }, '➕ שורה'),
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/route') }, '🗺 מסלול ומפה'),
           h('button', { class: 'btn', onclick: exportXlsx }, '⬇ אקסל'),
+          h('button', { class: 'btn', title: 'מחפש לכל מוסד את הסקר שלו משנים קודמות (באפליקציה, בענן ובארכיון), ו"פתח" ימשיך ממנו', onclick: ev => runLink(ev.currentTarget, true) }, '🔗 חבר לסקרים משנים קודמות'),
           h('button', { class: 'btn', onclick: ev => managersReport(l, ev.currentTarget) }, '📊 דוח מנהלים'),
           h('button', { class: 'btn', title: 'סיכום אורנים ומפת עצים לשיתוף מהסקרים של הרשימה (ירושלים)', onclick: () => ui.go('#/summary/' + encodeURIComponent(l.id)) }, '🌲 אורנים ומפות'),
           l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox),
         l.finished ? h('div', { class: 'card row', style: 'gap:10px;align-items:center;background:var(--accent-soft)' }, h('b', { style: 'flex:1' }, '✓ הרשימה הסתיימה ' + new Date(l.finished).toLocaleDateString('he-IL')),
           h('button', { class: 'btn', onclick: async () => { delete l.finished; delete l.offHome; await save(l); renderList(l); } }, '↩ החזר לפעילות')) : null,
         missing.length ? h('div', { class: 'card small', style: 'background:#fff2cc;color:#5a4300' }, `⚠ עוד לא נבחרה עמודה ל: ${missing.join(', ')}. לחץ על החץ ▾ בכותרת של העמודה ובחר "העמודה הזו היא", או ב"שיוך עמודות".`) : null,
-        chipsBox, counts, table));
+        chipsBox, counts, linkStatus, table));
     draw();
+    // חיבור אוטומטי של שורות חדשות לסקרים משנים קודמות (פעם אחת לכל שורה)
+    if (!l.finished && l.rows.some(r => !r.deleted && !r.sid && !r.prev)) runLink(null, false);
     // סקרים שנפתחו במכשיר אחר: הסטטוס מהאינדקס בענן
     if (navigator.onLine !== false && await OD.connected()) Sync.cloudIndex().then(list => { idx = new Map(list.map(e => [e.id, e])); if (!table.contains(document.activeElement)) draw(); }).catch(() => {});
     syncThen(async () => { const n = await byId(l.id); if (n) { Object.assign(l, n); draw(); } else ui.go('#/lists'); });
