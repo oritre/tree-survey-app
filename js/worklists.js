@@ -215,8 +215,8 @@
       .filter(x => !x.path.some(n => /^גיבוי אפליקציית סקרי עצים$/.test(n)) && !/^טעינת עצים/.test(x.f.name));
   }
   // סקרים באפליקציה (בטאבלט ובאינדקס בענן) ובארכיון (קובצי אקסל, מכל השנים) שמתאימים לשורה
-  async function candidates(l, r, v, onArchive) {
-    const words = rowWords(l, r, v);
+  // כל הסקרים באפליקציה (בטאבלט ובאינדקס בענן) מסוג הרשימה
+  async function appEntries(l) {
     const local = await DB.allSurveys();
     let cloud = [];
     const odOn = navigator.onLine !== false && await OD.connected();
@@ -224,7 +224,12 @@
     const ents = new Map(cloud.filter(e => !e.deleted).map(e => [e.id, Object.assign({ kind: 'app' }, e)]));
     for (const s of local) if (!s.deleted) ents.set(s.id, Object.assign({}, ents.get(s.id) || {}, { kind: 'app', id: s.id, local: true, type: s.type, code: s.code, siteName: s.siteName || s.site, street: s.street, city: s.city, site: s.site, manager: s.manager, date: s.date, finished: s.finished, dataId: (ents.get(s.id) || {}).dataId || s.odDataId }));
     const type = l.type === 'construction' ? 'construction' : 'safety';
-    const app = [...ents.values()].filter(e => (e.type === 'construction' ? 'construction' : 'safety') === type)
+    return { odOn, list: [...ents.values()].filter(e => (e.type === 'construction' ? 'construction' : 'safety') === type) };
+  }
+  async function candidates(l, r, v, onArchive) {
+    const words = rowWords(l, r, v);
+    const { odOn, list } = await appEntries(l);
+    const app = list
       .map(e => Object.assign(e, scoreAll(v, words, [e.siteName, e.street, e.city, e.site, e.manager].join(' '), e.code)))
       .filter(e => e.sc >= 10 || (e.cityHit && e.stHit) || (e.cityHit && e.hits >= 3))
       .sort((a, b) => b.sc - a.sc || (b.date || '').localeCompare(a.date || '')).slice(0, 8);
@@ -266,8 +271,9 @@
   function pickPrev(res) {
     const pool = [...res.app, ...res.arch].filter(goodMatch);
     pool.sort((a, b) => b.sc - a.sc || xYear(b).localeCompare(xYear(a)));
-    const x = pool[0];
-    if (!x) return { none: true, t: Date.now() };
+    return pool[0] ? prevOf(pool[0]) : { none: true, t: Date.now() };
+  }
+  function prevOf(x) {
     return x.kind === 'file'
       ? { kind: 'file', year: x.year, name: x.f.name.replace(/\.xls[xm]$/i, ''), f: { id: x.f.id, name: x.f.name, parents: x.f.parents, lastModifiedDateTime: x.f.lastModifiedDateTime }, path: x.path, t: Date.now() }
       : { kind: 'app', year: xYear(x), name: x.siteName || x.site || 'סקר', e: { id: x.id, local: !!x.local, type: x.type, dataId: x.dataId, code: x.code, siteName: x.siteName, street: x.street, city: x.city, site: x.site, date: x.date, project: x.project }, t: Date.now() };
@@ -302,7 +308,7 @@
       else await ui.lists.fromApp(p.e, b, applier(l, r, v, true));
     } catch (e) { ui.toast('הפתיחה מהסקר הקודם נכשלה: ' + e.message + '. בחר סקר אחר.', 5000); openRow(l, r, true); }
   }
-  async function openRow(l, r, choose) {
+  async function openRow(l, r, choose, onLinked) {
     if (!choose && !r.sid && r.prev && !r.prev.none) return openFromPrev(l, r);
     const ui = U();
     if (r.sid) {
@@ -318,8 +324,8 @@
     const box = ui.h('div', { class: 'stack' });
     const close = () => ov.remove();
     // חיפוש חופשי בארכיון, כמו ב"חיפוש סקרים בענן", אם התוצאה הנכונה לא הופיעה
-    const q = ui.h('input', { class: 'in', type: 'search', value: [streetKey(v.street).word, v.city].filter(Boolean).join(' '), placeholder: 'שם קובץ, רחוב, עיר או סמל', style: 'flex:1;min-width:160px' });
-    const qBtn = ui.h('button', { class: 'btn', onclick: () => freeSearch() }, '🔎 חפש בארכיון');
+    const q = ui.h('input', { class: 'in', type: 'search', value: [streetKey(v.street).word, v.city].filter(Boolean).join(' '), placeholder: 'שם, רחוב, עיר, סמל או שם קובץ', style: 'flex:1;min-width:160px' });
+    const qBtn = ui.h('button', { class: 'btn', onclick: () => freeSearch() }, '🔎 חפש סקר קודם');
     q.addEventListener('keydown', e => { if (e.key === 'Enter') freeSearch(); });
     const ov = ui.h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
       ui.h('div', { class: 'card stack', style: 'max-width:720px;width:96%' },
@@ -330,7 +336,12 @@
         ui.h('div', { class: 'row', style: 'gap:8px' }, q, qBtn),
         ui.h('button', { class: 'btn', onclick: close }, 'ביטול')));
     document.body.append(ov);
+    if (choose) { q.focus(); q.select(); }
     const busy = async (btn, fn) => { for (const b of ov.querySelectorAll('button')) b.disabled = true; try { await fn(); } finally { if (document.body.contains(ov)) { close(); } } };
+    // רק לקשר (בלי לפתוח עכשיו): "פתח" בטבלה ימשיך מהסקר הזה
+    const linkBtn = x => r.sid ? null : ui.h('button', { class: 'btn', title: 'השורה תזכור את הסקר הזה, ו"פתח" ימשיך ממנו', onclick: async () => {
+      r.prev = prevOf(x); r.u = Date.now(); await save(l); close(); ui.toast('השורה קושרה לסקר מ-' + (r.prev.year || 'שנה קודמת'), 2500); if (onLinked) onLinked();
+    } }, '🔗 קשר לשורה');
     const recent = e => e.date && (Date.now() - new Date(e.date).getTime()) < 120 * 864e5;
     const appCard = e => {
       const sub = [e.code ? 'סמל ' + e.code : null, [e.street, e.city].filter(Boolean).join(', '), e.finished ? '✓ הסתיים' : null].filter(Boolean).join(' · ');
@@ -345,7 +356,7 @@
             if (e.local) ui.go('#/s/' + e.id); else await ui.lists.fromCloud(e, false, ev.currentTarget);
           }) }, 'המשך את הסקר הזה') : null,
           ui.h('button', { class: 'btn' + (cont ? '' : ' primary'), onclick: ev => busy(ev.currentTarget, () => ui.lists.fromApp(e, ev.currentTarget, applier(l, r, v, true))) },
-            'סקר חדש מהיום על בסיסו')));
+            'סקר חדש מהיום על בסיסו'), linkBtn(e)));
     };
     const fileCard = x => ui.h('div', { class: 'card stack wl-cand' + (x.sc >= 7 ? ' best' : '') },
       ui.h('div', { class: 'row', style: 'gap:8px;align-items:center' }, ui.h('span', { class: 'wl-year' }, x.year || '—'),
@@ -353,17 +364,26 @@
       ui.h('div', { class: 'muted small' }, [x.path.join(' / '), x.f.lastModifiedDateTime ? 'עודכן ' + ui.fmtDate(x.f.lastModifiedDateTime.slice(0, 10)) : ''].filter(Boolean).join(' · ')),
       ui.h('div', { class: 'row' },
         ui.h('button', { class: 'btn primary', onclick: ev => busy(ev.currentTarget, () => ui.lists.fromArchive(x.f, x.path, ev.currentTarget, applier(l, r, v, true))) }, '📂 סקר חדש מהיום (עם העצים והתמונות)'),
-        ui.h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(x.f.id) + '/view', target: '_blank', rel: 'noopener' }, 'הצג את האקסל')));
+        ui.h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(x.f.id) + '/view', target: '_blank', rel: 'noopener' }, 'הצג את האקסל'), linkBtn(x)));
+    // חיפוש חופשי כמו ב"חיפוש סקרים בענן": בסקרים של האפליקציה (שם, סמל, רחוב, עיר, פרויקט) ובארכיון בדרייב
     async function freeSearch() {
       const t = q.value.trim();
       if (!t) return;
-      if (navigator.onLine === false || !(await OD.connected())) { ui.toast('החיפוש בארכיון צריך קליטה וחיבור לגוגל דרייב'); return; }
-      qBtn.disabled = true; status.textContent = 'מחפש בארכיון…';
+      qBtn.disabled = true; status.textContent = 'מחפש…';
       try {
         const words = norm(t).split(' ').filter(Boolean);
-        const found = (await archiveFiles([t])).sort((a, b) => (b.year || '').localeCompare(a.year || '') || (b.f.lastModifiedDateTime || '').localeCompare(a.f.lastModifiedDateTime || ''));
-        status.textContent = found.length ? `${found.length} קבצים בארכיון עבור "${t}" (מהשנה החדשה לישנה):` : `לא נמצאו קבצים עבור "${t}"`;
-        box.replaceChildren(...found.slice(0, 40).map(x => fileCard(Object.assign(x, { sc: words.every(w => hasWord(norm(x.f.name), w)) ? 7 : 0 }))));
+        const { odOn, list } = await appEntries(l);
+        const app = list.filter(e => { const hay = norm([e.code, e.siteName, e.street, e.city, e.project, e.site, e.manager].join(' ')); return words.every(w => hay.includes(w)); })
+          .sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 25).map(e => Object.assign(e, { sc: 0 }));
+        let found = [];
+        if (odOn) {
+          status.textContent = 'מחפש גם בארכיון בגוגל דרייב…';
+          found = (await archiveFiles([t])).sort((a, b) => (b.year || '').localeCompare(a.year || '') || (b.f.lastModifiedDateTime || '').localeCompare(a.f.lastModifiedDateTime || ''));
+        }
+        const n = app.length + found.length;
+        status.textContent = n ? `${app.length} סקרים באפליקציה ו-${found.length} קבצים בארכיון עבור "${t}" (מהחדש לישן):`
+          : `לא נמצא דבר עבור "${t}"` + (odOn ? '' : ' (בלי חיבור לגוגל דרייב החיפוש רק בטאבלט)');
+        box.replaceChildren(...app.map(appCard), ...found.slice(0, 40).map(x => fileCard(Object.assign(x, { sc: words.every(w => hasWord(norm(x.f.name), w)) ? 7 : 0 }))));
       } catch (e) { status.textContent = 'החיפוש נכשל: ' + e.message; }
       finally { qBtn.disabled = false; }
     }
@@ -679,7 +699,7 @@
               h('button', { class: 'btn ' + (st.k === 'todo' ? 'primary' : ''), title: !r.sid && r.prev && !r.prev.none ? 'סקר חדש מהיום עם העצים וההערות מהסקר הקודם, והפרטים מהרשימה' : null, onclick: () => openRow(l, r) },
                 st.k !== 'todo' ? 'פתח' : r.prev && !r.prev.none ? `פתח (מ-${r.prev.year || 'קודם'})` : 'פתח סקר'),
               !r.sid && r.prev ? h('div', { class: 'wl-prev small' + (r.prev.none ? ' none' : '') }, r.prev.none ? 'אין סקר קודם' : '↩ ' + r.prev.name,
-                h('button', { class: 'link-btn small', onclick: () => openRow(l, r, true) }, r.prev.none ? 'חפש' : 'החלף')) : null,
+                h('button', { class: 'link-btn small', onclick: () => openRow(l, r, true, draw) }, r.prev.none ? '🔎 חפש' : 'החלף')) : null,
               h('div', { class: 'wl-badge ' + st.k }, st.t), st.d ? h('div', { class: 'wl-st small' }, st.d) : null,
               r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null),
             ...l.cols.map(c => h('td', {}, h('input', { class: 'wl-cell', value: r.cells[c.id] || '', 'aria-label': c.name, style: `width:${width.get(c.id)}ch`,
