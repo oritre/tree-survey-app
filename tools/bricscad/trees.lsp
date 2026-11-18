@@ -221,18 +221,25 @@
       (setq bn (nth code *ts-ori-blocks*))
       (if (and bn (vl-catch-all-apply 'tb:fromlib (list bn)) (tblsearch "BLOCK" bn)) bn))))
 
-;; size of a TREEBLK block at scale 1 (measured once on a temporary insert)
-(defun ts:unitsize (bn / o mn mx r)
+;; size of a TREEBLK block at scale 1 (measured once on a temporary insert), and the centre of the symbol
+;; from its base point (a tree symbol is not centred on its base point: the trunk hangs below it)
+(defun ts:unitbox (bn / o mn mx r)
   (if (not (assoc bn *ts-usize*))
     (progn
       (setq o (vla-InsertBlock (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object))) (vlax-3d-point 0 0 0) bn 1.0 1.0 1.0 0.0))
       (setq r (vl-catch-all-apply 'vla-GetBoundingBox (list o 'mn 'mx)))
-      (setq *ts-usize* (cons (cons bn (if (vl-catch-all-error-p r) 1.0
+      (setq *ts-usize* (cons (cons bn (if (vl-catch-all-error-p r) (list 1.0 0.0 0.0)
                                         (progn (setq mn (vlax-safearray->list mn) mx (vlax-safearray->list mx))
-                                               (max (- (car mx) (car mn)) (- (cadr mx) (cadr mn))))))
+                                               (list (max (- (car mx) (car mn)) (- (cadr mx) (cadr mn)))
+                                                     (/ (+ (car mx) (car mn)) 2.0) (/ (+ (cadr mx) (cadr mn)) 2.0)))))
                              *ts-usize*))
       (vla-Delete o)))
   (cdr (assoc bn *ts-usize*)))
+(defun ts:unitsize (bn) (car (ts:unitbox bn)))
+;; centre of the symbol of block bn inserted at c with scale sc, turned by a (the square goes around it, 1.112.5)
+(defun ts:symcenter (bn c sc a / u dx dy)
+  (setq u (ts:unitbox bn) dx (* sc (cadr u)) dy (* sc (caddr u)) a (cond (a) (0.0)))
+  (list (+ (car c) (- (* dx (cos a)) (* dy (sin a)))) (+ (cadr c) (+ (* dx (sin a)) (* dy (cos a))))))
 
 ;; Inside the block "trees" everything is in Excel units = meters. The insert of the block takes it to the
 ;; drawing's units (scale 1 in a meter drawing, 100 in a cm drawing). So a tree is 1.5 m INSIDE the block
@@ -507,7 +514,7 @@
             (tb:layer tb:blocklayer) (tb:layer tb:textlayer)
             (setq sz (ts:treem bn S) sc (/ sz (ts:unitsize bn)))
             (ts:on (vla-InsertBlock blk (ts:pt c) bn sc sc sc (- *ts-rot*)) tb:blocklayer)
-            (if (= (ts:str (nth 7 r)) "") (ts:addsq blk c (/ (* (tb:sqr) sz) 2.0) tb:textlayer))
+            (if (= (ts:str (nth 7 r)) "") (ts:addsq blk (ts:symcenter bn c sc (- (cond (*ts-rot*) (0.0)))) (/ (* (tb:sqr) sz) 2.0) tb:textlayer))
             (ts:addtext blk c num (* (cadr (tb:size)) sz) tb:textlayer))
           ;; without TREEBLK: ring by designation, number next to it with a leader
           (progn
