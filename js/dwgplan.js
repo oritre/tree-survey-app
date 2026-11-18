@@ -710,8 +710,26 @@
     const enc = str => String(str).replace(/[^\x20-\x7e]/g, c => '\\U+' + c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0'));
     const f = v => (Math.round(v * 1000) / 1000).toFixed(3);
     const layers = new Map([[NO_STATUS.layer, NO_STATUS.aci], ...STATUSES.map(x => [x.layer, x.aci]), ['TREES_NUM', 7], ['TREES_BOX', 7], ['TREES_POLY', 6], ['TREES_KAV_KACHOL', 5], ['TREES_REF', 8]]);
-    put(0, 'SECTION', 2, 'HEADER', 9, '$ACADVER', 1, 'AC1009', 9, '$INSUNITS', 70, 6, 0, 'ENDSEC');
-    put(0, 'SECTION', 2, 'TABLES', 0, 'TABLE', 2, 'LAYER', 70, layers.size);
+    // ori (1.112.3): הקובץ נפתח ממורכז על הסימונים (בלי זום על הכל): גבולות השרטוט ומבט פעיל סביב כל הנקודות
+    const ext = [];
+    for (const t of survey.trees || []) if (t.px != null) ext.push(W(t.px, t.py));
+    for (const p of survey.planPolys || []) for (const q of p.pts || []) ext.push(W(q[0], q[1]));
+    if (survey.planBound && survey.planBound.pts) for (const q of survey.planBound.pts) ext.push(W(q[0], q[1]));
+    const xs = ext.map(q => q[0]).filter(isFinite), ys = ext.map(q => q[1]).filter(isFinite);
+    const bb = xs.length ? [Math.min(...xs) - 3, Math.min(...ys) - 3, Math.max(...xs) + 3, Math.max(...ys) + 3] : null;
+    put(0, 'SECTION', 2, 'HEADER', 9, '$ACADVER', 1, 'AC1009', 9, '$INSUNITS', 70, 6);
+    if (bb) put(9, '$EXTMIN', 10, f(bb[0]), 20, f(bb[1]), 30, 0, 9, '$EXTMAX', 10, f(bb[2]), 20, f(bb[3]), 30, 0,
+      9, '$LIMMIN', 10, f(bb[0]), 20, f(bb[1]), 9, '$LIMMAX', 10, f(bb[2]), 20, f(bb[3]));
+    put(0, 'ENDSEC');
+    put(0, 'SECTION', 2, 'TABLES');
+    if (bb) {
+      const w = bb[2] - bb[0], hgt = bb[3] - bb[1], asp = 1.6;
+      put(0, 'TABLE', 2, 'VPORT', 70, 1, 0, 'VPORT', 2, '*ACTIVE', 70, 0, 10, 0, 20, 0, 11, 1, 21, 1,
+        12, f((bb[0] + bb[2]) / 2), 22, f((bb[1] + bb[3]) / 2), 13, 0, 23, 0, 14, 1, 24, 1, 15, 1, 25, 1,
+        16, 0, 26, 0, 36, 1, 17, 0, 27, 0, 37, 0, 40, f(Math.max(hgt, w / asp) * 1.1), 41, asp, 42, 50, 43, 0, 44, 0, 50, 0, 51, 0,
+        71, 0, 72, 100, 73, 1, 74, 3, 75, 0, 76, 0, 77, 0, 78, 0, 0, 'ENDTAB');
+    }
+    put(0, 'TABLE', 2, 'LAYER', 70, layers.size);
     for (const [n, c] of layers) put(0, 'LAYER', 2, n, 70, 0, 62, c, 6, 'CONTINUOUS');
     put(0, 'ENDTAB');
     // זיהוי (XDATA של TREESURVEY, כמו בפקודה TREES): כך TREES מזהה את הסימונים גם אחרי שהועתקו והוזזו לשרטוט אחר
