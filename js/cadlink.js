@@ -240,12 +240,35 @@
   }
   let lastPick = 0;
 
+  // ---------- גם בלי תיקייה במחשב (1.111.0): קובץ הסקר עולה לגוגל דרייב, ל"סקרי עצים/BricsCAD" ----------
+  // ori: לא מורידים אקסל. "סיום סקר" מעלה לדרייב את הסימונים על המדידה (DXF, עם מזהה הסקר), מעתיקים אותם לשרטוט,
+  // ו-TREES מצייר מהקובץ הזה, שגוגל דרייב במחשב מוריד ל-G:\האחסון שלי\סקרי עצים\BricsCAD. כך זה עובד גם משינוי בטאבלט.
+  // כשהתיקייה מחוברת במכשיר הזה (מחשב) היא כבר כותבת לשם, אז לא מעלים פעמיים
+  const driveSent = new Map(), driveT = new Map();
+  const hasMarks = s => (s.trees || []).some(t => t.px != null) || (s.planPolys || []).some(p => p.pts && p.pts.length > 2);
+  function driveSoon(s) {
+    if (dirH || !isBuild(s) || !hasMarks(s) || !root.OD) return;
+    clearTimeout(driveT.get(s.id));
+    driveT.set(s.id, setTimeout(() => { driveT.delete(s.id); toDrive(s).catch(() => {}); }, 4000));
+  }
+  async function toDrive(s) {
+    if (dirH || !isBuild(s) || !hasMarks(s) || !root.OD || (typeof navigator !== 'undefined' && navigator.onLine === false)) return false;
+    if (!(await root.OD.connected())) return false;
+    const body = await dataText(s);
+    if (driveSent.get(s.id) === body) return false;
+    const top = (await root.DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים';
+    const dir = await root.OD.folder(await root.OD.folder(null, top), SUB);
+    const ok = await root.OD.upload(dir, dataName(s.id), new Blob([headLine(s) + body], { type: 'text/tab-separated-values' }), true);
+    if (ok) driveSent.set(s.id, body);
+    return !!ok;
+  }
+
   // כל שמירה של סקר (גם שינוי שהגיע ממכשיר אחר) נכתבת לקובץ של BricsCAD, והטבלה שליד מתעדכנת
   if (root.DB && root.DB.putSurvey) {
     const put = root.DB.putSurvey.bind(root.DB);
     root.DB.putSurvey = function (s, touch) {
       const r = put(s, touch);
-      Promise.resolve(r).then(() => { writeSoon(s); tableSoon(s); }, () => {});
+      Promise.resolve(r).then(() => { writeSoon(s); driveSoon(s); tableSoon(s); }, () => {});
       return r;
     };
   }
@@ -382,7 +405,7 @@ select,header input{background:#1f2421;color:#e6ebe7;border-color:#454e48}}`;
 
   root.CadLink = {
     supported, init, connect, reconnect, disconnect, state, onChange: f => listeners.add(f),
-    write, writeSoon, ping, openTable, renderTable, highlight, tableOpen: () => !!(popup && !popup.closed),
+    write, writeSoon, toDrive, ping, openTable, renderTable, highlight, tableOpen: () => !!(popup && !popup.closed),
     _use: async h => { baseH = h; baseName = h.name; await openSub(); emit(); }, // בדיקות
     _dataText: dataText, _apply: apply, _poll: poll, _parseStamp: parseStamp, _stamp: stamp, codeOf,
   };

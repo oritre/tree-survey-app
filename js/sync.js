@@ -901,6 +901,10 @@
     try {
       for (const f of await root.App.planFiles(s)) await putReportFile(s, f.name, f.blob);
     } catch (e) { log('error', 'קובץ המדידה לא עלה: ' + e.message, s); }
+    // והקובץ ש-TREES ב-BricsCAD מצייר ממנו (סקרי עצים/BricsCAD), כדי שהסימונים שהועתקו לשרטוט יתעדכנו בלי אקסל (1.111.0)
+    if (isBuild(s) && root.CadLink && root.CadLink.toDrive) {
+      try { await root.CadLink.toDrive(s); } catch (e) { log('error', 'הקובץ ל-BricsCAD לא עלה: ' + e.message, s); }
+    }
     if (pdfUp) await pdfUp;
     await DB.putSurvey(s, false);
   }
