@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.111.0';
+  const APP_VERSION = '1.112.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -3444,9 +3444,10 @@
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'סיום סקר'),
         noPhotoBox(cur),
-        cur.finished ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}. האקסל בתיקיית הפרויקט בגוגל דרייב.`)
-          : cur.finishPending ? h('div', { class: 'small' }, '⟳ מעלה את התמונות ואת האקסל…')
-          : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר את קובץ האקסל בגוגל דרייב ומפנה את התמונות מהטאבלט.'),
+        // ori (1.112.0): בלי אקסל ו-PDF בסיום, רק הסימונים על המדידה. אקסל או PDF: "הורדת קבצים" למטה
+        cur.finished ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}.` + (cur.odMarksAt ? ' קובץ הסימונים (DXF) בתיקיית הסקר בגוגל דרייב.' : ''))
+          : cur.finishPending ? h('div', { class: 'small' }, '⟳ מעלה את התמונות ואת קובץ הסימונים…')
+          : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר בתיקיית הסקר בגוגל דרייב רק את הסימונים על המדידה (DXF, להעתקה לשרטוט ב-BricsCAD) ומפנה את התמונות מהטאבלט. אקסל או PDF: מ"הורדת קבצים" למטה.'),
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', onclick: async () => {
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }

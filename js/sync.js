@@ -364,13 +364,14 @@
     // "סיום סקר": כשכל התמונות כבר בענן, מעלים אקסל ו-PDF לאותה תיקייה ומפנים את התמונות מהטאבלט
     // (אם האקסל וה-PDF עוד מוכנים בטאבלט אחרי הלחיצה, מחכים להם במקום לבנות אותם פעם שנייה)
     if (s.finishPending && allInCloud(s) && !preparing.has(s.id)) {
-      await uploadReport(s, { pdf: true });
+      // ori (1.112.0): סקר לבנייה מסתיים בלי אקסל ו-PDF, רק הסימונים על המדידה (DXF). אקסל או PDF מורידים מ"הפקת דוח"
+      if (isBuild(s)) await uploadMarks(s); else await uploadReport(s, { pdf: true });
       s.finishPending = false; s.finished = true; s.finishedAt = Date.now();
       await DB.putSurvey(s, false);
       await pushData(s); // שאר המכשירים יראו מיד שהסקר הסתיים
       await updateIndex(s);
       await freeLocal(s);
-      log('ok', 'סיום סקר: אקסל ו-PDF נשמרו בגוגל דרייב, והתמונות פונו מהטאבלט', s);
+      log('ok', isBuild(s) ? 'סיום סקר: הסימונים (DXF) נשמרו בגוגל דרייב, והתמונות פונו מהטאבלט' : 'סיום סקר: אקסל ו-PDF נשמרו בגוגל דרייב, והתמונות פונו מהטאבלט', s);
       emit();
     }
   }
@@ -906,6 +907,27 @@
       try { await root.CadLink.toDrive(s); } catch (e) { log('error', 'הקובץ ל-BricsCAD לא עלה: ' + e.message, s); }
     }
     if (pdfUp) await pdfUp;
+    await DB.putSurvey(s, false);
+  }
+  // "סיום סקר" בסקר לבנייה: רק קובץ הסימונים על המדידה (DXF, עם מזהה הסקר) לתיקיית הסקר, והקובץ ש-TREES קורא (סקרי עצים/BricsCAD)
+  async function uploadMarks(s) {
+    await syncFolders(s);
+    const files = (await root.App.planFiles(s)).filter(f => /\.dxf$/i.test(f.name));
+    if (files.length) {
+      await reportFolder(s);
+      for (const f of files) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (await OD.upload(await reportFolder(s), f.name, f.blob, true)) break;
+          s.odReportDir = null; // תיקיית הסקר נמחקה: יוצרים מחדש
+          if (attempt) throw new Error('לא ניתן לשמור בתיקיית הסקר');
+        }
+      }
+      s.odMarksAt = Date.now();
+      log('ok', 'קובץ הסימונים (DXF) נשמר בגוגל דרייב', s);
+    }
+    if (root.CadLink && root.CadLink.toDrive) {
+      try { await root.CadLink.toDrive(s); } catch (e) { log('error', 'הקובץ ל-BricsCAD לא עלה: ' + e.message, s); }
+    }
     await DB.putSurvey(s, false);
   }
   async function uploadPdf(s, pdf) {
