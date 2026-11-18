@@ -66,6 +66,12 @@
   (car spec))
 
 (defun ts:xd (num role) (list (list -3 (list *ts-app* (cons 1000 num) (cons 1000 role)))))
+(defun ts:xdid (num role id) (list (list -3 (list *ts-app* (cons 1000 num) (cons 1000 role) (cons 1000 id)))))
+;; replace this app's data on e
+(defun ts:setxd (e xd / d)
+  (setq d (entget e (list *ts-app*)))
+  (if (not (equal (assoc -3 d) (car xd)))
+    (entmod (append (vl-remove (assoc -3 d) d) xd))))
 
 (defun ts:str (v)
   (cond ((null v) "")
@@ -374,8 +380,10 @@
   p)
 ;; the file of this drawing: the app's data file (survey linked, or an Excel drawing moved to it), else the Excel.
 ;; ask = TREESFILE: pick the survey from the app's list (or an Excel file)
-;; TREES never opens the Excel file dialog by itself (1.110.1): when the app's list is there it offers the list,
-;; when the app is not connected on this PC it says how to connect it (and uses the drawing's Excel only if it is found).
+;; TREES never opens the Excel file dialog by itself (1.110.1). The survey is found (1.111.0):
+;; 1. from marks of the app's DXF ("סימונים במדידה") copied into this drawing: they carry the survey id
+;; 2. the survey this drawing already uses, 3. the id in the block's insert (a copy from another drawing),
+;; 4. the app survey with the same name as the drawing's old Excel. Else the app's list, if it is there.
 (defun ts:path (ask / id p)
   (if ask
     (progn
@@ -383,31 +391,48 @@
       (cond ((= id 'excel) (ts:xlpath T))
             (id (vlax-ldata-put "TREESURVEY" "survey" id) (ts:datafile id))))
     (progn
-      (setq id (cond ((vlax-ldata-get "TREESURVEY" "survey")) ((ts:migrate))))
+      (setq id (cond ((ts:markid T)) ((vlax-ldata-get "TREESURVEY" "survey")) ((ts:markid nil)) ((ts:migrate))))
+      (if (and id (/= id (vlax-ldata-get "TREESURVEY" "survey"))) (vlax-ldata-put "TREESURVEY" "survey" id))
       (cond
         ((and id (findfile (setq p (ts:datafile id)))) p)
-        ;; the app is connected (its list of surveys is there): pick this drawing's survey from it
+        ;; the survey is known but its file is not here yet (Google Drive on this PC still downloading it)
+        (id (ts:nofile id) nil)
+        ;; the app's list of surveys is there: pick this drawing's survey from it
         ((ts:index)
-         (if id (princ "\nThe app's file of this drawing's survey is missing: pick the survey again."))
          (setq id (ts:picksurvey))
          (cond ((= id 'excel) (ts:xlpath T))
                (id (vlax-ldata-put "TREESURVEY" "survey" id) (ts:datafile id))))
-        ;; the app does not write its files on this PC yet
+        ;; no app files and no app marks in the drawing
         (T
          (ts:noapp)
          (if (and (setq p (vlax-ldata-get "TREESURVEY" "excel")) (setq p (ts:relocate p)))
            (progn (princ (strcat "\nDrawn from the Excel " p " (not from the app).")) p)))))))
-;; once a session: the app is not connected to BricsCAD on this PC
+;; the survey id in the app's marks (app 1.111.0 DXF: 3rd value of the TREESURVEY data).
+;; loose = T: marks copied from the DXF (not drawn by TREES yet); nil: the insert of the block that TREES drew
+(defun ts:markid (loose / ss i xd v r)
+  (if (setq ss (ssget "_X" (list (list -3 (list *ts-app*)))))
+    (repeat (setq i (sslength ss))
+      (setq xd (cdr (assoc *ts-app* (cdr (assoc -3 (entget (ssname ss (setq i (1- i))) (list *ts-app*)))))))
+      (if (and (null r) (setq v (cdr (nth 2 xd))) (= (type v) 'STR) (/= v "")
+               (if loose (/= (cdr (nth 1 xd)) "all") (= (cdr (nth 1 xd)) "all")))
+        (setq r v))))
+  r)
+(defun ts:nofile (id)
+  (princ (strcat "\nThe app's file of this survey (" (ts:datafile id) ") is not on this PC yet."))
+  (alert (strcat "הקובץ של הסקר עוד לא הגיע למחשב.\n\n"
+                 "האפליקציה מעלה אותו לגוגל דרייב אחרי כל שינוי (צריך אינטרנט ואפליקציה מחוברת לגוגל דרייב),\n"
+                 "וגוגל דרייב במחשב מוריד אותו לתיקייה:\n" (ts:dir) "\n\n"
+                 "חכה כמה שניות והפעל שוב TREES. אם זה לא עוזר: פתח את הסקר באפליקציה ושנה משהו קטן.")))
+;; once a session: no app files on this PC
 (defun ts:noapp ()
-  (princ (strcat "\nNo app files in " (ts:dir) ". In the app on this PC: Settings > BricsCAD במחשב > choose the folder G:\\האחסון שלי\\סקרי עצים."))
+  (princ (strcat "\nNo app files in " (ts:dir) "."))
   (if (null *ts-noapp*)
     (progn
       (setq *ts-noapp* T)
-      (alert (strcat "האפליקציה עוד לא שולחת את הסקרים ל-BricsCAD במחשב הזה, ולכן TREES לא רואה את השינויים שעשית בה.\n\n"
-                     "באפליקציה במחשב (לא בטאבלט): הגדרות > BricsCAD במחשב > בחר תיקייה, ובחר את התיקייה\n"
-                     "G:\\האחסון שלי\\סקרי עצים\n\n"
-                     "אחר כך הפעל שוב TREES ובחר את הסקר מהרשימה.\n"
-                     "(תיקיית הקבצים: " (ts:dir) ")")))))
+      (alert (strcat "בשרטוט אין סימונים מהאפליקציה, ולכן TREES לא יודע איזה סקר לצייר.\n\n"
+                     "באפליקציה: \"סיום סקר\" מעלה לגוגל דרייב את \"סימונים במדידה.dxf\". העתק את הסימונים מהקובץ הזה לשרטוט\n"
+                     "והפעל שוב TREES. מאז, כל TREES מצייר לפי השינויים באפליקציה.\n\n"
+                     "(לבחירת סקר מרשימה או קובץ אקסל: TREESFILE)")))))
 
 ;; ---------- commands ----------
 (defun ts:run (path / doc rows old x y lx ly code lay num c e tp cnt areas pairs tr bn sc sz blk ins ms ce rot k pts S anames)
@@ -496,11 +521,14 @@
                      (ts:layer *ts-num-layer*))))))))
   ;; the one insert of the block: kept where you put it; new = where the older loose marks were, else in place
   (if ins
-    (vla-Update (vlax-ename->vla-object ins))
+    (progn
+      (vla-Update (vlax-ename->vla-object ins))
+      ;; the insert keeps the survey id, so a copy of it in another drawing finds its survey (1.111.0)
+      (if (ts:tsvp path) (ts:setxd ins (ts:xdid *ts-block* "all" (ts:sid path)))))
     (progn
       (setq rot (atan (nth 1 tr) (nth 0 tr)))
       (setq e (vlax-vla-object->ename (vla-InsertBlock ms (vlax-3d-point (nth 2 tr) (nth 3 tr) 0.0) *ts-block* S S S rot)))
-      (entmod (append (entget e) (ts:xd *ts-block* "all")))))
+      (entmod (append (entget e) (if (ts:tsvp path) (ts:xdid *ts-block* "all" (ts:sid path)) (ts:xd *ts-block* "all"))))))
   (vla-Regen doc 1)
   (setq tb:busy nil tb:pending nil tb:dbpend nil *ts-rot* nil)
   (setvar "CMDECHO" ce)

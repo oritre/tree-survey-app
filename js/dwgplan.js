@@ -720,7 +720,9 @@
     put(0, 'SECTION', 2, 'BLOCKS', 0, 'BLOCK', 8, '0', 2, TREE_BLOCK, 70, 0, 10, 0, 20, 0, 30, 0, 3, TREE_BLOCK,
       0, 'CIRCLE', 8, '0', 10, 0, 20, 0, 30, 0, 40, 0.5, 0, 'ENDBLK', 8, '0', 0, 'ENDSEC');
     put(0, 'SECTION', 2, 'ENTITIES');
-    const xd = id => { if (id) put(1001, XD_APP, 1000, enc(id[0]), 1000, id[1]); };
+    // הערך השלישי = מזהה הסקר (1.111.0): TREES מזהה ממנו את הסקר של הסימונים שהועתקו לשרטוט, בלי אקסל ובלי לבחור קובץ
+    const sid = enc(survey.id || '');
+    const xd = id => { if (id) { put(1001, XD_APP, 1000, enc(id[0]), 1000, id[1]); if (sid) put(1000, sid); } };
     const text = (lay, x, y, h, str, id) => { put(0, 'TEXT', 8, lay, 10, f(x), 20, f(y), 30, 0, 40, h, 1, enc(str), 72, 1, 11, f(x), 21, f(y), 31, 0); xd(id); };
     const poly = (lay, pts, closed, id) => {
       put(0, 'POLYLINE', 8, lay, 66, 1, 70, closed ? 1 : 0); xd(id);

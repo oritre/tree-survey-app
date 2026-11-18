@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.110.1';
+  const APP_VERSION = '1.111.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1849,7 +1849,7 @@
     };
     return h('div', { class: 'card stack' },
       h('h2', { style: 'margin:0;font-size:20px' }, 'BricsCAD במחשב'),
-      h('div', { class: 'muted small' }, 'סקר לבנייה מסתנכרן מיד עם השרטוט ועם טבלת העצים ב-BricsCAD, בלי אקסל. בוחרים פעם אחת את התיקייה G:\\האחסון שלי\\סקרי עצים, והאפליקציה שומרת בתיקייה BricsCAD שבתוכה קובץ לכל סקר. ב-BricsCAD: "בחר קובץ" (TREESFILE) ובוחרים את הסקר.'),
+      h('div', { class: 'muted small' }, 'סקר לבנייה מסתנכרן מיד עם השרטוט ועם טבלת העצים ב-BricsCAD, בלי אקסל. בוחרים פעם אחת את התיקייה G:\\האחסון שלי\\סקרי עצים, והאפליקציה שומרת בתיקייה BricsCAD שבתוכה קובץ לכל סקר. ב-BricsCAD: "בחר קובץ" (TREESFILE) ובוחרים את הסקר. גם בלי החיבור כאן, האפליקציה מעלה את הקובץ של כל סקר עם סימונים לגוגל דרייב (סקרי עצים/BricsCAD): מעתיקים לשרטוט את הסימונים מ"סימונים במדידה.dxf" ו-TREES מתעדכן לפי האפליקציה.'),
       status,
       h('div', { class: 'row' },
         st.needsClick ? h('button', { class: 'btn primary', onclick: async () => { try { await CadLink.reconnect(); renderSettings(); } catch (e) { toast(e.message, 4000); } } }, 'אשר את התיקייה') : null,
