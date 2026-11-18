@@ -155,7 +155,8 @@
       if (j && !j.trashed) OD._verified.add(s.odReportDir); else s.odReportDir = null;
     }
     // ori (1.108.2): הקבצים של הסקר הועברו בדרייב לתיקייה אחרת: מעלים מעכשיו לשם, ולא שוב ל"סקרי עצים"
-    if (isBuild(s) && s.odReportDir && !followChecked.has(s.id)) {
+    // גם כשאין עדיין תיקייה בסקר (במכשיר הזה, או אחרי שינוי שם): קודם בודקים לאן הועבר האקסל הראשי, ולא יוצרים תיקייה ריקה (1.112.2)
+    if (isBuild(s) && (s.odReportDir || s.xlMain) && !followChecked.has(s.id)) {
       followChecked.add(s.id);
       const moved = await movedReportDir(s).catch(() => null);
       if (moved && moved !== s.odReportDir) {
@@ -914,7 +915,6 @@
     await syncFolders(s);
     const files = (await root.App.planFiles(s)).filter(f => /\.dxf$/i.test(f.name));
     if (files.length) {
-      await reportFolder(s);
       for (const f of files) {
         for (let attempt = 0; attempt < 2; attempt++) {
           if (await OD.upload(await reportFolder(s), f.name, f.blob, true)) break;
