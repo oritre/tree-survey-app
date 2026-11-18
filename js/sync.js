@@ -913,7 +913,9 @@
   // "סיום סקר" בסקר לבנייה: רק קובץ הסימונים על המדידה (DXF, עם מזהה הסקר) לתיקיית הסקר, והקובץ ש-TREES קורא (סקרי עצים/bricscad_data)
   async function uploadMarks(s) {
     await syncFolders(s);
-    const files = (await root.App.planFiles(s)).filter(f => /\.dxf$/i.test(f.name));
+    // ori (1.112.4): ה-DXF עולה רק בסיום הראשון. אם הועבר למקום אחר הוא לא נוצר שוב (השינויים מגיעים לשרטוט דרך קובץ הנתונים).
+    // קובץ חדש: "הורד קובץ סימונים (DXF)" בלשונית ההפקה
+    const files = s.odMarksAt ? [] : (await root.App.planFiles(s)).filter(f => /\.dxf$/i.test(f.name));
     if (files.length) {
       // ori (1.112.3): תמיד בתיקיית הסקר ב"סקרי עצים" שבגוגל דרייב שלי (G: במחשב), גם כשקבצי הסקר הועברו לשולחן העבודה:
       // תיקייה של המחשב (גיבוי שולחן העבודה) לא תמיד מורידה למחשב קובץ שנכתב בענן

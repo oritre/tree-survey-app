@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.112.3';
+  const APP_VERSION = '1.112.4';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -3447,7 +3447,7 @@
         // ori (1.112.0): בלי אקסל ו-PDF בסיום, רק הסימונים על המדידה. אקסל או PDF: "הורדת קבצים" למטה
         cur.finished ? h('div', { class: 'okbox' }, `✓ הסקר הסתיים ב-${hm(cur.finishedAt)}.` + (cur.odMarksAt ? ' קובץ הסימונים (DXF) בתיקיית הסקר בגוגל דרייב.' : ''))
           : cur.finishPending ? h('div', { class: 'small' }, '⟳ מעלה את התמונות ואת קובץ הסימונים…')
-          : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ואז שומר בתיקיית הסקר בגוגל דרייב רק את הסימונים על המדידה (DXF, להעתקה לשרטוט ב-BricsCAD) ומפנה את התמונות מהטאבלט. אקסל או PDF: מ"הורדת קבצים" למטה.'),
+          : h('div', { class: 'muted small' }, 'מעלה את כל התמונות, ושומר בתיקיית הסקר בגוגל דרייב (פעם אחת, בסיום הראשון) רק את הסימונים על המדידה (DXF, להעתקה לשרטוט ב-BricsCAD), ומפנה את התמונות מהטאבלט. אקסל או PDF: מ"הורדת קבצים" למטה.'),
         h('div', { class: 'row' },
           h('button', { class: 'btn primary big', onclick: async () => {
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
@@ -3509,12 +3509,20 @@
           h('button', { class: 'btn', onclick: () => exportZip(status) }, 'כל התמונות בקובץ ZIP'))),
       cur.plan || cur.trees.some(t => t.px != null) ? h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'עדכון המדידה ב-BricsCAD'),
-        h('div', { class: 'small' }, `${cur.trees.filter(t => t.px != null).length} עצים סומנו על המדידה${(cur.planPolys || []).length ? `, ${cur.planPolys.length} תחומים` : ''}. באקסל יש גיליון "מדידה" עם המיקום של כל עץ.`),
+        h('div', { class: 'small' }, `${cur.trees.filter(t => t.px != null).length} עצים סומנו על המדידה${(cur.planPolys || []).length ? `, ${cur.planPolys.length} תחומים` : ''}.`),
+        // ori (1.112.4): בלי אקסל. ה-DXF צריך רק פעם אחת, ואחר כך TREES מתעדכן מקובץ הנתונים (סקרי עצים/bricscad_data)
         h('ol', { class: 'small', style: 'margin:0;padding-inline-start:20px;line-height:1.7' },
-          h('li', {}, 'בוחרים ייעוד בכרטיס של כל עץ (או ממלאים אותו באקסל בעמודה BC), ומורידים או שומרים את האקסל (למעלה).'),
-          h('li', {}, 'ב-BricsCAD פותחים את קובץ המדידה (DWG), טוענים פעם אחת את הקובץ trees.lsp (APPLOAD), ומקלידים TREES.'),
-          h('li', {}, 'בפעם הראשונה בוחרים את קובץ האקסל. העצים מצוירים בטבעת בצבע הייעוד עם המספר, בשכבות TREE-*. אחרי כל שינוי באקסל מקלידים TREES שוב.')),
+          h('li', {}, '"סיום סקר" שומר פעם אחת בתיקיית הסקר ב"סקרי עצים" את "סימונים במדידה.dxf" (אפשר להעביר אותו אחר כך לכל מקום, והוא לא ייווצר שוב).'),
+          h('li', {}, 'מעתיקים את הסימונים מה-DXF לשרטוט ב-BricsCAD ומקלידים TREES.'),
+          h('li', {}, 'מאז כל שינוי באפליקציה (גם מהטאבלט) מגיע לשרטוט: TREES מצייר מחדש לפי האפליקציה.')),
         h('div', { class: 'row' },
+          h('button', { class: 'btn', onclick: e => busy(e.currentTarget, async () => {
+            await saveNow();
+            const f = (await planFiles(cur)).find(x => /\.dxf$/i.test(x.name));
+            if (!f) throw new Error('אין סימונים על המדידה');
+            await deliver(f.blob, f.name);
+            status.textContent = '✓ קובץ הסימונים הורד.';
+          }) }, 'הורד קובץ סימונים (DXF)'),
           h('a', { class: 'btn', href: 'tools/bricscad/trees.lsp', download: 'trees.lsp' }, 'הורד את trees.lsp'))) : null,
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'שכבת GIS'),
