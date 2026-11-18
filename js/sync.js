@@ -916,11 +916,24 @@
     const files = (await root.App.planFiles(s)).filter(f => /\.dxf$/i.test(f.name));
     if (files.length) {
       for (const f of files) {
+        let up = null;
         for (let attempt = 0; attempt < 2; attempt++) {
-          if (await OD.upload(await reportFolder(s), f.name, f.blob, true)) break;
+          if ((up = await OD.upload(await reportFolder(s), f.name, f.blob, true))) break;
           s.odReportDir = null; // תיקיית הסקר נמחקה: יוצרים מחדש
           if (attempt) throw new Error('לא ניתן לשמור בתיקיית הסקר');
         }
+        // ori (1.112.3): עותקים של ה-DXF בשם הזה בתיקיות אחרות (למשל תיקיית העבודה בשולחן העבודה) מתעדכנים גם הם
+        try {
+          const nm = OD.clean(f.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+          const copies = await OD._list(`name = '${nm}' and trashed = false`, null, 1);
+          let n = 0;
+          for (const c of copies) {
+            if (up && c.id === up.id) continue;
+            if ((c.parents || []).includes(s.odFolderId)) continue; // לא תיקיית הגיבוי של האפליקציה
+            if (await OD.replaceContent(c.id, f.blob).then(() => true, () => false)) n++;
+          }
+          if (n) log('ok', `עודכנו גם ${n} עותקים של קובץ הסימונים בתיקיות אחרות בגוגל דרייב`, s);
+        } catch (_) {}
       }
       s.odMarksAt = Date.now();
       log('ok', 'קובץ הסימונים (DXF) נשמר בגוגל דרייב', s);
