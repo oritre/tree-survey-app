@@ -915,9 +915,17 @@
     await syncFolders(s);
     const files = (await root.App.planFiles(s)).filter(f => /\.dxf$/i.test(f.name));
     if (files.length) {
+      // ori (1.112.3): תמיד בתיקיית הסקר ב"סקרי עצים" שבגוגל דרייב שלי (G: במחשב), גם כשקבצי הסקר הועברו לשולחן העבודה:
+      // תיקייה של המחשב (גיבוי שולחן העבודה) לא תמיד מורידה למחשב קובץ שנכתב בענן
+      const marksDir = async () => {
+        const d = await reportFolder(s);
+        if (!s.odReportOwn) return d;
+        const name = buildDirName(s);
+        return OD.folder(await OD.folder(await reportRoot(), s.project || 'ללא פרויקט'), name);
+      };
       for (const f of files) {
         for (let attempt = 0; attempt < 2; attempt++) {
-          if (await OD.upload(await reportFolder(s), f.name, f.blob, true)) break;
+          if (await OD.upload(await marksDir(), f.name, f.blob, true)) break;
           s.odReportDir = null; // תיקיית הסקר נמחקה: יוצרים מחדש
           if (attempt) throw new Error('לא ניתן לשמור בתיקיית הסקר');
         }
