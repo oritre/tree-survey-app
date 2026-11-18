@@ -1139,5 +1139,72 @@
             (princ "\nNo tree there."))))))
   (princ))
 
-(princ "\nTree survey loaded. Commands: TREES, TREESFILE, TREESRESET, TREESTABLE, TREESPICK, TREESSYNC, TREESXL, TREESXLGO, TREESXLPICK, TREESXLSYNC")
+;; ---------- PLTEXT: text repeated along a polyline (ori, 1.112.6) ----------
+;; Pick a polyline, type the text and how many times it shows: the copies are spread evenly along it, turned with
+;; the line and always readable, with a background mask so the line does not cross the letters. Hebrew is right
+;; (Arial style). Run PLTEXT again on the same polyline to change the text, the count or the height: the old
+;; copies are replaced. The polyline remembers its text, count and height.
+(setq *ts-plapp* "ORIPLTEXT")
+(defun ts:plstyle (/ nm)
+  (setq nm "ORI_PLTEXT")
+  (if (not (tblsearch "STYLE" nm))
+    (entmake (list '(0 . "STYLE") '(100 . "AcDbSymbolTableRecord") '(100 . "AcDbTextStyleTableRecord")
+                   (cons 2 nm) '(70 . 0) '(40 . 0.0) '(41 . 1.0) '(50 . 0.0) '(71 . 0) '(42 . 1.0) '(3 . "arial.ttf") '(4 . ""))))
+  nm)
+;; this app's data on e: ("handle" ...) or nil
+(defun ts:plxd (e) (mapcar 'cdr (cdr (assoc *ts-plapp* (cdr (assoc -3 (entget e (list *ts-plapp*))))))))
+;; the text copies made for polyline handle h
+(defun ts:plold (h / ss i e out)
+  (if (setq ss (ssget "_X" (list (list -3 (list *ts-plapp*)) '(0 . "MTEXT"))))
+    (repeat (setq i (sslength ss))
+      (setq e (ssname ss (setq i (1- i))))
+      (if (= (car (ts:plxd e)) h) (setq out (cons e out)))))
+  out)
+(defun c:PLTEXT (/ sel pl o d h txt n ht len k dist pt der ang lay st prev e)
+  (regapp *ts-plapp*)
+  (setq sel (entsel "\nPick the polyline: "))
+  (cond
+    ((null sel) (princ "\nNothing picked."))
+    ((not (member (cdr (assoc 0 (entget (setq pl (car sel))))) '("LWPOLYLINE" "POLYLINE" "LINE" "ARC" "CIRCLE" "SPLINE" "ELLIPSE")))
+     (princ "\nThat is not a polyline."))
+    (T
+     (setq h (cdr (assoc 5 (entget pl))) prev (ts:plxd pl))
+     ;; defaults: this polyline's own values, else the last ones used
+     (setq txt (getstring T (strcat "\nText" (if (or (cadr prev) *ts-pltxt*) (strcat " <" (cond ((cadr prev)) (*ts-pltxt*)) ">") "") ": ")))
+     (if (= txt "") (setq txt (cond ((cadr prev)) (*ts-pltxt*) (""))))
+     (if (= txt "")
+       (princ "\nNo text.")
+       (progn
+         (initget 6)
+         (setq n (getint (strcat "\nHow many times <" (itoa (cond ((and (caddr prev) (atoi (caddr prev)))) (*ts-pln*) (4))) ">: ")))
+         (if (null n) (setq n (cond ((and (caddr prev) (atoi (caddr prev)))) (*ts-pln*) (4))))
+         (initget 6)
+         (setq ht (getdist (strcat "\nText height <" (rtos (cond ((and (cadddr prev) (atof (cadddr prev)))) (*ts-plht*) ((getvar "TEXTSIZE"))) 2 2) ">: ")))
+         (if (null ht) (setq ht (cond ((and (cadddr prev) (atof (cadddr prev)))) (*ts-plht*) ((getvar "TEXTSIZE")))))
+         (setq *ts-pltxt* txt *ts-pln* n *ts-plht* ht)
+         (foreach x (ts:plold h) (entdel x))
+         (setq o (vlax-ename->vla-object pl)
+               len (vlax-curve-getDistAtParam o (vlax-curve-getEndParam o))
+               lay (cdr (assoc 8 (entget pl))) st (ts:plstyle) k 0)
+         (repeat n
+           ;; evenly along the line, half a step from the start (on a closed shape: the same gap everywhere)
+           (setq dist (* len (/ (+ k 0.5) n))
+                 pt (vlax-curve-getPointAtDist o dist)
+                 der (vlax-curve-getFirstDeriv o (vlax-curve-getParamAtDist o dist))
+                 ang (angle '(0 0 0) der))
+           ;; readable: never upside down
+           (if (and (> ang (* 0.5 pi)) (<= ang (* 1.5 pi))) (setq ang (+ ang pi)))
+           (entmake (list '(0 . "MTEXT") '(100 . "AcDbEntity") (cons 8 lay) '(100 . "AcDbMText")
+                          (cons 10 pt) (cons 40 ht) '(41 . 0.0) '(71 . 5) '(72 . 5) (cons 1 txt) (cons 7 st)
+                          (cons 11 (list (cos ang) (sin ang) 0.0))
+                          '(90 . 3) '(63 . 256) '(45 . 1.25) '(441 . 0)
+                          (list -3 (list *ts-plapp* (cons 1000 h)))))
+           (setq k (1+ k)))
+         ;; the polyline keeps its text, count and height for the next PLTEXT
+         (entmod (append (vl-remove (assoc -3 (entget pl (list *ts-plapp*))) (entget pl (list *ts-plapp*)))
+                         (list (list -3 (list *ts-plapp* (cons 1000 h) (cons 1000 txt) (cons 1000 (itoa n)) (cons 1000 (rtos ht 2 4)))))))
+         (princ (strcat "\n" (itoa n) " x \"" txt "\" along the polyline (PLTEXT again to change them)."))))))
+  (princ))
+
+(princ "\nTree survey loaded. Commands: TREES, TREESFILE, TREESRESET, TREESTABLE, TREESPICK, TREESSYNC, TREESXL, TREESXLGO, TREESXLPICK, TREESXLSYNC, PLTEXT")
 (princ)
