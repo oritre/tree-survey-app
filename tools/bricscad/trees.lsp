@@ -1139,7 +1139,7 @@
             (princ "\nNo tree there."))))))
   (princ))
 
-;; ---------- PLTEXT: text repeated along a polyline (ori, 1.112.6) ----------
+;; ---------- PLTEXT: text repeated along a polyline (ori, 1.112.6; 1.112.7 rerun fix) ----------
 ;; Pick a polyline, type the text and how many times it shows: the copies are spread evenly along it, turned with
 ;; the line and always readable, with a background mask so the line does not cross the letters. Hebrew is right
 ;; (Arial style). Run PLTEXT again on the same polyline to change the text, the count or the height: the old
@@ -1163,7 +1163,11 @@
 (defun c:PLTEXT (/ sel pl o d h txt n ht len k dist pt der ang lay st prev e)
   (regapp *ts-plapp*)
   (setq sel (entsel "\nPick the polyline: "))
+  ;; picked one of the texts: use its polyline
+  (if (and sel (= (cdr (assoc 0 (entget (car sel)))) "MTEXT") (car (ts:plxd (car sel))))
+    (setq sel (list (handent (car (ts:plxd (car sel)))))))
   (cond
+    ((and sel (null (car sel))) (princ "\nThe polyline of this text was deleted."))
     ((null sel) (princ "\nNothing picked."))
     ((not (member (cdr (assoc 0 (entget (setq pl (car sel))))) '("LWPOLYLINE" "POLYLINE" "LINE" "ARC" "CIRCLE" "SPLINE" "ELLIPSE")))
      (princ "\nThat is not a polyline."))
@@ -1176,11 +1180,11 @@
        (princ "\nNo text.")
        (progn
          (initget 6)
-         (setq n (getint (strcat "\nHow many times <" (itoa (cond ((and (caddr prev) (atoi (caddr prev)))) (*ts-pln*) (4))) ">: ")))
-         (if (null n) (setq n (cond ((and (caddr prev) (atoi (caddr prev)))) (*ts-pln*) (4))))
+         (setq n (getint (strcat "\nHow many times <" (itoa (cond ((caddr prev) (atoi (caddr prev))) (*ts-pln*) (4))) ">: ")))
+         (if (null n) (setq n (cond ((caddr prev) (atoi (caddr prev))) (*ts-pln*) (4))))
          (initget 6)
-         (setq ht (getdist (strcat "\nText height <" (rtos (cond ((and (cadddr prev) (atof (cadddr prev)))) (*ts-plht*) ((getvar "TEXTSIZE"))) 2 2) ">: ")))
-         (if (null ht) (setq ht (cond ((and (cadddr prev) (atof (cadddr prev)))) (*ts-plht*) ((getvar "TEXTSIZE")))))
+         (setq ht (getdist (strcat "\nText height <" (rtos (cond ((cadddr prev) (atof (cadddr prev))) (*ts-plht*) ((getvar "TEXTSIZE"))) 2 2) ">: ")))
+         (if (null ht) (setq ht (cond ((cadddr prev) (atof (cadddr prev))) (*ts-plht*) ((getvar "TEXTSIZE")))))
          (setq *ts-pltxt* txt *ts-pln* n *ts-plht* ht)
          (foreach x (ts:plold h) (entdel x))
          (setq o (vlax-ename->vla-object pl)
