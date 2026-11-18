@@ -1,5 +1,5 @@
 // BricsCAD במחשב, בלי אקסל (1.95.0): האפליקציה וטבלת העצים ב-BricsCAD מסתנכרנות מיד דרך קבצים בתיקייה במחשב.
-// במחשב בוחרים פעם אחת תיקייה (G:\האחסון שלי\סקרי עצים), והאפליקציה עובדת בתת-תיקייה BricsCAD שבתוכה:
+// במחשב בוחרים פעם אחת תיקייה (G:\האחסון שלי\סקרי עצים), והאפליקציה עובדת בתת-תיקייה bricscad_data שבתוכה:
 //   oritrees-<מזהה הסקר>.tsv  נתוני הסקר ל-BricsCAD. רק האפליקציה כותבת אותו, אחרי כל שמירה של סקר לבנייה
 //   oritrees-index.tsv        רשימת הסקרים, לבחירת הסקר של השרטוט (TREESFILE). רק האפליקציה כותבת
 //   oritrees-edits.tsv        שינויים מ-BricsCAD (ייעוד מ-TREESTABLE, עץ שסומן בשרטוט). רק BricsCAD כותב (מוסיף שורות)
@@ -7,7 +7,7 @@
 // (tools/bricscad/oritrees_link.pyw), והשרטוט מצטייר מחדש. גם בלי זה TREES מתעדכן בסוף כל פקודה ב-BricsCAD.
 // השורות: עמודות מופרדות בטאב, UTF-8. זמנים בשעון המקומי "YYYY-MM-DD HH:MM:SS" (כמו ב-BricsCAD)
 (function (root) {
-  const SUB = 'BricsCAD', INDEX = 'oritrees-index.tsv', EDITS = 'oritrees-edits.tsv';
+  const SUB = 'bricscad_data', INDEX = 'oritrees-index.tsv', EDITS = 'oritrees-edits.tsv';
   const dataName = id => `oritrees-${id}.tsv`;
   const supported = typeof root.showDirectoryPicker === 'function';
   let baseH = null, dirH = null, perm = 'none', baseName = '';
@@ -240,9 +240,9 @@
   }
   let lastPick = 0;
 
-  // ---------- גם בלי תיקייה במחשב (1.111.0): קובץ הסקר עולה לגוגל דרייב, ל"סקרי עצים/BricsCAD" ----------
+  // ---------- גם בלי תיקייה במחשב (1.111.0): קובץ הסקר עולה לגוגל דרייב, ל"סקרי עצים/bricscad_data" ----------
   // ori: לא מורידים אקסל. "סיום סקר" מעלה לדרייב את הסימונים על המדידה (DXF, עם מזהה הסקר), מעתיקים אותם לשרטוט,
-  // ו-TREES מצייר מהקובץ הזה, שגוגל דרייב במחשב מוריד ל-G:\האחסון שלי\סקרי עצים\BricsCAD. כך זה עובד גם משינוי בטאבלט.
+  // ו-TREES מצייר מהקובץ הזה, שגוגל דרייב במחשב מוריד ל-G:\האחסון שלי\סקרי עצים\bricscad_data. כך זה עובד גם משינוי בטאבלט.
   // כשהתיקייה מחוברת במכשיר הזה (מחשב) היא כבר כותבת לשם, אז לא מעלים פעמיים
   const driveSent = new Map(), driveT = new Map();
   const hasMarks = s => (s.trees || []).some(t => t.px != null) || (s.planPolys || []).some(p => p.pts && p.pts.length > 2);
