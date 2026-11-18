@@ -374,6 +374,8 @@
   p)
 ;; the file of this drawing: the app's data file (survey linked, or an Excel drawing moved to it), else the Excel.
 ;; ask = TREESFILE: pick the survey from the app's list (or an Excel file)
+;; TREES never opens the Excel file dialog by itself (1.110.1): when the app's list is there it offers the list,
+;; when the app is not connected on this PC it says how to connect it (and uses the drawing's Excel only if it is found).
 (defun ts:path (ask / id p)
   (if ask
     (progn
@@ -384,13 +386,28 @@
       (setq id (cond ((vlax-ldata-get "TREESURVEY" "survey")) ((ts:migrate))))
       (cond
         ((and id (findfile (setq p (ts:datafile id)))) p)
-        (id (princ (strcat "\nThe app's file of this drawing is not in " (ts:dir) " yet (open the survey in the app on this PC, with BricsCAD connected in its settings).")) 
-            (if (vlax-ldata-get "TREESURVEY" "excel") (ts:xlpath nil)))
-        ((null (vlax-ldata-get "TREESURVEY" "excel"))
+        ;; the app is connected (its list of surveys is there): pick this drawing's survey from it
+        ((ts:index)
+         (if id (princ "\nThe app's file of this drawing's survey is missing: pick the survey again."))
          (setq id (ts:picksurvey))
          (cond ((= id 'excel) (ts:xlpath T))
                (id (vlax-ldata-put "TREESURVEY" "survey" id) (ts:datafile id))))
-        (T (ts:xlpath nil))))))
+        ;; the app does not write its files on this PC yet
+        (T
+         (ts:noapp)
+         (if (and (setq p (vlax-ldata-get "TREESURVEY" "excel")) (setq p (ts:relocate p)))
+           (progn (princ (strcat "\nDrawn from the Excel " p " (not from the app).")) p)))))))
+;; once a session: the app is not connected to BricsCAD on this PC
+(defun ts:noapp ()
+  (princ (strcat "\nNo app files in " (ts:dir) ". In the app on this PC: Settings > BricsCAD במחשב > choose the folder G:\\האחסון שלי\\סקרי עצים."))
+  (if (null *ts-noapp*)
+    (progn
+      (setq *ts-noapp* T)
+      (alert (strcat "האפליקציה עוד לא שולחת את הסקרים ל-BricsCAD במחשב הזה, ולכן TREES לא רואה את השינויים שעשית בה.\n\n"
+                     "באפליקציה במחשב (לא בטאבלט): הגדרות > BricsCAD במחשב > בחר תיקייה, ובחר את התיקייה\n"
+                     "G:\\האחסון שלי\\סקרי עצים\n\n"
+                     "אחר כך הפעל שוב TREES ובחר את הסקר מהרשימה.\n"
+                     "(תיקיית הקבצים: " (ts:dir) ")")))))
 
 ;; ---------- commands ----------
 (defun ts:run (path / doc rows old x y lx ly code lay num c e tp cnt areas pairs tr bn sc sz blk ins ms ce rot k pts S anames)
