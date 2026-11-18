@@ -902,14 +902,14 @@
     try {
       for (const f of await root.App.planFiles(s)) await putReportFile(s, f.name, f.blob);
     } catch (e) { log('error', 'קובץ המדידה לא עלה: ' + e.message, s); }
-    // והקובץ ש-TREES ב-BricsCAD מצייר ממנו (סקרי עצים/BricsCAD), כדי שהסימונים שהועתקו לשרטוט יתעדכנו בלי אקסל (1.111.0)
+    // והקובץ ש-TREES ב-BricsCAD מצייר ממנו (סקרי עצים/bricscad_data), כדי שהסימונים שהועתקו לשרטוט יתעדכנו בלי אקסל (1.111.0)
     if (isBuild(s) && root.CadLink && root.CadLink.toDrive) {
       try { await root.CadLink.toDrive(s); } catch (e) { log('error', 'הקובץ ל-BricsCAD לא עלה: ' + e.message, s); }
     }
     if (pdfUp) await pdfUp;
     await DB.putSurvey(s, false);
   }
-  // "סיום סקר" בסקר לבנייה: רק קובץ הסימונים על המדידה (DXF, עם מזהה הסקר) לתיקיית הסקר, והקובץ ש-TREES קורא (סקרי עצים/BricsCAD)
+  // "סיום סקר" בסקר לבנייה: רק קובץ הסימונים על המדידה (DXF, עם מזהה הסקר) לתיקיית הסקר, והקובץ ש-TREES קורא (סקרי עצים/bricscad_data)
   async function uploadMarks(s) {
     await syncFolders(s);
     const files = (await root.App.planFiles(s)).filter(f => /\.dxf$/i.test(f.name));

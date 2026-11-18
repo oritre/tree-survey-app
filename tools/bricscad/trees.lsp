@@ -1,7 +1,7 @@
 ;;; trees.lsp - updates the tree survey marks in the surveyor's DWG from the tree survey app.
 ;;;
 ;;; Since app 1.95.0 (no Excel): the app (on this PC, folder connected in its settings "BricsCAD במחשב") writes a data
-;;; file per construction survey to  G:\האחסון שלי\סקרי עצים\BricsCAD\oritrees-<survey id>.tsv  (another folder:
+;;; file per construction survey to  G:\האחסון שלי\סקרי עצים\bricscad_data\oritrees-<survey id>.tsv  (another folder:
 ;;; (setenv "OriTreesDir" "X:\\folder\\")). TREESFILE picks the survey from the app's list (oritrees-index.tsv).
 ;;; TREESTABLE saves designations to oritrees-edits.tsv (only BricsCAD writes it); the app reads it every second.
 ;;; After a change in the app, the app sends TREESSYNC-like (ts:cadsync) through oritrees_link.pyw, and at the end of
@@ -941,7 +941,7 @@
 ;; ---------- the app's data files (app 1.95.0, no Excel) ----------
 ;; folder of the app's files: (setenv "OriTreesDir" "...\\") or the default in Google Drive
 (defun ts:dir (/ d)
-  (setq d (cond ((getenv "OriTreesDir")) ("G:\\האחסון שלי\\סקרי עצים\\BricsCAD\\")))
+  (setq d (cond ((getenv "OriTreesDir")) ("G:\\האחסון שלי\\סקרי עצים\\bricscad_data\\")))
   (if (/= (substr d (strlen d)) "\\") (strcat d "\\") d))
 (defun ts:datafile (id) (strcat (ts:dir) "oritrees-" id ".tsv"))
 (defun ts:tsvp (p) (and p (= (strcase (vl-filename-extension p)) ".TSV")))
