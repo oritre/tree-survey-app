@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.127.0';
+  const APP_VERSION = '1.128.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1137,7 +1137,8 @@
     btn.disabled = true; const label = btn.textContent;
     try {
       btn.textContent = 'מוריד…';
-      const b = await OD.download(f.id);
+      // קובץ שהורד מראש מהרשימה ("סקרים קודמים"): בלי הורדה נוספת, עובד גם בלי קליטה
+      const b = (await DB.getKV('wlPrev:' + f.id, null)) || await OD.download(f.id);
       if (!b) throw new Error('הקובץ לא נמצא');
       btn.textContent = 'קורא את הקובץ…';
       const r = await Importer.parse(await b.arrayBuffer(), f.name, { photos: true });
@@ -3799,6 +3800,15 @@
     return Sig.patch(new Uint8Array(await res.arrayBuffer()));
   }
 
+  // החלפות בשם הקובץ מהרשימה (s.nameRepl): גנ"י -> גן. גרשיים וגרש מכל סוג נחשבים זהים
+  function nameRepl(s, text) {
+    for (const x of (s.nameRepl || [])) {
+      if (!x || !x.from) continue;
+      const re = x.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/["״”“]/g, '["״”“]').replace(/['׳’]/g, "['׳’]");
+      text = text.replace(new RegExp(re, 'g'), x.to || '');
+    }
+    return text.replace(/\s+/g, ' ').trim();
+  }
   function fileBase(s) {
     s = s || cur;
     // שני סקרים עם אותו שם ותאריך (באותה תיקיית פרויקט) מקבלים שמות קבצים שונים
@@ -3818,7 +3828,7 @@
     }
     // ירושלים: סמל מוסד, שם מוסד וכתובת בלי עיר. אחרים: שם מוסד, כתובת ועיר
     const parts = /ירושלים/.test(proj) ? [s.code, s.siteName, s.street] : [s.siteName, s.street, s.city];
-    return safeName(parts.filter(Boolean).join(' ') || s.site || 'סקר בטיחות עצים') + k;
+    return safeName(nameRepl(s, parts.filter(Boolean).join(' ')) || s.site || 'סקר בטיחות עצים') + k;
   }
 
   async function deliver(blob, name) {
