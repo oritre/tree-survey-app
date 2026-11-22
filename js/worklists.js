@@ -953,9 +953,12 @@
     // (1.133) קובץ כזה כן מוצע, אבל אחרי קבצים בלי סמל אחר, ואף פעם לא מסומן מראש: אולי הסמל השתנה ואולי זה מוסד אחר באותה כתובת
     const otherCode = x => (x.f.name.match(/\d{5,7}/g) || []).find(n => !codes.includes(n)) || '';
     // סמל של שורה אחרת ברשימה הזו: הקובץ שייך למוסד ההוא, לא מוצע כאן
-    const listCodes = new Set(l.rows.filter(q => !q.deleted && q !== r).flatMap(q => String(valuesOf(l, q).code || '').split(/[^\d]+/).filter(x => x.length >= 4)));
-    const own = xs => { xs.forEach(x => { x.oc = otherCode(x); }); xs = xs.filter(x => !(x.f.name.match(/\d{5,7}/g) || []).some(n => listCodes.has(n) && !codes.includes(n))); return [...xs.filter(x => !x.oc), ...xs.filter(x => x.oc)]; };
-    const ocWhy = x => ' · לא סומן: בשם הקובץ יש סמל מוסד אחר (' + x.oc + '), כדאי לבדוק שזה אותו מוסד';
+    // (1.139) לפי רחוב ומספר קובץ כזה כן מוצע (withSib), אחרון ולא מסומן, עם שם השורה שהסמל שייך לה: לפעמים סקר אחד כיסה כמה גנים באותו מתחם
+    const listCodes = new Map(); l.rows.filter(q => !q.deleted && q !== r).forEach(q => { const qv = valuesOf(l, q); String(qv.code || '').split(/[^\d]+/).filter(x => x.length >= 4).forEach(c => listCodes.set(c, qv.siteName || '')); });
+    const sibOf = x => (x.f.name.match(/\d{5,7}/g) || []).find(n => listCodes.has(n) && !codes.includes(n)) || '';
+    const own = (xs, withSib) => { xs.forEach(x => { x.oc = otherCode(x); x.sib = sibOf(x); }); if (!withSib) xs = xs.filter(x => !x.sib); return [...xs.filter(x => !x.oc), ...xs.filter(x => x.oc && !x.sib), ...xs.filter(x => x.sib)]; };
+    const ocWhy = x => x.sib ? ' · לא סומן: הסמל שבשם הקובץ (' + x.sib + ') שייך לשורה אחרת ברשימה' + (listCodes.get(x.sib) ? ' (' + listCodes.get(x.sib) + ')' : '') + '. מתאים רק אם אותו סקר כיסה גם את המוסד הזה'
+      : ' · לא סומן: בשם הקובץ יש סמל מוסד אחר (' + x.oc + '), כדאי לבדוק שזה אותו מוסד';
     // אותו קובץ בכמה תיקיות (אותו שם ואותו גודל) נחשב קובץ אחד; שאר המקומות נשמרים ב-dups להצגה
     const uniq = xs => { const m = new Map(), out = []; for (const x of xs) { const k = x.f.size ? x.f.name + '|' + x.f.size : 'id' + x.f.id, a = m.get(k); if (a) (a.dups = a.dups || []).push(x); else { m.set(k, x); out.push(x); } } return out; };
     const tie = xs => ' · לא סומן: יש עוד קובץ שמתאים באותה מידה (ב"' + (xs[1].path.slice(-2).join(' / ') || 'דרייב') + '"), אפשר לראות ולבחור למטה';
@@ -983,7 +986,7 @@
       async street() {
         const { word, num } = streetKey(v.street);
         if (!word || word.length < 2 || !num) return null;
-        const xs = own(uniq(keep(score(await archiveFiles([...new Set([word, ...streetWords(v.street)])], l.folder || null))).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder))));
+        const xs = own(uniq(keep(score(await archiveFiles([...new Set([word, ...streetWords(v.street)])], l.folder || null))).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder))), true);
         if (!xs.length) return null;
         xs[0].alts = xs;
         const clear = xs.length === 1 || xs[0].sc > xs[1].sc || !!xs[1].oc, sure = clear && !xs[0].oc && xs[0].stFull;
@@ -1073,7 +1076,7 @@
       const byCode = new Set([...prop.values()].filter(x => x.byCode).map(x => x.f.id));
       for (const [id, x] of [...prop]) if (cnt.get(x.f.id) > 1) {
         if (x.byCode) continue;
-        if (byCode.has(x.f.id)) { prop.delete(id); found--; continue; } // הקובץ שייך לשורה אחרת לפי הסמל
+        if (byCode.has(x.f.id)) { x.sure = false; ok.delete(id); continue; } // הקובץ שייך לשורה אחרת לפי הסמל: נשאר כהצעה לבדיקה (ההסבר כבר ב-why, 1.139)
         x.sure = false; x.why += ' · אותו קובץ הוצע לכמה שורות'; ok.delete(id);
       }
       status.textContent = found ? `נמצאו ${found} הצעות (${ok.size} מסומנות). לכל הצעה לחץ "מתאים" או "לא מתאים", ואז "אשר את ההצעות המסומנות". שום דבר לא נשמר עד שתאשר.` : 'לא נמצאו הצעות. אפשר לחפש לכל שורה בנפרד עם "חפש".';
