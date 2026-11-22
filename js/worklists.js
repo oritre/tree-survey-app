@@ -275,6 +275,8 @@
         s[f.key] = f.key === 'code' && root.Reports ? root.Reports.codeText(v[f.key]) : v[f.key];
       }
       if (l.project) s.project = l.project;
+      // שורה שכתוב בה "אורנים" (למשל בהערות): הסקר נפתח כסקר אורנים (חלון פרטי אורנים, תזכורות, אקסל ריכוז)
+      if (l.type !== 'construction' && Object.values(r.cells || {}).some(v => /(^|[\s,;(])[הו]?או?רני?ם/.test(String(v || '')))) s.pinesMode = true;
       s.listRef = { list: l.id, row: r.id, name: l.name };
       s.site = U().composeSite(s);
       r.sid = s.id; r.u = Date.now();

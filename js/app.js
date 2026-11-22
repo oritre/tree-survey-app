@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.121.0';
+  const APP_VERSION = '1.122.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -535,7 +535,7 @@
     const keep = ['num', 'okNum', 'species', 'notes', 'urgency', 'pines', 'pineList', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS,
       'px', 'py', 'pref', 'pname', 'polyId'];
     const s = { id: uid(), type: Construction.typeOf(old), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
-      code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', purpose: old.purpose || undefined, planNo: old.planNo || undefined, cset: old.cset ? Object.assign({}, old.cset) : undefined, warnGps: !!old.warnGps, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
+      code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', purpose: old.purpose || undefined, planNo: old.planNo || undefined, cset: old.cset ? Object.assign({}, old.cset) : undefined, warnGps: !!old.warnGps, pinesMode: old.pinesMode || undefined, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
     for (const t of old.trees || []) {
       const nt = Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, k === 'pineList' ? JSON.parse(JSON.stringify(t[k])) : t[k]])));
       if (withPhotos) for (const p of t.photos || []) {
@@ -1704,6 +1704,9 @@
         build ? null : h('div', { style: 'flex:1;min-width:200px' }, field('סמל מוסד (אם יש)', inp('code', { inputmode: 'numeric' }))),
         h('div', { style: 'flex:1;min-width:200px' }, field('תאריך הסקר', inp('date', { type: 'date' })))),
       build ? constructionDetails(inp) : field('מנהל/ת', inp('manager')),
+      build ? null : h('label', { class: 'set-row' },
+        h('input', { type: 'checkbox', checked: !!cur.pinesMode, onchange: e => { cur.pinesMode = e.target.checked || undefined; saveSoon(); } }),
+        h('span', {}, h('b', {}, '🌲 ריכוז אורנים'), h('div', { class: 'muted small' }, 'רק לסקר הזה: כשבוחרים אורן נפתח חלון לפרטי כל אורן (מיקום, גובה, גזעים, נ"צ), יש תזכורות למה שחסר, ובסוף יוצא גם אקסל ריכוז אורנים. נדלק לבד בסקר שנפתח משורה ברשימה שכתוב בה "אורנים".'))),
       // התראה על עצים בלי נ"צ בבדיקה לפני הפקה: לפי סקר, כבויה כברירת מחדל
       h('label', { class: 'set-row' },
         h('input', { type: 'checkbox', checked: !!cur.warnGps, onchange: e => { cur.warnGps = e.target.checked; saveSoon(); } }),
@@ -1874,7 +1877,7 @@
   }
 
   function treeRow(t) {
-    const pineMissing = !Construction.isConstruction(cur) && Core.isPine(t.species) && Core.isJerusalem(cur)
+    const pineMissing = Core.pinesOn(cur) && Core.isPine(t.species)
       && (!(t.pineList || []).length || t.pineList.some(p => Core.pineMissing(p).length));
     const pineN = !Construction.isConstruction(cur) && (t.pineList || []).length;
     const urgCls = v => v === Core.OK ? 'ok' : v;
@@ -2370,7 +2373,7 @@
     const pineBtn = h('button', { class: 'btn', type: 'button', onclick: () => openPines(t, () => { markPine(); changed(); }) }, '🌲 פרטי אורנים');
     const pineWrap = h('div', { class: 'row pine-box', style: 'gap:10px;align-items:center;flex-wrap:wrap' }, pineBtn, pineInfo);
     const markPine = () => {
-      const pine = Core.isPine(t.species) && !Construction.isConstruction(cur);
+      const pine = Core.isPine(t.species) && Core.pinesOn(cur);
       const has = (t.pineList || []).length > 0;
       pineWrap.classList.toggle('hidden', !pine && !has);
       const miss = pine && (!has || t.pineList.some(p => Core.pineMissing(p).length));
@@ -2379,7 +2382,7 @@
     };
     // כשנכתב אורן (גם עם עוד מינים או בשגיאת כתיב) ועוד אין פרטים: החלון נפתח מיד (רק בעבודות בירושלים)
     const askPines = async () => {
-      if (Construction.isConstruction(cur) || !Core.isJerusalem(cur)) return;
+      if (!Core.pinesOn(cur)) return; // רק בסקר שהודלק בו ריכוז אורנים
       if (!Core.isPine(t.species) || (t.pineList || []).length || t._askedPines === t.species) return;
       t._askedPines = t.species;
       await openPines(t, () => { markPine(); changed(); });
@@ -3101,7 +3104,7 @@
     // נ"צ לא נלקח אוטומטית במצב דיבור (ori), רק בכפתור במסך העץ
     const afterNew = () => {};
     const ask = t => {
-      askPinesFor = Core.isJerusalem(cur) && Core.isPine(t.species) && pinesOf(t) == null ? t : null;
+      askPinesFor = Core.pinesOn(cur) && Core.isPine(t.species) && pinesOf(t) == null ? t : null;
       return askPinesFor ? ' כמה אורנים?' : '';
     };
 
@@ -3450,14 +3453,16 @@
   }
   const NO_SIG = 'אין במכשיר הזה חתימה וחותמת, והדוח ייצא בלעדיהן. מוסיפים בהגדרות, או מתחברים לגוגל דרייב והיא תיטען משם.';
   // ריכוז אורנים לסקר (1.116): אקסל נפרד עם פרטי המוסד וכל אורן. עולה גם לגוגל דרייב ב"סיום סקר", ליד הדוח
+  // סקר אורנים (הודלק בפרטי הסקר / מהרשימה), או סקר שכבר הוזנו בו פרטי אורנים
+  function hasPines(s) { return !Construction.isConstruction(s) && (Core.pinesOn(s) || (s.trees || []).some(t => (t.pineList || []).length)) && Reports.pineTrees(s).length > 0; }
   function pinesFileName(s) { return safeName('ריכוז אורנים - ' + fileBase(s)) + '.xlsx'; }
   async function pinesFile(s) {
-    if (Construction.isConstruction(s) || !Reports.pineTrees(s).length) return null;
+    if (!hasPines(s)) return null;
     return { name: pinesFileName(s), blob: await Reports.surveyPinesXlsx(s) };
   }
   function pineCard(s, status) {
     const rows = Reports.pineTrees(s);
-    if (!rows.length) return null;
+    if (!hasPines(s)) return null;
     const n = Reports.pineTotal(s);
     const miss = rows.reduce((a, t) => a + ((t.pineList || []).length ? t.pineList.filter(p => Core.pineMissing(p).length).length : 1), 0);
     const run = (drive) => async e => {
