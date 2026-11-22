@@ -783,8 +783,10 @@
     q.addEventListener('input', draw);
     const exportXlsx = async () => {
       const rs = l.rows.filter(r => !r.deleted);
-      const rows = [[...l.cols.map(c => c.name), 'סטטוס סקר'], ...rs.map(r => [...l.cols.map(c => { const v = r.cells[c.id] || ''; return /^\d{1,9}$/.test(v) ? +v : v; }), stateOf(r).t])];
-      const blob = await Reports.xlsx(rows, { sheet: 'רשימה', widths: [...l.cols.map(() => 20), 18] });
+      // הרשימה כמו שהועלתה + בסוף (הצד השמאלי) סטטוס: בוצע / בתהליך / לא בוצע, ותאריך
+      const st = r => { const x = stateOf(r); return x.k === 'done' ? ['בוצע', x.d || ''] : x.k === 'open' ? ['בתהליך', x.d ? 'נפתח ' + x.d : ''] : ['לא בוצע', x.t === 'הסקר נמחק' ? 'הסקר נמחק' : '']; };
+      const rows = [[...l.cols.map(c => c.name), 'סטטוס סקר', 'תאריך / הערה'], ...rs.map(r => [...l.cols.map(c => { const v = r.cells[c.id] || ''; return /^\d{1,9}$/.test(v) ? +v : v; }), ...st(r)])];
+      const blob = await Reports.xlsx(rows, { sheet: 'רשימה', widths: [...l.cols.map(() => 20), 20, 18] });
       ui.downloadFile(blob, ui.safeName(l.name || 'רשימה') + '.xlsx');
     };
     // מסמכים של הרשימה (אישורי כניסה וכו'): נפתחים בתוך האפליקציה
@@ -797,7 +799,7 @@
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/setup') }, ui.icon('gear'), 'שיוך עמודות (כתובת, עיר, סמל…) והגדרות'),
           h('button', { class: 'btn', onclick: () => { l.rows.push({ id: uid(), cells: {}, u: Date.now() }); save(l); filter = 'all'; q.value = ''; draw(); const ins = table.querySelectorAll('tbody tr:last-child input'); if (ins[0]) ins[0].focus(); } }, '➕ שורה'),
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/route') }, '🗺 מסלול ומפה'),
-          h('button', { class: 'btn', onclick: exportXlsx }, '⬇ אקסל'),
+          h('button', { class: 'btn', title: 'הרשימה שהעלית, עם עמודת סטטוס בסוף: בוצע / בתהליך / לא בוצע', onclick: exportXlsx }, '⬇ הורד לאקסל עם סטטוס'),
           h('button', { class: 'btn', onclick: ev => managersReport(l, ev.currentTarget) }, '📊 דוח מנהלים'),
           h('button', { class: 'btn', title: 'סיכום אורנים ומפת עצים לשיתוף מהסקרים של הרשימה (ירושלים)', onclick: () => ui.go('#/summary/' + encodeURIComponent(l.id)) }, '🌲 אורנים ומפות'),
           l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox, hideBox),
@@ -911,22 +913,62 @@
     const m = /^(.*?\d+)/.exec(st);
     return clean(m ? m[1] : st);
   }
+  // איתור כתובות: כמה שירותים חינמיים בתור. אם אחד חוסם או לא מוצא, עוברים לבא.
+  // ArcGIS מכיר טוב כתובות בישראל; Photon ו-OpenStreetMap (Nominatim) לגיבוי. kind='street': רק תוצאה ברמת רחוב/בית
   const NOMI = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=il&accept-language=he&q=';
+  const ARC = 'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&maxLocations=1&countryCode=ISR&langCode=he&outFields=Addr_type&SingleLine=';
+  const PHOTON = 'https://photon.komoot.io/api/?limit=1&bbox=34.2,29.4,35.95,33.4&q=';
   let lastGeo = 0, geoQueue = Promise.resolve();
-  // לכל היותר בקשה אחת בשנייה (מדיניות השירות), גם כשכמה חיפושים רצים ביחד: בתור
+  // Nominatim: לכל היותר בקשה אחת בשנייה (מדיניות השירות), גם כשכמה חיפושים רצים ביחד: בתור
   function nominatim(q) {
     const run = async () => {
       const wait = 1100 - (Date.now() - lastGeo);
       if (wait > 0) await new Promise(r => setTimeout(r, wait));
       lastGeo = Date.now();
       const res = await fetch(NOMI + encodeURIComponent(q));
-      if (!res.ok) throw new Error('שירות המפה לא זמין (' + res.status + ')');
+      if (!res.ok) throw new Error('OpenStreetMap ' + res.status);
       const j = await res.json();
-      return j && j[0] ? { lat: +j[0].lat, lon: +j[0].lon } : null;
+      return j && j[0] ? { lat: +j[0].lat, lon: +j[0].lon, kind: /^(house|building|residential|road|street|primary|secondary|tertiary|footway|pedestrian)$/.test(j[0].type) || j[0].category === 'building' || j[0].category === 'amenity' ? 'street' : 'place' } : null;
     };
     const p = geoQueue.then(run, run);
     geoQueue = p.catch(() => {});
     return p;
+  }
+  async function arcgis(q) {
+    const res = await fetch(ARC + encodeURIComponent(q));
+    if (!res.ok) throw new Error('ArcGIS ' + res.status);
+    const j = await res.json();
+    if (j.error) throw new Error('ArcGIS ' + (j.error.message || j.error.code));
+    const c = j.candidates && j.candidates[0];
+    if (!c || c.score < 75) return null;
+    const t = (c.attributes && c.attributes.Addr_type) || '';
+    return { lat: +c.location.y, lon: +c.location.x, kind: /^(PointAddress|StreetAddress|StreetAddressExt|StreetInt|StreetName|StreetMidBlock|Subaddress|POI|DistanceMarker)$/.test(t) ? 'street' : 'place' };
+  }
+  async function photon(q) {
+    const res = await fetch(PHOTON + encodeURIComponent(q));
+    if (!res.ok) throw new Error('Photon ' + res.status);
+    const j = await res.json();
+    const f = j.features && j.features[0];
+    if (!f) return null;
+    const t = (f.properties && f.properties.type) || '';
+    return { lat: +f.geometry.coordinates[1], lon: +f.geometry.coordinates[0], kind: /^(house|street|other)$/.test(t) ? 'street' : 'place' };
+  }
+  const GEOS = [['ArcGIS', arcgis], ['Photon', photon], ['OpenStreetMap', nominatim]];
+  const geoFails = new Map(); // שירות שנכשל 3 פעמים ברצף: מדלגים עליו עד הטעינה הבאה
+  async function geocode(q, kind) {
+    const errs = [];
+    let tried = 0;
+    for (const [name, fn] of GEOS) {
+      if ((geoFails.get(name) || 0) >= 3) continue;
+      tried++;
+      try {
+        const g = await fn(q);
+        geoFails.set(name, 0);
+        if (g && isFinite(g.lat) && isFinite(g.lon) && (kind !== 'street' || g.kind === 'street')) return { lat: g.lat, lon: g.lon };
+      } catch (e) { geoFails.set(name, (geoFails.get(name) || 0) + 1); errs.push(e.message); }
+    }
+    if (!tried || (errs.length && errs.length === tried)) throw new Error('שירותי המפה לא זמינים' + (errs.length ? ' (' + errs.join(', ') + ')' : ''));
+    return null;
   }
   // אותה כתובת בכמה שורות (כמה גנים באותו מבנה): מחפשים פעם אחת
   const geoMem = new Map();
@@ -935,12 +977,14 @@
   const fullCity = c => CITY_FULL[clean(c)] || clean(c);
   const cityCenter = new Map();
   async function cityGeo(city) {
-    if (!cityCenter.has(city)) cityCenter.set(city, await nominatim(city));
+    if (!cityCenter.has(city)) cityCenter.set(city, await geocode(city));
     return cityCenter.get(city);
   }
   // מיקום לשורה: נ"צ של עצים בסקר המקושר, אחרת חיפוש הכתובת (נשמר בשורה, ומתחדש כשהכתובת משתנה).
   // תוצאה של רחוב שרחוקה מהעיר (רחוב "טבריה" בירושלים במקום רחוב ירושלים בטבריה) נפסלת ונשאר מרכז העיר
   async function locate(l, r, local) {
+    // מיקום שתוקן ביד (גרירה / סימון במפה / חיפוש בכתובת אחרת) נשאר תמיד
+    if (r.geo && r.geo.manual) return r.geo;
     const s = r.sid && local.get(r.sid);
     const pts = s ? s.trees.filter(t => typeof t.lat === 'number' && typeof t.lon === 'number') : [];
     if (pts.length) return { lat: pts.reduce((a, t) => a + t.lat, 0) / pts.length, lon: pts.reduce((a, t) => a + t.lon, 0) / pts.length, src: 'gps' };
@@ -950,13 +994,15 @@
     if (r.geo && r.geo.key === key) return r.geo;
     if (geoMem.has(key)) { const m = geoMem.get(key); if (m) r.geo = Object.assign({}, m); return m ? r.geo : null; }
     if (!st && !city) return null;
-    const c = city ? await cityGeo(city) : null;
+    let c = null, cErr = null;
+    if (city) { try { c = await cityGeo(city); } catch (e) { cErr = e; } }
     const near = g => g && (!c || km(c, g) <= 12);
     let g = null, approx = false;
-    if (st && city) { g = await nominatim(st + ', ' + city); if (!near(g)) g = null; }
-    if (!g && st && city) { const w = st.replace(/\s*\d+\s*$/, ''); if (w && w !== st) { g = await nominatim(w + ', ' + city); if (!near(g)) g = null; } }
+    if (st && city) { g = await geocode(st + ', ' + city, 'street'); if (!near(g)) g = null; }
+    if (!g && st && city) { const w = st.replace(/\s*\d+\s*$/, ''); if (w && w !== st) { g = await geocode(w + ', ' + city, 'street'); if (!near(g)) g = null; } }
     if (!g && c) { g = c; approx = true; }
-    if (!g && st && !city) g = await nominatim(st);
+    if (!g && st && !city) g = await geocode(st);
+    if (!g && cErr) throw cErr;
     if (!g) { geoMem.set(key, null); return null; }
     r.geo = { lat: g.lat, lon: g.lon, key, approx };
     geoMem.set(key, r.geo);
@@ -1070,6 +1116,9 @@
     const done = r => { const s = r.sid && local.get(r.sid); return !!(s && (s.finished || s.finishPending)); };
     if (!Array.isArray(l.route) || !l.route.length) l.route = live().filter(r => !done(r)).map(r => r.id);
     l.route = l.route.filter(id => live().some(r => r.id === id));
+    // עבודה שהסתיימה יורדת מהמסלול והמספור מתעדכן (אפשר להחזיר אותה מ"לא במסלול")
+    const doneOut = l.route.filter(id => done(l.rows.find(r => r.id === id)));
+    if (doneOut.length) { l.route = l.route.filter(id => !doneOut.includes(id)); save(l); setTimeout(() => ui.toast(doneOut.length === 1 ? 'עבודה אחת שהסתיימה ירדה מהמסלול' : `${doneOut.length} עבודות שהסתיימו ירדו מהמסלול`, 3500), 300); }
     const nameCol = l.cols.find(c => /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר)/.test(c.name)) || null;
     const label = r => { const v = valuesOf(l, r); return { name: (nameCol && clean(r.cells[nameCol.id])) || v.siteName || 'שורה', addr: [geoStreet(v.street), fullCity(v.city)].filter(Boolean).join(', ') }; };
     const geo = new Map();
@@ -1079,7 +1128,7 @@
     const mapEl = h('div', { class: 'wl-mapview' });
     // נקודת התחלה לסידור האוטומטי ולקישור לגוגל מפות: בלי / המיקום שלי / כתובת שבוחרים (נשמר ברשימה)
     l.start = l.start || { mode: 'none', addr: '' };
-    const startSel = h('select', { class: 'in', style: 'width:auto;min-height:40px', 'aria-label': 'נקודת התחלה', onchange: () => { l.start.mode = startSel.value; startWrap.hidden = startSel.value !== 'addr'; persist(); redraw(); if (startSel.value === 'addr') startAddr.focus(); } },
+    const startSel = h('select', { class: 'in', style: 'width:auto;min-height:40px', 'aria-label': 'נקודת התחלה', onchange: () => { l.start.mode = startSel.value; startWrap.hidden = startPick.hidden = startSel.value !== 'addr'; persist(); redraw(); if (startSel.value === 'addr') startAddr.focus(); } },
       [['none', 'בלי נקודת התחלה (מצפון לדרום)'], ['me', 'מהמיקום שלי (GPS)'], ['addr', 'מכתובת שאני בוחר…']].map(([v, t]) => h('option', { value: v, selected: l.start.mode === v ? '' : null }, t)));
     const startAddr = h('input', { class: 'in', style: 'min-width:200px', value: l.start.addr || '', placeholder: 'למשל: עינב, או רחוב ועיר', onchange: async () => {
       l.start.addr = clean(startAddr.value); delete l.start.geo; persist();
@@ -1090,6 +1139,11 @@
     const startWrap = ui.suggestCombo(startAddr, () => startRecent, { arrow: true });
     let startRecent = (await DB.getKV('wlStarts', [])) || [];
     startWrap.hidden = l.start.mode !== 'addr';
+    const startPick = h('button', { class: 'btn', title: 'לחץ ואז לחץ על המפה במקום שממנו יוצאים', onclick: () => {
+      l.start.addr = clean(startAddr.value) || 'נקודה במפה'; startAddr.value = l.start.addr;
+      pickOnMap('לחץ על המפה במקום שממנו אתה יוצא', ll => { l.start.geo = { lat: ll.lat, lon: ll.lng, key: l.start.addr, manual: true }; persist(); redraw(); ui.toast('נקודת ההתחלה נשמרה', 2500); });
+    } }, '📍 סמן במפה');
+    startPick.hidden = l.start.mode !== 'addr';
     async function startPoint() {
       if (l.start.mode === 'me') {
         const p = me || await new Promise(res => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lon: p.coords.longitude }), () => res(null), { timeout: 8000, maximumAge: 120000 }) : res(null));
@@ -1098,8 +1152,8 @@
       }
       if (l.start.mode === 'addr' && l.start.addr) {
         if (l.start.geo && l.start.geo.key === l.start.addr) return l.start.geo;
-        const g = await nominatim(l.start.addr).catch(() => null);
-        if (!g) { ui.toast(`לא מצאתי במפה את "${l.start.addr}". נסה לכתוב גם עיר`, 4000); return null; }
+        const g = await geocode(l.start.addr).catch(() => null);
+        if (!g) { ui.toast(`לא מצאתי במפה את "${l.start.addr}". נסה לכתוב גם עיר, או לחץ "📍 סמן במפה" ובחר את המקום`, 6000); return null; }
         l.start.geo = { lat: g.lat, lon: g.lon, key: l.start.addr }; persist();
         return l.start.geo;
       }
@@ -1119,14 +1173,14 @@
         day = d; try { sessionStorage.setItem('wlDay:' + l.id, d || ''); } catch (_) {}
         drawDays(); redraw();
       } }, d || 'כל הימים'))] : []));
-    const navUrl = r => { const g = geo.get(r.id), lb = label(r); return g && g.src === 'gps' ? `https://waze.com/ul?ll=${g.lat},${g.lon}&navigate=yes` : 'https://waze.com/ul?q=' + encodeURIComponent(lb.addr) + '&navigate=yes'; };
-    const stopOf = r => { const g = geo.get(r.id); return g && g.src === 'gps' ? `${g.lat.toFixed(6)},${g.lon.toFixed(6)}` : label(r).addr; };
+    const navUrl = r => { const g = geo.get(r.id), lb = label(r); return g && (g.src === 'gps' || g.manual) ? `https://waze.com/ul?ll=${g.lat},${g.lon}&navigate=yes` : 'https://waze.com/ul?q=' + encodeURIComponent(lb.addr) + '&navigate=yes'; };
+    const stopOf = r => { const g = geo.get(r.id); return g && (g.src === 'gps' || g.manual) ? `${g.lat.toFixed(6)},${g.lon.toFixed(6)}` : label(r).addr; };
     // גוגל מפות: עד 10 תחנות בקישור, ולכן מסלול ארוך מתחלק לכמה קישורים (כל חלק מתחיל איפה שהקודם נגמר)
     function gmapsLinks() {
       const rs = vis().map(id => l.rows.find(r => r.id === id)).filter(Boolean);
       const stops = rs.map(stopOf);
       // התחלה: כתובת שבחרתי = נקודת המוצא בקישור; המיקום שלי = בלי מוצא (גוגל מפות מתחיל מהמיקום הנוכחי)
-      if (l.start.mode === 'addr' && l.start.addr) stops.unshift(l.start.addr);
+      if (l.start.mode === 'addr' && l.start.addr) stops.unshift(l.start.geo && l.start.geo.manual && l.start.geo.key === l.start.addr ? `${l.start.geo.lat.toFixed(6)},${l.start.geo.lon.toFixed(6)}` : l.start.addr);
       if (l.start.mode === 'me' && stops.length) {
         const part = stops.slice(0, 10), out = ['https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + encodeURIComponent(part[part.length - 1]) + (part.length > 1 ? '&waypoints=' + encodeURIComponent(part.slice(0, -1).join('|')) : '')];
         for (let i = 9; i < stops.length - 1; i += 9) {
@@ -1144,13 +1198,58 @@
       }
       return out;
     }
+    // תיקון מיקום ביד: לחיצה במפה / גרירה / חיפוש כתובת אחרת. נשמר בשורה (manual) ולא נדרס באיתור הבא
+    let pickLoc = null;
+    function pickOnMap(msg, fn) {
+      if (!map) { ui.toast('המפה לא נטענה', 3000); return; }
+      pickLoc = fn; mapEl.classList.add('picking');
+      mapEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      ui.toast(msg, 5000);
+    }
+    function setManual(r, p, q) {
+      r.geo = { lat: p.lat, lon: p.lon, key: (r.geo && r.geo.key) || '', manual: true };
+      if (q) r.geo.q = q;
+      r.u = Date.now(); geo.set(r.id, r.geo); persist(); redraw();
+    }
+    function fixLoc(r) {
+      const lb = label(r), g = geo.get(r.id);
+      const q = h('input', { class: 'in', type: 'search', value: (r.geo && r.geo.q) || lb.addr, style: 'flex:1;min-width:180px', placeholder: 'רחוב ומספר, עיר' });
+      const msg = h('div', { class: 'muted small' }, 'כתוב את הכתובת אחרת (עם יוד / בלי יוד, שם חדש של הרחוב, שם מקום) ולחץ חפש, או סמן את המקום במפה.');
+      const close = () => ov.remove();
+      const search = async () => {
+        const t = clean(q.value); if (!t) return;
+        msg.textContent = 'מחפש…';
+        try {
+          const p = await geocode(t);
+          if (!p) { msg.textContent = `לא מצאתי את "${t}". נסה לכתוב אחרת, או סמן במפה.`; return; }
+          close(); setManual(r, p, t);
+          if (map) { userMoved = true; map.setView([p.lat, p.lon], 17); }
+          ui.toast('נמצא. אם הנקודה לא בדיוק במקום, גרור אותה', 4000);
+        } catch (e) { msg.textContent = e.message + '. אפשר לסמן במפה.'; }
+      };
+      q.addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
+      const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
+        h('div', { class: 'card stack', style: 'max-width:560px;width:96%' },
+          h('h2', { style: 'margin:0;font-size:20px' }, '📍 מיקום של ' + lb.name),
+          h('div', { class: 'muted small' }, 'בטבלה: ' + (lb.addr || '—') + (g ? (g.manual ? ' · כרגע: מיקום שתיקנת' : g.approx ? ' · כרגע: מיקום משוער' : '') : ' · כרגע: לא נמצא')),
+          h('div', { class: 'row', style: 'gap:8px' }, q, h('button', { class: 'btn primary', onclick: search }, '🔎 חפש')),
+          msg,
+          h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+            h('button', { class: 'btn', onclick: () => { close(); pickOnMap('לחץ על המפה במקום של ' + lb.name, ll => { setManual(r, { lat: ll.lat, lon: ll.lng }); ui.toast('המיקום נשמר', 2500); }); } }, '👆 סמן במפה'),
+            r.geo && r.geo.manual ? h('button', { class: 'btn', onclick: async () => { close(); delete r.geo; geo.delete(r.id); r.u = Date.now(); try { const g2 = await locate(l, r, local); if (g2) geo.set(r.id, g2); else geo.set(r.id, null); } catch (e) { ui.toast(e.message, 4000); } persist(); redraw(); } }, '↩ חזור לאיתור האוטומטי') : null,
+            h('button', { class: 'btn', onclick: close }, 'ביטול'))));
+      document.body.append(ov);
+      q.focus(); q.select();
+    }
     function drawMap() {
       if (!map || !window.L) return;
       if (layer) layer.remove();
       layer = L.layerGroup().addTo(map);
       const ll = [];
       if (l.start.mode === 'addr' && l.start.geo && l.start.geo.key === l.start.addr)
-        L.marker([l.start.geo.lat, l.start.geo.lon], { icon: L.divIcon({ className: 'wl-pin start', html: '🏠', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(layer).bindPopup('התחלה: ' + l.start.addr.replace(/</g, '&lt;'));
+        L.marker([l.start.geo.lat, l.start.geo.lon], { draggable: true, icon: L.divIcon({ className: 'wl-pin start', html: '🏠', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(layer)
+          .bindPopup('התחלה: ' + l.start.addr.replace(/</g, '&lt;') + '<br><i>אפשר לגרור כדי לדייק</i>')
+          .on('dragend', e => { const p = e.target.getLatLng(); l.start.geo = { lat: p.lat, lon: p.lng, key: l.start.addr, manual: true }; persist(); redraw(); });
       vis().forEach(id => {
         const i = l.route.indexOf(id);
         const r = l.rows.find(x => x.id === id), g = geo.get(id);
@@ -1165,8 +1264,12 @@
             h('button', { class: 'btn', title: 'מוקדם יותר', disabled: i === 0 ? true : null, onclick: () => mv(i) }, '↑'),
             h('button', { class: 'btn', title: 'מאוחר יותר', disabled: i === l.route.length - 1 ? true : null, onclick: () => mv(i + 2) }, '↓'),
             h('button', { class: 'btn', title: 'שים אחרי התחנה שנבחרה קודם', onclick: () => { if (pickAfter && pickAfter !== id) { const k = l.route.indexOf(pickAfter); mv(k + (k < i ? 2 : 1)); pickAfter = null; } else { pickAfter = id; ui.toast('עכשיו לחץ על התחנה שתבוא מיד אחרי זו, ובחר "שים אחרי…"', 3500); map.closePopup(); } } }, pickAfter && pickAfter !== id ? 'שים אחרי ' + label(l.rows.find(x => x.id === pickAfter)).name : '📌 מה בא אחרי זו?')),
-          h('a', { href: navUrl(r), target: '_blank', rel: 'noopener' }, 'נווט בוויז'));
-        L.marker([g.lat, g.lon], { icon }).addTo(layer).bindPopup(pop);
+          h('div', { class: 'row', style: 'gap:10px;align-items:center;margin-top:6px' },
+            h('button', { class: 'btn', onclick: () => { map.closePopup(); fixLoc(r); } }, '📍 תקן מיקום'),
+            h('a', { href: navUrl(r), target: '_blank', rel: 'noopener' }, 'נווט בוויז')),
+          h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם לגרור את הנקודה'));
+        L.marker([g.lat, g.lon], { icon, draggable: g.src !== 'gps' }).addTo(layer).bindPopup(pop)
+          .on('dragend', e => { const p = e.target.getLatLng(); setManual(r, { lat: p.lat, lon: p.lng }); ui.toast('המיקום של ' + lb.name + ' עודכן', 2500); });
         ll.push([g.lat, g.lon]);
       });
       if (ll.length && !userMoved) map.fitBounds(L.latLngBounds(ll).pad(0.15), { maxZoom: 15 });
@@ -1198,9 +1301,10 @@
         return h('div', { class: 'wl-stop' + (done(r) ? ' done' : '') },
           rnumInput(l, id, () => { persist(); redraw(); }),
           h('div', { style: 'flex:1;min-width:0' }, h('b', {}, lb.name), done(r) ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הסתיים') : null,
-            h('div', { class: 'muted small' }, lb.addr + (g ? (g.approx ? ' · מיקום משוער' : '') : geo.has(id) ? '' : ' · לא נמצא במפה'))),
+            h('div', { class: 'muted small' }, lb.addr + (g ? (g.manual ? ' · מיקום שתיקנת' : g.approx ? ' · מיקום משוער' : '') : geo.has(id) ? ' · לא נמצא במפה, לחץ 📍' : ''))),
           h('button', { class: 'icon-btn', title: 'למעלה', 'aria-label': 'הזז למעלה', disabled: k === 0 ? true : null, onclick: () => move(-1) }, '↑'),
           h('button', { class: 'icon-btn', title: 'למטה', 'aria-label': 'הזז למטה', disabled: k === vs.length - 1 ? true : null, onclick: () => move(1) }, '↓'),
+          h('button', { class: 'icon-btn', title: 'תקן מיקום במפה', 'aria-label': 'תקן מיקום', onclick: () => fixLoc(r) }, '📍'),
           h('a', { class: 'btn', href: navUrl(r), target: '_blank', rel: 'noopener' }, 'וייז'),
           h('button', { class: 'icon-btn', title: 'הוצא מהמסלול', 'aria-label': 'הוצא מהמסלול', onclick: () => { l.route.splice(i, 1); persist(); redraw(); } }, '✕'));
       }));
@@ -1302,7 +1406,7 @@
         h('div', { class: 'stack' },
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' },
             h('button', { class: 'btn primary', onclick: ev => { ev.currentTarget.disabled = true; auto().finally(() => { ev.target.disabled = false; }); } }, '⚡ סדר אוטומטי (הכי מהר בכבישים)'),
-            h('label', { class: 'row small', style: 'gap:6px;align-items:center' }, 'התחלה:', startSel), startWrap),
+            h('label', { class: 'row small', style: 'gap:6px;align-items:center' }, 'התחלה:', startSel), startWrap, startPick),
           dayBox, linksBox, status, listBox,
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
             h('button', { class: 'btn', onclick: async () => { await DB.setKV('wlView:' + l.id, { sort: { col: '_route', dir: 1 }, filt: {} }); ui.go(back); } }, 'מיין את הטבלה לפי המסלול'),
@@ -1313,7 +1417,8 @@
     try {
       await ui.leaflet();
       map = L.map(mapEl, { zoomControl: true }).setView([32.3, 35.0], 8);
-      map.on('dragstart', () => { userMoved = true; }); mapEl.addEventListener('wheel', () => { userMoved = true; }, { passive: true });
+      map.on('dragstart', () => { userMoved = true; });
+      map.on('click', e => { if (!pickLoc) return; const f = pickLoc; pickLoc = null; mapEl.classList.remove('picking'); userMoved = true; f(e.latlng); }); mapEl.addEventListener('wheel', () => { userMoved = true; }, { passive: true });
       const g = ui.mapLayers()['גוגל – מפה'];
       L.tileLayer(g[0], g[1]).addTo(map);
       showMe();
@@ -1321,7 +1426,8 @@
     if (navigator.onLine === false) { status.textContent = 'אין קליטה: אי אפשר לאתר כתובות במפה'; for (const id of l.route) { const r = l.rows.find(x => x.id === id); if (r && r.geo) geo.set(id, r.geo); } redraw(); return; }
     for (const id of l.route) { const r = l.rows.find(x => x.id === id); if (r && r.geo) geo.set(id, r.geo); }
     redraw();
-    locateAll().then(() => { status.textContent = ''; redraw(); });
+    if (l.start.mode === 'addr' && l.start.addr && !(l.start.geo && l.start.geo.key === l.start.addr)) startPoint().then(g => { if (g) redraw(); });
+    locateAll().then(() => { showStatus(); redraw(); if (job && job.err) status.textContent += ' · שגיאה באיתור: ' + job.err; });
   }
 
   // גרירת קובץ רשימה (אקסל / CSV) למסכי הרשימות: ייבוא כרשימה חדשה. בתוך רשימה: הוספת מסמכים לרשימה
