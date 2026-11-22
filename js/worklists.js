@@ -942,11 +942,14 @@
     const keep = xs => skip.length ? xs.filter(x => !skip.some(w => norm(x.f.name).includes(w))) : xs;
     // קובץ שבשם שלו יש סמל של מוסד אחר (כמה גנים באותה כתובת) לא מוצע
     const other = x => (x.f.name.match(/\d{5,7}/g) || []).some(n => !codes.includes(n));
-    const tie = xs => ' · לא סומן: יש עוד קובץ שמתאים באותה מידה ("' + xs[1].f.name + '")';
+    // אותו קובץ בכמה תיקיות (אותו שם ואותו גודל) נחשב קובץ אחד; שאר המקומות נשמרים ב-dups להצגה
+    const uniq = xs => { const m = new Map(), out = []; for (const x of xs) { const k = x.f.size ? x.f.name + '|' + x.f.size : 'id' + x.f.id, a = m.get(k); if (a) (a.dups = a.dups || []).push(x); else { m.set(k, x); out.push(x); } } return out; };
+    const tie = xs => ' · לא סומן: יש עוד קובץ שמתאים באותה מידה (ב"' + (xs[1].path.slice(-2).join(' / ') || 'דרייב') + '"), אפשר לראות ולבחור למטה';
     const by = {
       async code() {
         if (!codes.length) return null;
-        const xs = keep(score(await archiveFiles(codes, l.folder || null)));
+        const xs = uniq(keep(score(await archiveFiles(codes, l.folder || null))));
+        if (xs.length) xs[0].alts = xs;
         if (xs.length === 1) return Object.assign(xs[0], { sure: true, byCode: true, why: 'לפי סמל המוסד' });
         if (!xs.length) return null;
         xs[0].byCode = true; const t = xs[0];
@@ -956,8 +959,9 @@
       async street() {
         const { word, num } = streetKey(v.street);
         if (!word || word.length < 2 || !num) return null;
-        const xs = keep(score(await archiveFiles([word], l.folder || null))).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder) && !other(x));
+        const xs = uniq(keep(score(await archiveFiles([word], l.folder || null))).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder) && !other(x)));
         if (!xs.length) return null;
+        xs[0].alts = xs;
         const sure = xs.length === 1 || xs[0].sc > xs[1].sc;
         return Object.assign(xs[0], { sure, why: 'לפי רחוב ומספר' + (sure ? '' : tie(xs)) });
       },
@@ -966,8 +970,9 @@
         const ws = [...new Set(norm(v.siteName || '').split(' ').filter(w => w.length >= 2 && !/\d/.test(w) && !STOP.has(w)))];
         if (!ws.length || ws.join('').length < 4) return null;
         const long = ws.slice().sort((a, b) => b.length - a.length)[0];
-        const xs = keep(score(await archiveFiles([long], l.folder || null))).filter(x => { const hay = norm(x.f.name); return ws.every(w => hasWord(hay, w)) && !other(x); });
+        const xs = uniq(keep(score(await archiveFiles([long], l.folder || null))).filter(x => { const hay = norm(x.f.name); return ws.every(w => hasWord(hay, w)) && !other(x); }));
         if (!xs.length) return null;
+        xs[0].alts = xs;
         const sure = xs.length === 1 || xs[0].sc > xs[1].sc;
         return Object.assign(xs[0], { sure, why: 'לפי שם המוסד' + (sure ? '' : tie(xs)) });
       },
@@ -976,10 +981,12 @@
       const x = by[k] ? await by[k]() : null;
       if (!x) continue;
       // מה תואם ומה לא בין השורה לקובץ, בכל הבדיקות (גם אלה שלא לפיהן נמצא): להשוואה לפני אישור. null = אין מה לבדוק בשורה
-      const hay = norm(x.f.name), nws = [...new Set(norm(v.siteName || '').split(' ').filter(w => w.length >= 2 && !/\d/.test(w) && !STOP.has(w)))];
-      x.m = { code: codes.length ? !!x.byCode || codes.some(c => x.f.name.includes(c)) : null,
-        street: streetKey(v.street).word ? !!(x.stHit && x.numHit) : null,
-        name: nws.length ? nws.every(w => hasWord(hay, w)) : null };
+      const nws = [...new Set(norm(v.siteName || '').split(' ').filter(w => w.length >= 2 && !/\d/.test(w) && !STOP.has(w)))];
+      for (const y of x.alts || [x]) { const hay = norm(y.f.name);
+        y.m = { code: codes.length ? k === 'code' || codes.some(c => y.f.name.includes(c)) : null,
+          street: streetKey(v.street).word ? !!(y.stHit && y.numHit) : null,
+          name: nws.length ? nws.every(w => hasWord(hay, w)) : null }; }
+      x.alts = (x.alts || [x]).slice(0, 8);
       return x;
     }
     return null;
@@ -993,7 +1000,7 @@
     const nm = r => { const v = valuesOf(l, r); return { name: (nameCol && clean(r.cells[nameCol.id])) || v.siteName || 'שורה', sub: [v.code ? 'סמל ' + v.code : null, geoStreet(v.street), v.city].filter(Boolean).join(' · ') }; };
     const rows = () => l.rows.filter(r => !r.deleted && !r.sid);
     const ix = await prevIndex();
-    const prop = new Map(), sel = new Set(), ok = new Set();
+    const prop = new Map(), sel = new Set(), ok = new Set(), open = new Set();
     const status = h('div', { class: 'muted small', role: 'status' });
     const box = h('div', { class: 'stack' });
     const close = () => { ov.remove(); if (redrawTable) redrawTable(); };
@@ -1079,7 +1086,15 @@
             p ? fileLine(p, p.kind === 'file' && ix[p.f.id] ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הורד') : null)
               : x ? h('div', {}, fileLine(prevOf(x)),
                 h('div', { class: 'small wl-match' }, 'בקובץ הקודם: ', ...PREV_BY.filter(c => x.m && x.m[c[0]] != null).map(c => h('span', { class: x.m[c[0]] ? 'yes' : 'no' }, (x.m[c[0]] ? '✓ ' : '✗ ') + c[1] + (x.m[c[0]] ? ' תואם' : ' שונה')))),
-                h('div', { class: 'small', style: 'color:#8a5200' }, (x.sure ? 'הצעה: ' : 'הצעה לבדיקה: ') + x.why + (x.year ? ' · ' + x.year : '')))
+                h('div', { class: 'small', style: 'color:#8a5200' }, (x.sure ? 'הצעה: ' : 'הצעה לבדיקה: ') + x.why + (x.year ? ' · ' + x.year : '')),
+                (x.dups || []).length ? h('div', { class: 'small muted' }, 'אותו קובץ בדיוק (אותו שם וגודל) נמצא גם ב: ' + x.dups.map(d => d.path.join(' / ') || 'דרייב').join(' ; ')) : null,
+                (x.alts || []).length > 1 ? h('details', { class: 'wl-alts', open: open.has(r.id), ontoggle: e => { e.target.open ? open.add(r.id) : open.delete(r.id); } },
+                  h('summary', {}, `כל ${x.alts.length} הקבצים שמתאימים`),
+                  ...x.alts.map(y => h('div', { class: 'wl-alt' + (y === x ? ' on' : '') },
+                    h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'wl-pfile' }, h('span', { class: 'muted' }, '📁 ' + (y.path.join(' / ') || 'דרייב') + ' / '), h('b', {}, y.f.name)),
+                      h('div', { class: 'muted' }, [y.f.lastModifiedDateTime ? 'עודכן ' + ui.fmtDate(y.f.lastModifiedDateTime.slice(0, 10)) : null, y.f.size ? Math.max(1, Math.round(y.f.size / 1024)) + ' KB' : null, (y.dups || []).length ? 'עוד ' + y.dups.length + ' עותקים זהים' : null].filter(Boolean).join(' · '))),
+                    h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(y.f.id) + '/view', target: '_blank', rel: 'noopener' }, 'הצג'),
+                    y === x ? h('span', { class: 'wl-badge done' }, 'נבחר') : h('button', { class: 'btn', onclick: () => { prop.set(r.id, Object.assign(y, { alts: x.alts, byCode: x.byCode, sure: true, why: 'בחרת את הקובץ הזה' })); ok.add(r.id); draw(); } }, 'בחר את זה')))) : null)
               : h('div', { class: 'muted small' }, 'אין סקר קודם משויך')),
           p && p.kind === 'file' ? h('button', { class: 'btn', onclick: () => openPrevFile(p, 'xlsx').then(draw) }, 'אקסל') : null,
           p && p.kind === 'file' ? h('button', { class: 'btn', onclick: () => openPrevFile(p, 'pdf') }, 'PDF') : null,
