@@ -20,6 +20,11 @@
     { key: 'helka', label: 'חלקה', re: /^חלק/, buildOnly: true },
   ];
   const fieldsOf = l => FIELDS.filter(f => l.type === 'construction' ? !f.safetyOnly : !f.buildOnly);
+  // ימי עבודה (1.117): עמודה בשם "יום" מחלקת את הרשימה לימים (מפרידים בטבלה, צ'יפים לכל יום, ובמסלול רק התחנות של היום)
+  const dayCol = l => (l.cols || []).find(c => /^יום(\s*עבודה)?$/.test(String(c.name || '').trim())) || null;
+  const daysOf = l => { const c = dayCol(l); if (!c) return []; return [...new Set(l.rows.filter(r => !r.deleted).map(r => clean(r.cells[c.id])).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he', { numeric: true })); };
+  // עמודות מוסתרות (1.117): נשארות ברשימה ובשיוך לשדות, רק לא מוצגות בטבלה
+  const visCols = l => (l.cols || []).filter(c => !(l.hide || []).includes(c.id));
 
   // ערים לזיהוי אוטומטי כשאין ברשימה עמודת עיר (בנוסף לערים מהסקרים הקודמים)
   const CITIES = ['ירושלים', 'תל אביב', 'תל אביב יפו', 'חיפה', 'ראשון לציון', 'פתח תקווה', 'אשדוד', 'נתניה', 'באר שבע', 'בני ברק', 'חולון', 'רמת גן', 'אשקלון', 'רחובות',
@@ -520,6 +525,17 @@
         raw: sh.rows.map(r => Array.from(r, v => cellText(v))), headerRow: guessHeader(sh.rows), created: Date.now() };
       buildFromRaw(l);
       await addCityColumn(l);
+      // עמודת "סדר נסיעה" (מספרים): סדר המסלול מוכן מהקובץ
+      const oc = l.cols.find(c => /^(סדר(\s*(נסיעה|עבודה))?|מס'?\s*בסדר)$/.test(c.name.trim()));
+      const live = l.rows.filter(r => !r.deleted);
+      l.hide = [];
+      if (oc && live.length && live.every(r => /^\d+$/.test(clean(r.cells[oc.id])))) {
+        l.route = live.slice().sort((a, b) => +clean(a.cells[oc.id]) - +clean(b.cells[oc.id])).map(r => r.id);
+        l.hide.push(oc.id); // המספר מוצג ממילא ליד "פתח סקר"
+      }
+      // עמודת עיר עם אותה עיר בכל השורות (למשל כולן ירושלים): מוסתרת כדי שיהיה מקום לשאר העמודות. אפשר להחזיר אותה
+      const cc = l.map.city && l.map.city.col;
+      if (cc && live.length > 1 && new Set(live.map(r => clean(r.cells[cc]))).size === 1) l.hide.push(cc);
       // פרויקט: רק אם שם של פרויקט קיים מופיע בכותרת או בשם הקובץ (למשל "אמונה"), לא הפרויקט האחרון
       const hay = norm(l.name + ' ' + f.name);
       l.project = (await ui.projectsRecent()).filter(p => norm(p).length >= 3).find(p => hasWord(hay, norm(p)) || hay.includes(norm(p))) || '';
@@ -616,7 +632,7 @@
     // מיון וסינון לפי עמודה כמו באקסל (נשמר במכשיר הזה לכל רשימה). '_st' = עמודת הסטטוס
     const VKEY = 'wlView:' + l.id;
     const saved = (await DB.getKV(VKEY, null)) || {};
-    const view = { sort: saved.sort || null, filt: Object.fromEntries(Object.entries(saved.filt || {}).map(([k, v]) => [k, new Set(v)])) };
+    const view = { sort: saved.sort || (!saved.filt && (l.route || []).length ? { col: '_route', dir: 1 } : null), filt: Object.fromEntries(Object.entries(saved.filt || {}).map(([k, v]) => [k, new Set(v)])) };
     const saveView = () => DB.setKV(VKEY, { sort: view.sort, filt: Object.fromEntries(Object.entries(view.filt).map(([k, v]) => [k, [...v]])) }).catch(() => {});
     const valOf = (r, cid) => cid === '_st' ? stateOf(r).t : cid === '_route' ? ((l.route || []).indexOf(r.id) + 1 ? String((l.route || []).indexOf(r.id) + 1) : '') : clean(r.cells[cid]);
     const cmp = (a, b) => (a === '') - (b === '') || a.localeCompare(b, 'he', { numeric: true, sensitivity: 'base' });
@@ -653,6 +669,7 @@
             h('option', { value: '' }, '— לא משויכת —'),
             ...fieldsOf(l).map(f => h('option', { value: f.key, selected: (l.map[f.key] || {}).col === cid ? '' : null }, f.label + ((l.map[f.key] || {}).col && l.map[f.key].col !== cid ? ' (במקום "' + ((l.cols.find(c => c.id === l.map[f.key].col) || {}).name || '') + '")' : ''))))),
         sortBtn(1, '↓ מיון מהקטן לגדול (א→ת)'), sortBtn(-1, '↑ מיון מהגדול לקטן (ת→א)'),
+        cid === '_st' ? null : h('button', { class: 'btn block', onclick: () => { l.hide = [...new Set([...(l.hide || []), cid])]; save(l); done(); draw(); ui.toast(`העמודה "${name}" הוסתרה. "הצג עמודות מוסתרות" מחזיר אותה`, 3000); } }, '🙈 הסתר את העמודה'),
         search, listBox,
         h('div', { class: 'row', style: 'gap:6px' },
           h('button', { class: 'btn primary', onclick: () => {
@@ -677,6 +694,8 @@
     };
     const q = h('input', { class: 'in', type: 'search', placeholder: 'חיפוש ברשימה', style: 'flex:1;min-width:160px' });
     const clearBox = h('span');
+    const hideBox = h('span');
+    const dayBox = h('div', { class: 'row project-chips', style: 'gap:6px;flex-wrap:wrap;align-items:center' });
     const table = h('div', { class: 'wl-wrap' });
     const counts = h('div', { class: 'muted small', role: 'status' });
     const chipsBox = h('div', { class: 'project-chips' });
@@ -695,17 +714,31 @@
         const rn = r => { const k = (l.route || []).indexOf(r.id); return k < 0 ? 1e9 : k; };
         shown.sort((a, b) => { const x = valOf(a, col), y = valOf(b, col); return (x === '') - (y === '') || dir * cmp(x, y) || (col === '_st' ? rn(a) - rn(b) : 0); });
       }
+      const dc = dayCol(l), days = daysOf(l);
+      const byDay = !!(dc && days.length && view.sort && (view.sort.col === '_route' || view.sort.col === dc.id));
+      const dayOn = dc && view.filt[dc.id] && view.filt[dc.id].size === 1 ? [...view.filt[dc.id]][0] : null;
+      dayBox.replaceChildren(...(days.length > 1 ? [h('span', { class: 'small muted' }, 'ימים:'),
+        h('button', { class: 'chip' + (!dayOn ? ' on' : ''), onclick: () => { delete view.filt[dc.id]; saveView(); draw(); } }, 'כל הימים'),
+        ...days.map(d => h('button', { class: 'chip' + (dayOn === d ? ' on' : ''), onclick: () => { view.filt[dc.id] = new Set([d]); if (!view.sort) view.sort = { col: (l.route || []).length ? '_route' : dc.id, dir: 1 }; saveView(); draw(); } },
+          `${d} (${l.rows.filter(r => !r.deleted && clean(r.cells[dc.id]) === d).length})`))] : []));
+      const hid = (l.hide || []).filter(id => l.cols.some(c => c.id === id));
+      hideBox.replaceChildren(hid.length ? h('button', { class: 'btn', onclick: () => { l.hide = []; save(l); draw(); } }, `👁 הצג עמודות מוסתרות (${hid.map(id => l.cols.find(c => c.id === id).name).join(', ')})`) : '');
       const active = Object.keys(view.filt).length || view.sort;
       clearBox.replaceChildren(active ? h('button', { class: 'btn', onclick: () => { view.filt = {}; view.sort = null; saveView(); draw(); } }, '✕ נקה מיון וסינון') : '');
       counts.textContent = shown.length === rs.length ? `${rs.length} שורות` : `${shown.length} מתוך ${rs.length} שורות`;
       // רוחב כל עמודה לפי הטקסט הארוך בה (בגבולות), כדי שכתובת שלמה תיראה בלי לגלול בתוך התא
-      const width = new Map(l.cols.map(c => [c.id, Math.min(38, Math.max(8, c.name.length, ...rs.map(r => (r.cells[c.id] || '').length)) + 2)]));
+      const cols = visCols(l);
+      const width = new Map(cols.map(c => [c.id, Math.min(38, Math.max(8, c.name.length, ...rs.map(r => (r.cells[c.id] || '').length)) + 2)]));
       const mapped = new Map(Object.entries(l.map || {}).filter(([k, m]) => m.col && fieldsOf(l).some(f => f.key === k)).map(([k, m]) => [m.col, FIELDS.find(f => f.key === k).label]));
       table.replaceChildren(h('table', { class: 'wl-table' },
-        h('thead', {}, h('tr', {}, h('th', { class: 'wl-act' }, h('div', { class: 'wl-th' }, h('span', {}, 'סקר'), headBtn('_st', 'סטטוס הסקר'))), ...l.cols.map(c => h('th', {}, h('div', { class: 'wl-th' }, h('span', {}, c.name), headBtn(c.id, c.name)), mapped.has(c.id) ? h('div', { class: 'wl-tag' }, '← ' + mapped.get(c.id)) : null)), h('th', {}))),
-        h('tbody', {}, shown.map(r => {
+        h('thead', {}, h('tr', {}, h('th', { class: 'wl-act' }, h('div', { class: 'wl-th' }, h('span', {}, 'סקר'), headBtn('_st', 'סטטוס הסקר'))), ...cols.map(c => h('th', {}, h('div', { class: 'wl-th' }, h('span', {}, c.name), headBtn(c.id, c.name)), mapped.has(c.id) ? h('div', { class: 'wl-tag' }, '← ' + mapped.get(c.id)) : null)), h('th', {}))),
+        h('tbody', {}, shown.flatMap((r, i) => {
           const st = stateOf(r);
-          return h('tr', { class: 'st-' + st.k },
+          // מפריד בין ימים, כשהרשימה ממוינת לפי סדר הנסיעה או לפי היום
+          const dv = dc && byDay ? clean(r.cells[dc.id]) : null;
+          const sep = dc && byDay && (i === 0 || clean(shown[i - 1].cells[dc.id]) !== dv)
+            ? h('tr', { class: 'wl-dayrow' }, h('td', { colspan: cols.length + 2 }, h('span', { class: 'wl-daylbl' }, `${dv || 'בלי יום'} · ${shown.filter(x => clean(x.cells[dc.id]) === dv).length} מוסדות`))) : null;
+          return [sep, h('tr', { class: 'st-' + st.k },
             h('td', { class: 'wl-act' },
               (l.route || []).includes(r.id) ? rnumInput(l, r.id, () => { save(l); draw(); }) : null,
               h('button', { class: 'btn ' + (st.k === 'todo' ? 'primary' : ''), title: !r.sid && r.prev && !r.prev.none ? 'סקר חדש מהיום עם העצים וההערות מהסקר הקודם, והפרטים מהרשימה' : null, onclick: () => openRow(l, r) },
@@ -716,12 +749,12 @@
                 : h('button', { class: 'link-btn small wl-find', onclick: () => openRow(l, r, true, draw) }, '🔎 חפש סקר קודם'),
               h('div', { class: 'wl-badge ' + st.k }, st.t), st.d ? h('div', { class: 'wl-st small' }, st.d) : null,
               r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null),
-            ...l.cols.map(c => h('td', {}, h('input', { class: 'wl-cell', value: r.cells[c.id] || '', 'aria-label': c.name, style: `width:${width.get(c.id)}ch`,
+            ...cols.map(c => h('td', {}, h('input', { class: 'wl-cell', value: r.cells[c.id] || '', 'aria-label': c.name, style: `width:${width.get(c.id)}ch`,
               oninput: e => { r.cells[c.id] = e.target.value; r.u = Date.now(); saveSoon(); } }))),
             h('td', {}, h('button', { class: 'icon-btn', title: 'מחק שורה', 'aria-label': 'מחק שורה', onclick: () => {
               if (!confirm('למחוק את השורה מהרשימה?')) return;
               r.deleted = Date.now(); r.u = Date.now(); r.cells = {}; save(l); draw();
-            } }, '✕')));
+            } }, '✕')))].filter(Boolean);
         }))));
     };
     q.addEventListener('input', draw);
@@ -744,7 +777,7 @@
           h('button', { class: 'btn', onclick: exportXlsx }, '⬇ אקסל'),
           h('button', { class: 'btn', onclick: ev => managersReport(l, ev.currentTarget) }, '📊 דוח מנהלים'),
           h('button', { class: 'btn', title: 'סיכום אורנים ומפת עצים לשיתוף מהסקרים של הרשימה (ירושלים)', onclick: () => ui.go('#/summary/' + encodeURIComponent(l.id)) }, '🌲 אורנים ומפות'),
-          l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox),
+          l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox, hideBox),
         l.finished ? h('div', { class: 'card row', style: 'gap:10px;align-items:center;background:var(--accent-soft)' }, h('b', { style: 'flex:1' }, '✓ הרשימה הסתיימה ' + new Date(l.finished).toLocaleDateString('he-IL')),
           h('button', { class: 'btn', onclick: async () => { delete l.finished; delete l.offHome; await save(l); renderList(l); } }, '↩ החזר לפעילות')) : null,
         docs.el,
@@ -753,7 +786,7 @@
           h('button', { class: 'btn', onclick: () => pickListFolder(l, () => renderList(l)) }, l.folder ? 'החלף' : 'בחר תיקייה'),
           l.folder ? h('button', { class: 'btn', onclick: async () => { delete l.folder; await save(l); renderList(l); } }, 'הארכיון הרגיל') : null),
         missing.length ? h('div', { class: 'card small', style: 'background:#fff2cc;color:#5a4300' }, `⚠ עוד לא נבחרה עמודה ל: ${missing.join(', ')}. לחץ על החץ ▾ בכותרת של העמודה ובחר "העמודה הזו היא", או ב"שיוך עמודות".`) : null,
-        chipsBox, counts, table));
+        dayBox, chipsBox, counts, table));
     draw();
 
     // סקרים שנפתחו במכשיר אחר: הסטטוס מהאינדקס בענן
@@ -981,11 +1014,22 @@
     const linksBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
     let map = null, layer = null, pickAfter = null;
     const persist = () => save(l);
+    // יום עבודה שנבחר (עמודת "יום"): במפה, ברשימה ובקישורים רק התחנות שלו. המספרים נשארים לפי המסלול כולו
+    const dc = dayCol(l), days = daysOf(l);
+    let day = null;
+    try { day = days.includes(sessionStorage.getItem('wlDay:' + l.id)) ? sessionStorage.getItem('wlDay:' + l.id) : null; } catch (_) {}
+    const vis = () => day && dc ? l.route.filter(id => { const r = l.rows.find(x => x.id === id); return r && clean(r.cells[dc.id]) === day; }) : l.route;
+    const dayBox = h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;align-items:center' });
+    const drawDays = () => dayBox.replaceChildren(...(days.length > 1 ? [h('span', { class: 'small muted' }, 'יום:'),
+      ...[null, ...days].map(d => h('button', { class: 'chip' + (day === d ? ' on' : ''), onclick: () => {
+        day = d; try { sessionStorage.setItem('wlDay:' + l.id, d || ''); } catch (_) {}
+        drawDays(); redraw();
+      } }, d || 'כל הימים'))] : []));
     const navUrl = r => { const g = geo.get(r.id), lb = label(r); return g && g.src === 'gps' ? `https://waze.com/ul?ll=${g.lat},${g.lon}&navigate=yes` : 'https://waze.com/ul?q=' + encodeURIComponent(lb.addr) + '&navigate=yes'; };
     const stopOf = r => { const g = geo.get(r.id); return g && g.src === 'gps' ? `${g.lat.toFixed(6)},${g.lon.toFixed(6)}` : label(r).addr; };
     // גוגל מפות: עד 10 תחנות בקישור, ולכן מסלול ארוך מתחלק לכמה קישורים (כל חלק מתחיל איפה שהקודם נגמר)
     function gmapsLinks() {
-      const rs = l.route.map(id => l.rows.find(r => r.id === id)).filter(Boolean);
+      const rs = vis().map(id => l.rows.find(r => r.id === id)).filter(Boolean);
       const stops = rs.map(stopOf);
       const out = [];
       for (let i = 0; i < stops.length - 1 || (i === 0 && stops.length === 1); i += 9) {
@@ -1001,7 +1045,8 @@
       if (layer) layer.remove();
       layer = L.layerGroup().addTo(map);
       const ll = [];
-      l.route.forEach((id, i) => {
+      vis().forEach(id => {
+        const i = l.route.indexOf(id);
         const r = l.rows.find(x => x.id === id), g = geo.get(id);
         if (!r || !g) return;
         const lb = label(r);
@@ -1036,17 +1081,20 @@
     function drawList() {
       const idx = new Map(l.route.map((id, i) => [id, i]));
       let tot = 0, prev = null;
-      for (const id of l.route) { const g = geo.get(id); if (g && prev) tot += km(prev, g); if (g) prev = g; }
-      listBox.replaceChildren(...l.route.map((id, i) => {
+      const vs = vis();
+      for (const id of vs) { const g = geo.get(id); if (g && prev) tot += km(prev, g); if (g) prev = g; }
+      listBox.replaceChildren(...vs.map((id, k) => {
+        const i = l.route.indexOf(id);
         const r = l.rows.find(x => x.id === id); if (!r) return null;
         const lb = label(r), g = geo.get(id);
-        const move = dlt => { const j = i + dlt; if (j < 0 || j >= l.route.length) return; [l.route[i], l.route[j]] = [l.route[j], l.route[i]]; persist(); redraw(); };
+        // למעלה / למטה: מחליף עם התחנה הסמוכה ברשימה המוצגת (באותו יום)
+        const move = dlt => { const o = vs[k + dlt]; if (!o) return; const j = l.route.indexOf(o); [l.route[i], l.route[j]] = [l.route[j], l.route[i]]; persist(); redraw(); };
         return h('div', { class: 'wl-stop' + (done(r) ? ' done' : '') },
           rnumInput(l, id, () => { persist(); redraw(); }),
           h('div', { style: 'flex:1;min-width:0' }, h('b', {}, lb.name), done(r) ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הסתיים') : null,
             h('div', { class: 'muted small' }, lb.addr + (g ? (g.approx ? ' · מיקום משוער' : '') : geo.has(id) ? '' : ' · לא נמצא במפה'))),
-          h('button', { class: 'icon-btn', title: 'למעלה', 'aria-label': 'הזז למעלה', disabled: i === 0 ? true : null, onclick: () => move(-1) }, '↑'),
-          h('button', { class: 'icon-btn', title: 'למטה', 'aria-label': 'הזז למטה', disabled: i === l.route.length - 1 ? true : null, onclick: () => move(1) }, '↓'),
+          h('button', { class: 'icon-btn', title: 'למעלה', 'aria-label': 'הזז למעלה', disabled: k === 0 ? true : null, onclick: () => move(-1) }, '↑'),
+          h('button', { class: 'icon-btn', title: 'למטה', 'aria-label': 'הזז למטה', disabled: k === vs.length - 1 ? true : null, onclick: () => move(1) }, '↓'),
           h('a', { class: 'btn', href: navUrl(r), target: '_blank', rel: 'noopener' }, 'וייז'),
           h('button', { class: 'icon-btn', title: 'הוצא מהמסלול', 'aria-label': 'הוצא מהמסלול', onclick: () => { l.route.splice(i, 1); persist(); redraw(); } }, '✕'));
       }));
@@ -1062,7 +1110,7 @@
     const driveCache = new Map();
     const hm = m => m >= 60 ? `${Math.floor(m / 60)} ש' ${Math.round(m % 60)} דק'` : `${Math.round(m)} דק'`;
     function showStatus() {
-      status.textContent = `${l.route.length} תחנות במסלול` + (drive ? ` · ${Math.round(drive.km)} ק"מ נסיעה בכבישים · כ-${hm(drive.min)} (בלי עצירות)` : airKm ? ` · כ-${Math.round(airKm)} ק"מ בקו אווירי` : '');
+      status.textContent = (day ? `${day}: ` : '') + `${vis().length} תחנות במסלול` + (drive ? ` · ${Math.round(drive.km)} ק"מ נסיעה בכבישים · כ-${hm(drive.min)} (בלי עצירות)` : airKm ? ` · כ-${Math.round(airKm)} ק"מ בקו אווירי` : '');
     }
     const redraw = () => { drawList(); drawMap(); };
     async function locateAll() {
@@ -1078,8 +1126,9 @@
     }
     async function auto() {
       await locateAll();
-      const ids = l.route.filter(id => geo.get(id));
-      const rest = l.route.filter(id => !geo.get(id));
+      const scope = vis(), slots = scope.map(id => l.route.indexOf(id)); // יום שנבחר: מסדרים רק אותו, במקומות שלו במסלול
+      const ids = scope.filter(id => geo.get(id));
+      const rest = scope.filter(id => !geo.get(id));
       let start = null;
       if (fromMe.checked) start = await new Promise(res => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lon: p.coords.longitude }), () => res(null), { timeout: 8000, maximumAge: 120000 }) : res(null));
       if (fromMe.checked && !start) ui.toast('המיקום שלך לא זמין, המסלול מסודר מצפון לדרום', 3500);
@@ -1093,7 +1142,8 @@
         } catch (e) { /* בלי שירות ניתוב: קו אווירי */ }
       }
       const ord = bestOrder(pts, start, cost);
-      l.route = [...ord.map(i => ids[i]), ...rest];
+      const neu = [...ord.map(i => ids[i]), ...rest];
+      if (day) { const r2 = l.route.slice(); slots.forEach((p, k) => { r2[p] = neu[k]; }); l.route = r2; } else l.route = neu;
       persist(); redraw();
       ui.toast(cost ? 'המסלול סודר לפי זמן הנסיעה בכבישים' : 'שירות הניתוב לא זמין: המסלול סודר לפי קו אווירי', 3000);
     }
@@ -1128,11 +1178,12 @@
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' },
             h('button', { class: 'btn primary', onclick: ev => { ev.currentTarget.disabled = true; auto().finally(() => { ev.target.disabled = false; }); } }, '⚡ סדר אוטומטי (הכי מהר בכבישים)'),
             h('label', { class: 'row small', style: 'gap:6px' }, fromMe, 'להתחיל מהמיקום שלי')),
-          linksBox, status, listBox,
+          dayBox, linksBox, status, listBox,
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
             h('button', { class: 'btn', onclick: async () => { await DB.setKV('wlView:' + l.id, { sort: { col: '_route', dir: 1 }, filt: {} }); ui.go(back); } }, 'מיין את הטבלה לפי המסלול'),
             h('button', { class: 'btn', onclick: async () => { l.route = live().filter(r => !done(r)).map(r => r.id); persist(); await locateAll(); redraw(); } }, 'כל מה שלא הסתיים')),
           outBox)));
+    drawDays();
     drawList();
     try {
       await ui.leaflet();

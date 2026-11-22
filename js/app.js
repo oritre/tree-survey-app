@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.117.0';
+  const APP_VERSION = '1.118.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1489,7 +1489,7 @@
     const btnM = h('button', { class: 'btn primary big', disabled: true }, '🗺 מפה לשיתוף');
     app.replaceChildren(bar(wl ? { title: 'אורנים ומפות', sub: wl.name } : 'אורנים ומפות', back), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
-        h('div', { class: 'small' }, 'בחר פרויקט שלם או כמה סקרים. ריכוז האורנים יוצא כאקסל עם שני גיליונות: "מוסדות" (שורה לכל מוסד עם הסמלים, הכתובת ומספר האורנים) ו"כל האורנים" (כל אורן עם המיקום, הגובה, הצמרת, הגזעים, נ"צ וקישור לגוגל מפות). המפה היא דף אינטרנט: נקודה ירוקה לעץ תקין, אדומה לעץ שדורש טיפול, ולחיצה על נקודה מציגה את פרטי העץ.'),
+        h('div', { class: 'small' }, 'בחר פרויקט שלם או כמה סקרים. ריכוז האורנים יוצא כאקסל עם שני גיליונות: "מוסדות" (שורה לכל מוסד עם הסמלים, הכתובת ומספר האורנים) ו"כל האורנים" (כל אורן עם המיקום, הגובה, הגזעים, נ"צ וקישור לגוגל מפות). המפה היא דף אינטרנט: נקודה ירוקה לעץ תקין, אדומה לעץ שדורש טיפול, ולחיצה על נקודה מציגה את פרטי העץ.'),
         h('label', { class: 'row small', style: 'gap:8px' }, latest, 'רק הסקר האחרון בכל מוסד (כדי לא לספור פעמיים)'),
         h('div', { class: 'row' }, btnP, btnM), status),
       q, msg, list));
@@ -2365,7 +2365,7 @@
     };
     showSplit(); showDup();
 
-    // מין העץ + אורנים: כפתור "פרטי אורנים" (חלון לכל אורן בשורה: מיקום, גובה, צמרת, גזעים, נ"צ)
+    // מין העץ + אורנים: כפתור "פרטי אורנים" (חלון לכל אורן בשורה: מיקום, גובה, גזעים, נ"צ)
     const pineInfo = h('span', { class: 'small' });
     const pineBtn = h('button', { class: 'btn', type: 'button', onclick: () => openPines(t, () => { markPine(); changed(); }) }, '🌲 פרטי אורנים');
     const pineWrap = h('div', { class: 'row pine-box', style: 'gap:10px;align-items:center;flex-wrap:wrap' }, pineBtn, pineInfo);
@@ -2680,9 +2680,9 @@
   }
 
   // ---------- פרטי אורנים (1.116, ori) ----------
-  // כשמין העץ הוא אורן (בירושלים): חלון שבו לכל אורן בשורה מיקום, גובה, קוטר צמרת, קוטר לכל גזע ונ"צ (סמן על תצלום אוויר).
+  // כשמין העץ הוא אורן (בירושלים): חלון שבו לכל אורן בשורה מיקום, גובה, קוטר לכל גזע ונ"צ (סמן על תצלום אוויר).
   // ההערות של העץ נשארות נפרדות. מזה יוצא "ריכוז אורנים" באקסל, בנוסף לדוח הרגיל
-  const newPine = () => ({ id: uid(), loc: '', h: '', c: '', trunks: [''] });
+  const newPine = () => ({ id: uid(), loc: '', h: '', trunks: [''] });
   const pineNum = v => { const x = String(v == null ? '' : v).replace(',', '.').trim(); return x === '' || isNaN(+x) ? '' : +x; };
   // משנה את מספר האורנים בשורה (גם מהדיבור). t.pines נשאר מספר, לעמודה J באקסל (לא מודפסת)
   function setPineCount(t, n) {
@@ -2839,7 +2839,7 @@
       return h('div', { class: 'card stack pine-card' },
         h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' }, h('b', { style: 'font-size:18px' }, `🌲 אורן ${i + 1}`), missEl, del),
         field('מיקום', locIn), chips,
-        h('div', { class: 'grid2' }, field('גובה (מ\')', numIn(p, 'h', 'מטר')), field('קוטר צמרת (מ\')', numIn(p, 'c', 'מטר'))),
+        field('גובה (מ\')', numIn(p, 'h', 'מטר')),
         field('קוטר גזע (ס"מ), לכל גזע בנפרד', trunks),
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' }, gpsBtn, mapBtn), posEl);
     };
@@ -3475,7 +3475,7 @@
     };
     return h('div', { class: 'card stack' },
       h('h2', { style: 'margin:0;font-size:20px' }, '🌲 ריכוז אורנים'),
-      h('div', { class: 'muted small' }, `${n} אורנים ב-${rows.length} שורות. אקסל נפרד מהדוח: פרטי המוסד (${Reports.codesOf(s.code).length > 1 ? 'שני סמלי המוסד' : 'סמל מוסד'}, שם, כתובת), ולכל אורן מיקום, גובה, קוטר צמרת, הגזעים, נ"צ ברשת ישראל ובגוגל וקישור לגוגל מפות. עולה לבד לגוגל דרייב ב"סיום סקר".`),
+      h('div', { class: 'muted small' }, `${n} אורנים ב-${rows.length} שורות. אקסל נפרד מהדוח: פרטי המוסד (${Reports.codesOf(s.code).length > 1 ? 'שני סמלי המוסד' : 'סמל מוסד'}, שם, כתובת), ולכל אורן מיקום, גובה, הגזעים, נ"צ ברשת ישראל ובגוגל וקישור לגוגל מפות. עולה לבד לגוגל דרייב ב"סיום סקר".`),
       miss ? h('div', { class: 'small', style: 'color:var(--danger)' }, `ב-${miss} אורנים חסרים פרטים (ראה "בדיקה לפני הפקה").`) : null,
       h('div', { class: 'row' },
         h('button', { class: 'btn primary big', onclick: run(false) }, 'הורד ריכוז אורנים (אקסל)'),
