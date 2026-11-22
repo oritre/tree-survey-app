@@ -866,22 +866,52 @@
     const ix = await prevIndex(); ix[f.id] = { size: b.size, t: Date.now() }; await DB.setKV('wlPrevIdx', ix);
     return b;
   }
-  // הורדה מראש שסומנה במכשיר אחר (r.prev.pre): מורידים ברקע את מה שחסר במכשיר הזה
-  const preBusy = new Set();
-  async function prevAuto(l, done) {
-    if (preBusy.has(l.id) || navigator.onLine === false) return;
-    const ix = await prevIndex();
-    const fs = l.rows.filter(r => !r.deleted && !r.sid && r.prev && r.prev.pre && r.prev.kind === 'file' && r.prev.f && !ix[r.prev.f.id]);
-    if (!fs.length) return;
-    preBusy.add(l.id);
-    try {
-      if (!(await OD.connected())) return;
-      U().toast(`מוריד מראש ${fs.length} סקרים קודמים למכשיר הזה…`, 4000);
-      let ok = 0;
-      for (const r of fs) { try { await prevBlob(r.prev.f); ok++; } catch (e) { /* ננסה שוב בפתיחה הבאה */ } }
-      if (ok) { U().toast(`${ok} סקרים קודמים הורדו מראש` + (ok < fs.length ? `, ${fs.length - ok} נכשלו` : ''), 4000); if (done) done(); }
-    } finally { preBusy.delete(l.id); }
+  // הורדה מראש שסומנה במכשיר אחר (r.prev.pre): מורידים ברקע את מה שחסר במכשיר הזה, לכל הרשימות, מיד כשהאפליקציה נפתחת (1.130)
+  // קובץ אחרי קובץ, כדי לא להכביד. אפשר להשהות (נשמר במכשיר: KV wlPreOff) ולהמשיך
+  const pre = { run: false, off: false, hide: false, i: 0, n: 0, bad: 0, el: null, done: null, loaded: false };
+  const preTodo = async () => {
+    const ix = await prevIndex(), seen = new Set(), out = [];
+    for (const l of await live()) for (const r of l.rows || [])
+      if (!r.deleted && !r.sid && r.prev && r.prev.pre && r.prev.kind === 'file' && r.prev.f && !ix[r.prev.f.id] && !seen.has(r.prev.f.id)) { seen.add(r.prev.f.id); out.push(r.prev.f); }
+    return out;
+  };
+  function prePill() {
+    const { h } = U();
+    if (!pre.el) { pre.el = h('div', { class: 'wl-prepill', role: 'status' }); document.body.append(pre.el); }
+    const left = pre.n - pre.i;
+    pre.el.hidden = pre.hide || (!pre.run && !(pre.off && left > 0));
+    if (pre.el.hidden) return;
+    pre.el.replaceChildren(
+      h('span', {}, pre.off ? `הורדת סקרים קודמים מושהית (נשארו ${left})` : `מוריד סקרים קודמים ${Math.min(pre.i + 1, pre.n)} מתוך ${pre.n}`),
+      pre.off ? h('button', { class: 'btn', onclick: () => preSet(false) }, '▶ המשך') : h('button', { class: 'btn', onclick: () => preSet(true) }, '⏸ השהה'),
+      h('button', { class: 'icon-btn', title: 'הסתר', 'aria-label': 'הסתר', onclick: () => { pre.hide = true; prePill(); } }, '✕'));
   }
+  async function preSet(off) { pre.off = off; pre.hide = false; await DB.setKV('wlPreOff', off); prePill(); if (!off) prevAuto(null, pre.done); }
+  async function prevAuto(l, done) {
+    if (done) pre.done = done;
+    if (!pre.loaded) { pre.off = !!(await DB.getKV('wlPreOff', false)); pre.loaded = true; }
+    if (pre.run) return;
+    pre.run = true;
+    try {
+      let fs = await preTodo();
+      pre.i = 0; pre.n = fs.length; pre.bad = 0;
+      if (!fs.length || pre.off || navigator.onLine === false || !(await OD.connected())) return;
+      prePill();
+      let ok = 0;
+      for (const f of fs) {
+        if (pre.off || navigator.onLine === false) break;
+        prePill();
+        try { await prevBlob(f); ok++; } catch (e) { pre.bad++; /* ננסה שוב בפתיחה הבאה */ }
+        pre.i++;
+      }
+      if (ok) { if (!pre.off) U().toast(`${ok} סקרים קודמים הורדו מראש` + (pre.bad ? `, ${pre.bad} נכשלו` : ''), 4000); if (pre.done) try { pre.done(); } catch (e) { /* המסך כבר נסגר */ } }
+    } catch (e) { /* בלי רשת או בלי דרייב: בפעם הבאה */ } finally { pre.run = false; prePill(); }
+  }
+  // מתחיל לבד: כשהאפליקציה נפתחת, כשחוזרים אליה, וכשהרשת חוזרת. קודם סנכרון הרשימות, כדי לקבל סימונים ממכשיר אחר
+  const preKick = () => { if (document.visibilityState === 'hidden') return; sync(false).catch(() => {}).then(() => prevAuto()); };
+  setTimeout(preKick, 3500);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') preKick(); });
+  window.addEventListener('online', preKick);
   const prevPath = p => p && p.kind === 'file' ? (p.path || []).join(' / ') : 'סקר באפליקציה';
   // פתיחת הקובץ של הסקר הקודם: אקסל (הקובץ עצמו), או PDF באותו שם שנמצא לידו בדרייב
   async function openPrevFile(p, mode) {
@@ -942,7 +972,16 @@
         return Object.assign(xs[0], { sure, why: 'לפי שם המוסד' + (sure ? '' : tie(xs)) });
       },
     };
-    for (const k of prevBy(l)) { const x = by[k] ? await by[k]() : null; if (x) return x; }
+    for (const k of prevBy(l)) {
+      const x = by[k] ? await by[k]() : null;
+      if (!x) continue;
+      // מה תואם ומה לא בין השורה לקובץ, בכל הבדיקות (גם אלה שלא לפיהן נמצא): להשוואה לפני אישור. null = אין מה לבדוק בשורה
+      const hay = norm(x.f.name), nws = [...new Set(norm(v.siteName || '').split(' ').filter(w => w.length >= 2 && !/\d/.test(w) && !STOP.has(w)))];
+      x.m = { code: codes.length ? !!x.byCode || codes.some(c => x.f.name.includes(c)) : null,
+        street: streetKey(v.street).word ? !!(x.stHit && x.numHit) : null,
+        name: nws.length ? nws.every(w => hasWord(hay, w)) : null };
+      return x;
+    }
     return null;
   }
   // לפי מה משייכים ובאיזה סדר (1.129): l.prevBy, ברירת מחדל סמל מוסד ואחריו רחוב ומספר
@@ -1038,7 +1077,9 @@
             : x ? h('input', { type: 'checkbox', 'aria-label': 'אשר הצעה', checked: ok.has(r.id), onchange: e => { e.target.checked ? ok.add(r.id) : ok.delete(r.id); draw(); } }) : h('span', { style: 'width:20px' }),
           h('div', { style: 'flex:1;min-width:0' }, h('b', {}, n.name), h('div', { class: 'muted small' }, n.sub),
             p ? fileLine(p, p.kind === 'file' && ix[p.f.id] ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הורד') : null)
-              : x ? h('div', {}, fileLine(prevOf(x)), h('div', { class: 'small', style: 'color:#8a5200' }, (x.sure ? 'הצעה: ' : 'הצעה לבדיקה: ') + x.why + (x.year ? ' · ' + x.year : '')))
+              : x ? h('div', {}, fileLine(prevOf(x)),
+                h('div', { class: 'small wl-match' }, 'בקובץ הקודם: ', ...PREV_BY.filter(c => x.m && x.m[c[0]] != null).map(c => h('span', { class: x.m[c[0]] ? 'yes' : 'no' }, (x.m[c[0]] ? '✓ ' : '✗ ') + c[1] + (x.m[c[0]] ? ' תואם' : ' שונה')))),
+                h('div', { class: 'small', style: 'color:#8a5200' }, (x.sure ? 'הצעה: ' : 'הצעה לבדיקה: ') + x.why + (x.year ? ' · ' + x.year : '')))
               : h('div', { class: 'muted small' }, 'אין סקר קודם משויך')),
           p && p.kind === 'file' ? h('button', { class: 'btn', onclick: () => openPrevFile(p, 'xlsx').then(draw) }, 'אקסל') : null,
           p && p.kind === 'file' ? h('button', { class: 'btn', onclick: () => openPrevFile(p, 'pdf') }, 'PDF') : null,

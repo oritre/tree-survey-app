@@ -702,3 +702,11 @@ img.docv-page { object-fit: contain; }
 .wl-prow.prop > div .muted { color: #5c5540; }
 .wl-prow.prop > .btn { background: #fff; color: #1f1a0a; border-color: #c9b36a; }
 .wl-prow input[type=checkbox] { width: 20px; height: 20px; flex: none; }
+
+/* הורדה מראש של סקרים קודמים ברקע (1.130) */
+.wl-prepill { position: fixed; inset-inline-start: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 60; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-radius: 999px; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); box-shadow: 0 4px 16px rgba(0, 0, 0, .25); font-size: 14px; max-width: calc(100vw - 24px); }
+.wl-prepill[hidden] { display: none; }
+.wl-prepill .btn { min-height: 34px; padding: 4px 12px; font-size: 14px; }
+.wl-match span { display: inline-block; margin-inline-end: 8px; padding: 1px 8px; border-radius: 999px; font-weight: 700; }
+.wl-match .yes { background: #d9efd3; color: #1d5a22; }
+.wl-match .no { background: #fbdcd8; color: #9a1c14; }
