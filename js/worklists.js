@@ -1005,7 +1005,8 @@
     const nm = r => { const v = valuesOf(l, r); return { name: v.siteName || (nameCol && clean(r.cells[nameCol.id])) || 'שורה', sub: [v.code ? 'סמל ' + v.code : null, geoStreet(v.street), v.city].filter(Boolean).join(' · ') }; };
     const rows = () => l.rows.filter(r => !r.deleted && !r.sid);
     const ix = await prevIndex();
-    const prop = new Map(), sel = new Set(), ok = new Set(), open = new Set();
+    const prop = new Map(), sel = new Set(), ok = new Set(), open = new Set(), view = { f: 'all', s: 'list' };
+    const fltBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' });
     const status = h('div', { class: 'muted small', role: 'status' });
     const box = h('div', { class: 'stack' });
     const close = () => { ov.remove(); if (redrawTable) redrawTable(); };
@@ -1082,7 +1083,21 @@
       const ls = linked();
       allBox.checked = ls.length > 0 && ls.every(r => sel.has(r.id));
       const fileLine = (p, extra) => h('div', { class: 'small wl-pfile' }, h('span', { class: 'muted' }, '📁 ' + prevPath(p) + (p.kind === 'file' ? ' / ' : '')), p.kind === 'file' ? h('b', {}, p.f.name) : h('b', {}, ' ' + p.name), extra || null);
-      box.replaceChildren(...rows().map(r => {
+      // סינון ומיון (1.134): מצב השורה, וכמה מהבדיקות (סמל, רחוב, שם) תואמות בהצעה
+      const kindOf = r => r.prev && !r.prev.none ? 'linked' : prop.has(r.id) ? (ok.has(r.id) ? 'ok' : 'check') : 'none';
+      const hitsOf = r => { const x = prop.get(r.id); return x && x.m ? Object.values(x.m).filter(v => v === true).length : -1; };
+      const all = rows(), cnt = k => all.filter(r => kindOf(r) === k).length;
+      const FL = [['all', 'הכול', all.length], ['ok', 'הצעות מסומנות', cnt('ok')], ['check', 'הצעות לבדיקה', cnt('check')], ['linked', 'משויכים', cnt('linked')], ['none', 'בלי שיוך ובלי הצעה', cnt('none')]];
+      if (!FL.some(f => f[0] === view.f && (f[2] || f[0] === 'all'))) view.f = 'all';
+      fltBox.replaceChildren(h('b', { class: 'small' }, 'הצג:'), ...FL.filter(f => f[2] || f[0] === 'all').map(f => h('button', { class: 'chip' + (view.f === f[0] ? ' on' : ''), 'aria-pressed': String(view.f === f[0]), onclick: () => { view.f = f[0]; draw(); } }, `${f[1]} (${f[2]})`)),
+        h('label', { class: 'row small', style: 'gap:6px;align-items:center;margin-inline-start:auto' }, 'מיון:',
+          h('select', { onchange: e => { view.s = e.target.value; draw(); } }, ...[['list', 'לפי סדר הרשימה'], ['most', 'הכי הרבה התאמות קודם'], ['least', 'הכי פחות התאמות קודם'], ['state', 'לפי מצב: לבדיקה, מסומנות, בלי שיוך, משויכים']].map(o => h('option', { value: o[0], selected: view.s === o[0] }, o[1])))));
+      let shown = all.filter(r => view.f === 'all' || kindOf(r) === view.f);
+      const ST = { check: 0, ok: 1, none: 2, linked: 3 }, idx = new Map(all.map((r, i) => [r.id, i]));
+      if (view.s === 'most') shown = shown.slice().sort((a, b) => hitsOf(b) - hitsOf(a) || idx.get(a.id) - idx.get(b.id));
+      else if (view.s === 'least') shown = shown.slice().sort((a, b) => (hitsOf(a) < 0) - (hitsOf(b) < 0) || hitsOf(a) - hitsOf(b) || idx.get(a.id) - idx.get(b.id));
+      else if (view.s === 'state') shown = shown.slice().sort((a, b) => ST[kindOf(a)] - ST[kindOf(b)] || idx.get(a.id) - idx.get(b.id));
+      box.replaceChildren(...shown.map(r => {
         const n = nm(r), p = r.prev && !r.prev.none ? r.prev : null, x = prop.get(r.id);
         return h('div', { class: 'wl-stop wl-prow' + (x ? ' prop' : '') },
           p ? h('input', { type: 'checkbox', 'aria-label': 'בחר', checked: sel.has(r.id), onchange: e => { e.target.checked ? sel.add(r.id) : sel.delete(r.id); draw(); } })
@@ -1117,7 +1132,7 @@
         h('label', { class: 'row small', style: 'gap:8px;align-items:center;flex-wrap:wrap' }, 'להתעלם מקבצים שבשם שלהם יש:', skipInp),
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, btnAuto, btnOk),
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' }, h('label', { class: 'row small', style: 'gap:6px;align-items:center' }, allBox, 'בחר את כל המשויכים'), btnGet, btnZip),
-        status, box,
+        status, fltBox, box,
         h('button', { class: 'btn', onclick: close }, 'סגור')));
     document.body.append(ov);
     drawBy(); draw();
