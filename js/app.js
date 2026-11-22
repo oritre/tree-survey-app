@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.113.0';
+  const APP_VERSION = '1.113.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -3856,7 +3856,7 @@
           folders.length ? null : h('div', { class: 'muted small' }, 'אין כאן תתי תיקיות')].filter(Boolean));
       } catch (e) { list.replaceChildren(h('div', {}, (e instanceof OD.AuthError ? 'צריך להתחבר לגוגל דרייב. ' : 'נכשל: ') + e.message)); }
     };
-    const ov = h('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px' },
+    const ov = h('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90;display:flex;align-items:center;justify-content:center;padding:16px' },
       h('div', { class: 'card stack', style: 'width:min(560px,100%)' },
         h('div', { class: 'muted small' }, note || 'הסקרים הישנים יחופשו רק בתיקייה שתבחר ובכל התיקיות שבתוכה'),
         title, list, h('div', { class: 'row' }, choose, h('button', { class: 'btn', onclick: close }, 'ביטול'))));
