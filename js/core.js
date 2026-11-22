@@ -243,7 +243,9 @@
     if (trees.length > MAX_TREES) w.push(`יש ${trees.length} עצים, ובתבנית יש מקום ל-${MAX_TREES} בלבד.`);
     for (const t of sortTrees(trees)) {
       const name = 'עץ ' + (t.num || t.species);
-      if (isJerusalem(survey) && isPine(t.species) && !(t.pineList || []).length) w.push(`${name}: אורן בלי פרטי אורנים.`);
+      if (pinesOn(survey) && isPine(t.species) && !(t.pineList || []).length) w.push(`${name}: אורן בלי פרטי אורנים.`);
+      // תזכורת: אורן שנכתב בהערות ולא במין העץ לא נכנס לריכוז האורנים
+      if (pinesOn(survey) && !isPine(t.species) && isPine(t.notes)) w.push(`${name}: בהערות כתוב אורן, אבל מין העץ לא אורן, ולכן הוא לא ייכנס לריכוז האורנים.`);
       (t.pineList || []).forEach((p, i) => { const m = pineMissing(p); if (m.length) w.push(`${name}: באורן ${i + 1} חסר ${m.join(', ')}.`); });
       if (t.split && !splitActive(t)) w.push(`${name}: סומן פצל אבל מספר העץ לא תקין לפיצול.`);
       if (!(t.photos || []).length) w.push(`${name}: אין תמונה.`);
@@ -253,6 +255,7 @@
       if (!splitActive(t)) continue;
       for (const n of expandNum(t.num)) if (!(t.photos || []).some(p => p.sub === n)) w.push(`עץ ${n} (מתוך ${t.num}): אין תמונה למספר הזה.`);
     }
+    if (pinesOn(survey) && !trees.some(t => isPine(t.species) || (t.pineList || []).length)) w.push('סקר אורנים: עוד לא הוזן אף אורן (אם אין אורנים באתר, אפשר לכבות "ריכוז אורנים" בפרטי הסקר).');
     const rs = reportSlots(survey.trees);
     if (rs.length > MAX_PRINTED) w.push(`סומנו ${rs.length} תמונות לדוח, והדוח מקבל עד ${MAX_PRINTED}. התמונות שאחרי ${MAX_PRINTED} לא ייכנסו.`);
     return w;
@@ -272,12 +275,15 @@
     return parts.length > 1 && parts.every(x => /^\d{3,}$/.test(x)) ? parts : c ? [c] : [];
   }
 
+  // ריכוז אורנים (1.122): רק בסקר שהודלק בו (s.pinesMode), למשל משורה ברשימה שכתוב בה "אורנים". בשאר הסקרים אין חלון ואין תזכורות
+  function pinesOn(s) { return !!(s && s.pinesMode && s.type !== 'construction'); }
+
   // עבודה בירושלים: העיר, הרחוב, שם המוסד או הפרויקט כוללים "ירושלים" (גם "ירושליים"). רק בהן קופץ חלון פרטי האורנים
   function isJerusalem(s) {
     return [s.project, s.city, s.street, s.siteName, s.site].some(x => /ירושלי?ים|jerusalem/i.test(x || ''));
   }
 
-  const api = { placeOf, codesOf, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, pinePlural, pineCount, pineMissing, jValue, hasContent,
+  const api = { placeOf, codesOf, pinesOn, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, pinePlural, pineCount, pineMissing, jValue, hasContent,
     sortTrees, splitActive, slotsOf, photoForSlot, groupKey, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
     nextNum, warnings, OK, DEFAULT_URGENCY, isOk, urgencyCell, notesCell, setUrgency };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
