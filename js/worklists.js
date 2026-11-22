@@ -946,7 +946,9 @@
     const codes = String(v.code || '').split(/[^\d]+/).filter(x => x.length >= 4);
     // קבצים שהמשתמש ביקש להתעלם מהם (מילים בשם הקובץ, למשל "פירוט ביצוע")
     const skip = (l.prevSkip || []).map(norm).filter(Boolean);
-    const keep = xs => skip.length ? xs.filter(x => !skip.some(w => norm(x.f.name).includes(w))) : xs;
+    // r.prevNo (1.137): קבצים שסימנת לשורה הזו כ"לא מתאים", לא מוצעים לה שוב
+    const no = new Set(r.prevNo || []);
+    const keep = xs => xs.filter(x => !no.has(x.f.id) && !skip.some(w => norm(x.f.name).includes(w)));
     // קובץ שבשם שלו יש סמל של מוסד אחר (כמה גנים באותה כתובת) לא מוצע
     // (1.133) קובץ כזה כן מוצע, אבל אחרי קבצים בלי סמל אחר, ואף פעם לא מסומן מראש: אולי הסמל השתנה ואולי זה מוסד אחר באותה כתובת
     const otherCode = x => (x.f.name.match(/\d{5,7}/g) || []).find(n => !codes.includes(n)) || '';
@@ -957,6 +959,16 @@
     // אותו קובץ בכמה תיקיות (אותו שם ואותו גודל) נחשב קובץ אחד; שאר המקומות נשמרים ב-dups להצגה
     const uniq = xs => { const m = new Map(), out = []; for (const x of xs) { const k = x.f.size ? x.f.name + '|' + x.f.size : 'id' + x.f.id, a = m.get(k); if (a) (a.dups = a.dups || []).push(x); else { m.set(k, x); out.push(x); } } return out; };
     const tie = xs => ' · לא סומן: יש עוד קובץ שמתאים באותה מידה (ב"' + (xs[1].path.slice(-2).join(' / ') || 'דרייב') + '"), אפשר לראות ולבחור למטה';
+    // התאמת שם המוסד (1.137): המילים הארוכות (לפחות חצי מהן), וכל הסימנים הקצרים שמבדילים בין מוסדות ("גילה ב", "ארנונה 3 4"),
+    // ושסוג המוסד לא סותר: שורה של גן לא תואמת קובץ של בית ספר / תיכון, ולהפך
+    const nmAll = [...new Set(norm(v.siteName || '').split(' ').filter(w => w && !STOP.has(w)))];
+    const nm = { big: nmAll.filter(w => w.length >= 3 && !/\d/.test(w)), small: nmAll.filter(w => w.length < 3 || /\d/.test(w)) };
+    const TYPES = [['גן', /(^| )(גן|גני|גנון)( |$)/], ['ביס', /(^| )(ביס|בית ספר|יסודי|תיכון|חטב|חטיבה|ממד|ממלכתי|אולפנה|ישיבה)( |$)/], ['מעון', /(^| )(מעון|מעונות)( |$)/]];
+    const typesOf = t => TYPES.filter(x => x[1].test(t)).map(x => x[0]);
+    const rowTypes = typesOf(norm(v.siteName || ''));
+    const nameOk = hay => { const ft = typesOf(hay);
+      return nm.big.length > 0 && nm.big.filter(w => hasWord(hay, w)).length >= Math.ceil(nm.big.length / 2) && nm.small.every(w => hasWord(hay, w))
+        && !(rowTypes.length && ft.length && !rowTypes.some(t => ft.includes(t))); };
     const by = {
       async code() {
         if (!codes.length) return null;
@@ -979,10 +991,10 @@
       },
       // שם המוסד: כל המילים של השם (בלי מילים כלליות ומספרים) צריכות להופיע בשם הקובץ
       async name() {
-        const ws = [...new Set(norm(v.siteName || '').split(' ').filter(w => w.length >= 2 && !/\d/.test(w) && !STOP.has(w)))];
+        const ws = nm.big;
         if (!ws.length || ws.join('').length < 4) return null;
         const long = ws.slice().sort((a, b) => b.length - a.length)[0];
-        const xs = own(uniq(keep(score(await archiveFiles([long], l.folder || null))).filter(x => { const hay = norm(x.f.name); return ws.every(w => hasWord(hay, w)); })));
+        const xs = own(uniq(keep(score(await archiveFiles([long], l.folder || null))).filter(x => nameOk(norm(x.f.name)))));
         if (!xs.length) return null;
         xs[0].alts = xs;
         const clear = xs.length === 1 || xs[0].sc > xs[1].sc || !!xs[1].oc, sure = clear && !xs[0].oc;
@@ -993,11 +1005,10 @@
       const x = by[k] ? await by[k]() : null;
       if (!x) continue;
       // מה תואם ומה לא בין השורה לקובץ, בכל הבדיקות (גם אלה שלא לפיהן נמצא): להשוואה לפני אישור. null = אין מה לבדוק בשורה
-      const nws = [...new Set(norm(v.siteName || '').split(' ').filter(w => w.length >= 2 && !/\d/.test(w) && !STOP.has(w)))];
       for (const y of x.alts || [x]) { const hay = norm(y.f.name);
         y.m = { code: codes.length ? k === 'code' || codes.some(c => y.f.name.includes(c)) : null,
           street: streetKey(v.street).word ? !!(y.stHit && y.numHit) : null,
-          name: nws.length ? nws.every(w => hasWord(hay, w)) : null }; }
+          name: nm.big.length ? nameOk(hay) : null }; }
       x.alts = (x.alts || [x]).slice(0, 8);
       return x;
     }
@@ -1012,7 +1023,16 @@
     const nm = r => { const v = valuesOf(l, r); return { name: v.siteName || (nameCol && clean(r.cells[nameCol.id])) || 'שורה', sub: [v.code ? 'סמל ' + v.code : null, geoStreet(v.street), v.city].filter(Boolean).join(' · ') }; };
     const rows = () => l.rows.filter(r => !r.deleted && !r.sid);
     const ix = await prevIndex();
-    const prop = new Map(), sel = new Set(), ok = new Set(), open = new Set(), view = { f: 'all', s: 'list' };
+    const prop = new Map(), sel = new Set(), ok = new Set(), bad = new Set(), open = new Set(), view = { f: 'all', s: 'list' };
+    function verdict(r, x, v) {
+      ok.delete(r.id); bad.delete(r.id);
+      const had = (r.prevNo || []).includes(x.f.id);
+      if (v === 'ok') ok.add(r.id);
+      if (v === 'bad') { bad.add(r.id); if (!had) r.prevNo = [...new Set([...(r.prevNo || []), x.f.id, ...(x.dups || []).map(d => d.f.id)])].slice(-40); } // גם העותקים הזהים שלו
+      else if (had) { const out = new Set([x.f.id, ...(x.dups || []).map(d => d.f.id)]); r.prevNo = r.prevNo.filter(id => !out.has(id)); if (!r.prevNo.length) delete r.prevNo; }
+      if (had !== (r.prevNo || []).includes(x.f.id)) { r.u = Date.now(); save(l); }
+      draw();
+    }
     const fltBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' });
     const status = h('div', { class: 'muted small', role: 'status' });
     const box = h('div', { class: 'stack' });
@@ -1044,7 +1064,7 @@
       if (navigator.onLine === false || !(await OD.connected())) { status.textContent = 'צריך חיבור לגוגל דרייב כדי לחפש סקרים קודמים.'; return; }
       if (!prevBy(l).length) { status.textContent = 'סמן לפחות דבר אחד לשייך לפיו.'; return; }
       const todo = rows().filter(r => !(r.prev && !r.prev.none));
-      prop.clear(); ok.clear();
+      prop.clear(); ok.clear(); bad.clear();
       let i = 0, found = 0;
       const next = async () => { while (todo.length) { const r = todo.shift(); const x = await proposePrev(l, r).catch(() => null); i++; if (x) { prop.set(r.id, x); found++; if (x.sure) ok.add(r.id); } status.textContent = `מחפש… ${i} שורות נבדקו, ${found} הצעות`; if (i % 4 === 0) draw(); } };
       await Promise.all([next(), next(), next()]);
@@ -1056,12 +1076,13 @@
         if (byCode.has(x.f.id)) { prop.delete(id); found--; continue; } // הקובץ שייך לשורה אחרת לפי הסמל
         x.sure = false; x.why += ' · אותו קובץ הוצע לכמה שורות'; ok.delete(id);
       }
-      status.textContent = found ? `נמצאו ${found} הצעות (${ok.size} מסומנות). עבור עליהן, סמן או בטל, ולחץ "אשר את ההצעות המסומנות". שום דבר לא נשמר עד שתאשר.` : 'לא נמצאו הצעות. אפשר לחפש לכל שורה בנפרד עם "חפש".';
+      status.textContent = found ? `נמצאו ${found} הצעות (${ok.size} מסומנות). לכל הצעה לחץ "מתאים" או "לא מתאים", ואז "אשר את ההצעות המסומנות". שום דבר לא נשמר עד שתאשר.` : 'לא נמצאו הצעות. אפשר לחפש לכל שורה בנפרד עם "חפש".';
     }
     async function confirmProps() {
       let n = 0;
-      for (const [id, x] of prop) if (ok.has(id)) { const r = l.rows.find(q => q.id === id); if (!r) continue; r.prev = Object.assign(prevOf(x), { manual: true }); r.u = Date.now(); sel.add(id); n++; }
-      prop.clear(); ok.clear();
+      for (const [id, x] of prop) if (ok.has(id) && !bad.has(id)) { const r = l.rows.find(q => q.id === id); if (!r) continue; r.prev = Object.assign(prevOf(x), { manual: true }); r.u = Date.now(); sel.add(id); n++; }
+      for (const id of [...prop.keys()]) if (!bad.has(id)) prop.delete(id); // מה שסומן "לא מתאים" נשאר לתצוגה
+      ok.clear();
       await save(l);
       status.textContent = `${n} שורות שויכו. עכשיו אפשר להוריד אותן מראש.`;
     }
@@ -1091,16 +1112,16 @@
       allBox.checked = ls.length > 0 && ls.every(r => sel.has(r.id));
       const fileLine = (p, extra) => h('div', { class: 'small wl-pfile' }, h('span', { class: 'muted' }, '📁 ' + prevPath(p) + (p.kind === 'file' ? ' / ' : '')), p.kind === 'file' ? h('b', {}, p.f.name) : h('b', {}, ' ' + p.name), extra || null);
       // סינון ומיון (1.134): מצב השורה, וכמה מהבדיקות (סמל, רחוב, שם) תואמות בהצעה
-      const kindOf = r => r.prev && !r.prev.none ? 'linked' : prop.has(r.id) ? (ok.has(r.id) ? 'ok' : 'check') : 'none';
+      const kindOf = r => r.prev && !r.prev.none ? 'linked' : prop.has(r.id) ? (bad.has(r.id) ? 'bad' : ok.has(r.id) ? 'ok' : 'check') : 'none';
       const hitsOf = r => { const x = prop.get(r.id); return x && x.m ? Object.values(x.m).filter(v => v === true).length : -1; };
       const all = rows(), cnt = k => all.filter(r => kindOf(r) === k).length;
-      const FL = [['all', 'הכול', all.length], ['ok', 'הצעות מסומנות', cnt('ok')], ['check', 'הצעות לבדיקה', cnt('check')], ['linked', 'משויכים', cnt('linked')], ['none', 'בלי שיוך ובלי הצעה', cnt('none')]];
+      const FL = [['all', 'הכול', all.length], ['ok', 'הצעות מסומנות', cnt('ok')], ['check', 'הצעות לבדיקה', cnt('check')], ['bad', 'לא מתאים', cnt('bad')], ['linked', 'משויכים', cnt('linked')], ['none', 'בלי שיוך ובלי הצעה', cnt('none')]];
       if (!FL.some(f => f[0] === view.f && (f[2] || f[0] === 'all'))) view.f = 'all';
       fltBox.replaceChildren(h('b', { class: 'small' }, 'הצג:'), ...FL.filter(f => f[2] || f[0] === 'all').map(f => h('button', { class: 'chip' + (view.f === f[0] ? ' on' : ''), 'aria-pressed': String(view.f === f[0]), onclick: () => { view.f = f[0]; draw(); } }, `${f[1]} (${f[2]})`)),
         h('label', { class: 'row small', style: 'gap:6px;align-items:center;margin-inline-start:auto' }, 'מיון:',
           h('select', { onchange: e => { view.s = e.target.value; draw(); } }, ...[['list', 'לפי סדר הרשימה'], ['most', 'הכי הרבה התאמות קודם'], ['least', 'הכי פחות התאמות קודם'], ['state', 'לפי מצב: לבדיקה, מסומנות, בלי שיוך, משויכים']].map(o => h('option', { value: o[0], selected: view.s === o[0] }, o[1])))));
       let shown = all.filter(r => view.f === 'all' || kindOf(r) === view.f);
-      const ST = { check: 0, ok: 1, none: 2, linked: 3 }, idx = new Map(all.map((r, i) => [r.id, i]));
+      const ST = { check: 0, ok: 1, bad: 2, none: 3, linked: 4 }, idx = new Map(all.map((r, i) => [r.id, i]));
       if (view.s === 'most') shown = shown.slice().sort((a, b) => hitsOf(b) - hitsOf(a) || idx.get(a.id) - idx.get(b.id));
       else if (view.s === 'least') shown = shown.slice().sort((a, b) => (hitsOf(a) < 0) - (hitsOf(b) < 0) || hitsOf(a) - hitsOf(b) || idx.get(a.id) - idx.get(b.id));
       else if (view.s === 'state') shown = shown.slice().sort((a, b) => ST[kindOf(a)] - ST[kindOf(b)] || idx.get(a.id) - idx.get(b.id));
@@ -1108,7 +1129,7 @@
         const n = nm(r), p = r.prev && !r.prev.none ? r.prev : null, x = prop.get(r.id);
         return h('div', { class: 'wl-stop wl-prow' + (x ? ' prop' : '') },
           p ? h('input', { type: 'checkbox', 'aria-label': 'בחר', checked: sel.has(r.id), onchange: e => { e.target.checked ? sel.add(r.id) : sel.delete(r.id); draw(); } })
-            : x ? h('input', { type: 'checkbox', 'aria-label': 'אשר הצעה', checked: ok.has(r.id), onchange: e => { e.target.checked ? ok.add(r.id) : ok.delete(r.id); draw(); } }) : h('span', { style: 'width:20px' }),
+            : h('span', { style: 'width:4px' }),
           h('div', { style: 'flex:1;min-width:0' }, h('b', {}, n.name), h('div', { class: 'muted small' }, n.sub),
             p ? fileLine(p, p.kind === 'file' && ix[p.f.id] ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הורד') : null)
               : x ? h('div', {}, fileLine(prevOf(x)),
@@ -1122,9 +1143,13 @@
                       h('div', { class: 'muted' }, [y.f.lastModifiedDateTime ? 'עודכן ' + ui.fmtDate(y.f.lastModifiedDateTime.slice(0, 10)) : null, y.f.size ? Math.max(1, Math.round(y.f.size / 1024)) + ' KB' : null, (y.dups || []).length ? 'עוד ' + y.dups.length + ' עותקים זהים' : null].filter(Boolean).join(' · '))),
                     h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(y.f.id) + '/view', target: '_blank', rel: 'noopener' }, 'הצג'),
                     y === x ? h('span', { class: 'wl-badge done' }, 'נבחר') : h('button', { class: 'btn', onclick: () => { prop.set(r.id, Object.assign(y, { alts: x.alts, byCode: x.byCode, sure: true, why: 'בחרת את הקובץ הזה' })); ok.add(r.id); draw(); } }, 'בחר את זה')))) : null)
-              : h('div', { class: 'muted small' }, 'אין סקר קודם משויך')),
+              : h('div', { class: 'muted small' }, 'אין סקר קודם משויך', (r.prevNo || []).length ? h('span', {}, ` · סימנת ${r.prevNo.length} קבצים כלא מתאימים `, h('button', { class: 'link-btn small', onclick: () => { delete r.prevNo; r.u = Date.now(); save(l); draw(); } }, 'נקה')) : null)),
           p && p.kind === 'file' ? h('button', { class: 'btn', onclick: () => openPrevFile(p, 'xlsx').then(draw) }, 'אקסל') : null,
           p && p.kind === 'file' ? h('button', { class: 'btn', onclick: () => openPrevFile(p, 'pdf') }, 'PDF') : null,
+          // הצעה: שלושה מצבים. מתאים (ייכנס לאישור) / לא מתאים (נשמר לשורה, לא יוצע לה שוב) / בלי החלטה = לבדיקה
+          x && !p ? h('div', { class: 'wl-verdict' },
+            h('button', { class: 'btn' + (ok.has(r.id) && !bad.has(r.id) ? ' yes' : ''), 'aria-pressed': String(ok.has(r.id) && !bad.has(r.id)), onclick: () => verdict(r, x, ok.has(r.id) && !bad.has(r.id) ? '' : 'ok') }, '✓ מתאים'),
+            h('button', { class: 'btn' + (bad.has(r.id) ? ' no' : ''), 'aria-pressed': String(bad.has(r.id)), onclick: () => verdict(r, x, bad.has(r.id) ? '' : 'bad') }, '✗ לא מתאים')) : null,
           x && !p ? h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(x.f.id) + '/view', target: '_blank', rel: 'noopener' }, 'הצג') : null,
           h('button', { class: 'btn', onclick: () => { ov.remove(); openRow(l, r, true, () => prevManager(l, redrawTable)); } }, p ? 'החלף' : 'חפש'),
           p ? h('button', { class: 'icon-btn', title: 'בטל שיוך', 'aria-label': 'בטל שיוך', onclick: () => { delete r.prev; r.u = Date.now(); sel.delete(r.id); save(l); draw(); } }, '✕') : null);
