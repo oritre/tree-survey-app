@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.112.7';
+  const APP_VERSION = '1.113.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -363,6 +363,7 @@
       app: () => $('#app'), composeSite: s => composeSite(s), pathOf: f => pathOf(f), suggestCombo: (...a) => suggestCombo(...a), projectsRecent: id => projectsRecent(id),
       leaflet: () => loadLeaflet(), mapLayers: () => LAYERS,
       // עבודה לפי רשימה (js/worklists.js): apply(s) מכניס את פרטי השורה לסקר החדש לפני השמירה
+      pickDriveFolder: (...a) => pickDriveFolder(...a),
       lists: {
         async blank(type, apply) {
           const s = { id: uid(), type, project: '', site: '', siteName: '', street: '', city: '', code: '', manager: '', date: today(), trees: [], created: Date.now() };
@@ -3828,15 +3829,19 @@
   }
 
   // בחירת תיקייה בגוגל דרייב לחיפוש בארכיון: נכנסים לתיקיות ובוחרים
-  async function pickDriveFolder() {
+  // onPick: במקום תיקיית הארכיון בהגדרות (למשל תיקייה של רשימת עבודה). start: תיקייה להתחיל בה
+  async function pickDriveFolder(onPick, start, note) {
     if (!navigator.onLine) { toast('אין קליטה'); return; }
     const stack = [{ id: null, name: 'הדרייב שלי' }];
+    if (start && start.id) stack.push({ id: start.id, name: start.name });
     const list = h('div', { class: 'stack', style: 'max-height:55vh;overflow:auto' });
     const title = h('b', {});
     const close = () => ov.remove();
     const choose = h('button', { class: 'btn primary', onclick: async () => {
       const cur = stack[stack.length - 1];
-      await DB.setKV('gdArchive', cur.id ? { id: cur.id, name: stack.slice(1).map(x => x.name).join(' / ') } : null);
+      const val = cur.id ? { id: cur.id, name: stack.slice(1).map(x => x.name).join(' / ') } : null;
+      if (onPick) { close(); onPick(val); return; }
+      await DB.setKV('gdArchive', val);
       close(); renderSettings();
     } }, 'בחר את התיקייה הזו');
     const draw = async () => {
@@ -3853,7 +3858,7 @@
     };
     const ov = h('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px' },
       h('div', { class: 'card stack', style: 'width:min(560px,100%)' },
-        h('div', { class: 'muted small' }, 'הסקרים הישנים יחופשו רק בתיקייה שתבחר ובכל התיקיות שבתוכה'),
+        h('div', { class: 'muted small' }, note || 'הסקרים הישנים יחופשו רק בתיקייה שתבחר ובכל התיקיות שבתוכה'),
         title, list, h('div', { class: 'row' }, choose, h('button', { class: 'btn', onclick: close }, 'ביטול'))));
     document.body.append(ov);
     draw();
