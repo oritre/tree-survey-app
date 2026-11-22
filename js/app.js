@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.114.0';
+  const APP_VERSION = '1.115.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2177,7 +2177,16 @@
     const list = [...new Set(map.values())].sort((a, b) => a.localeCompare(b, 'he'));
     for (const g of list) loose.set(looseHe(g), g);
     for (const [g, a] of map) if (!loose.has(looseHe(g))) loose.set(looseHe(g), a);
+    // מינים שאורי כתב בהגדרות ("מיני עצים", שורה לכל מין) ואינם ברשימה: נכנסים כמו שנכתבו, במקום שלהם לפי א-ב. רק בבטיחות
+    for (const c of customGenus) if (!map.has(c) && !loose.has(looseHe(c))) { list.push(c); map.set(c, c); loose.set(looseHe(c), c); }
+    list.sort((a, b) => a.localeCompare(b, 'he'));
     return genusData = { list, set: new Set(list), map, loose };
+  }
+  let customGenus = [];
+  function setCustomGenus(lines) {
+    const v = [...new Set((lines || []).map(x => String(x || '').replace(/[\u00a0\s]+/g, ' ').trim()).filter(x => /[\u0590-\u05ff]/.test(x)))];
+    if (v.join('\n') === customGenus.join('\n')) return;
+    customGenus = v; genusData = null; pluralData = null;
   }
   function safetySpecies() { return genusInfo().list; }
   // רבים: שיטה → שיטים, סיגלון → סיגלונים, אקליפטוס → אקליפטוסים, מילה → מילות
@@ -2287,6 +2296,8 @@
 
   async function suggestions() {
     // הסקר הפתוח נלקח מהזיכרון, כי השמירה שלו למסד מתעכבת קצת אחרי כל שינוי
+    const custom = await DB.getKV('species', null);
+    setCustomGenus(custom);
     const all = (await DB.allSurveys()).map(x => cur && x.id === cur.id ? cur : x);
     const sp = new Map(), gen = new Map();
     // לומדים רק מסקרי בטיחות: ההערות והמינים של סקרי בנייה לא נכנסים להצעות
@@ -2296,7 +2307,6 @@
       // כמה פעמים נבחר כל מין (לפי השם הקצר), לבחירה המהירה
       for (const g of new Set(k.split(/[,;/+]|\s+ו(?=[\u0590-\u05ff])/).map(genusOf).filter(Boolean))) gen.set(g, (gen.get(g) || 0) + 1);
     }
-    const custom = await DB.getKV('species', null);
     const phrases = await DB.getKV('phrases', null);
     const top = m => [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]);
     const uniq = a => [...new Set(a)];
@@ -4097,7 +4107,7 @@
         cadCard(),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'רשימות בחירה'),
-          h('div', { class: 'muted small' }, 'שורה לכל פריט. ההערות מתחת לשדה ההערות הן רק מה שכתוב כאן (בלי למידה מהסקרים). למיני העצים האפליקציה מוסיפה גם מינים שכבר כתבת בסקרי בטיחות.'),
+          h('div', { class: 'muted small' }, 'שורה לכל פריט. ההערות מתחת לשדה ההערות הן רק מה שכתוב כאן (בלי למידה מהסקרים). מין שתכתוב כאן ואינו ברשימה נוסף לרשימת המינים בסקר בטיחות במקומו לפי א-ב (בסקר לבנייה לא).'),
           field('מיני עצים', speciesTa),
           field('הערות וטיפול מומלץ בסקר בטיחות (כפתורים מתחת להערות)', phrasesTa),
           field('הערות בסקר לבנייה (כפתורים מתחת להערות)', cNotesTa),
