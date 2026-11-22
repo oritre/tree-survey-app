@@ -799,12 +799,10 @@
               (l.route || []).includes(r.id) ? rnumInput(l, r.id, () => { save(l); draw(); }) : null,
               h('button', { class: 'btn ' + (st.k === 'todo' ? 'primary' : ''), title: !r.sid && r.prev && !r.prev.none ? 'סקר חדש מהיום עם העצים וההערות מהסקר הקודם, והפרטים מהרשימה' : null, onclick: () => openRow(l, r) },
                 st.k !== 'todo' ? 'פתח' : r.prev && !r.prev.none ? `פתח (מ-${r.prev.year || 'קודם'})` : 'פתח סקר'),
-              r.sid ? null : r.prev && !r.prev.none ? h('div', { class: 'wl-prev small' }, '↩ ' + (r.prev.kind === 'file' ? r.prev.f.name : r.prev.name),
-                h('div', { class: 'muted wl-ppath' }, '📁 ' + prevPath(r.prev) + (r.prev.kind === 'file' && pIdx[r.prev.f.id] ? ' · ✓ הורד' : '')),
-                r.prev.kind === 'file' ? h('button', { class: 'link-btn small', title: 'פתח את קובץ האקסל של הסקר הקודם', onclick: () => openPrevFile(r.prev, 'xlsx').then(draw) }, 'אקסל') : null,
-                r.prev.kind === 'file' ? h('button', { class: 'link-btn small', title: 'פתח PDF באותו שם שנמצא ליד האקסל', onclick: () => openPrevFile(r.prev, 'pdf') }, 'PDF') : null,
-                h('button', { class: 'link-btn small', onclick: () => openRow(l, r, true, draw) }, 'החלף'),
-                h('button', { class: 'link-btn small', onclick: () => { delete r.prev; r.u = Date.now(); save(l); draw(); } }, 'בטל'))
+              // שורה משויכת (1.136): רק "משויך" ו"בטל שיוך" בשורה אחת. שם הקובץ והתיקייה ברמז (ריחוף / לחיצה ארוכה), השאר בחלון "סקרים קודמים"
+              r.sid ? null : r.prev && !r.prev.none ? h('div', { class: 'wl-prev small', title: (r.prev.kind === 'file' ? r.prev.f.name : r.prev.name) + '\n' + prevPath(r.prev) },
+                '↩ משויך' + (r.prev.kind === 'file' && pIdx[r.prev.f.id] ? ' ✓' : '') + ' · ',
+                h('button', { class: 'link-btn small', onclick: () => { delete r.prev; r.u = Date.now(); save(l); draw(); } }, 'בטל שיוך'))
                 : h('button', { class: 'link-btn small wl-find', onclick: () => openRow(l, r, true, draw) }, '🔎 חפש סקר קודם'),
               h('div', { class: 'wl-badge ' + st.k }, st.t), st.d ? h('div', { class: 'wl-st small' }, st.d) : null,
               r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null),
