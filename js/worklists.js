@@ -1241,6 +1241,19 @@
       document.body.append(ov);
       q.focus(); q.select();
     }
+    // סיכות המפה לפי תחנה, לקפיצה מהרשימה; pinDraws: ציור מחדש של הסיכות כשהזום משתנה
+    const pinOf = new Map();
+    let pinDraws = [], hlPin = null, zoomBand = null;
+    function jumpTo(id) {
+      const mk = pinOf.get(id);
+      if (!map || !mk) { ui.toast(geo.get(id) ? 'המפה עוד לא מוכנה' : 'התחנה הזו עוד לא אותרה במפה. לחץ 📍 כדי לסמן אותה', 3500); return; }
+      userMoved = true;
+      mapEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      map.setView(mk.getLatLng(), Math.max(map.getZoom(), 17));
+      hlPin = mk; pinDraws.forEach(f => f());
+      mk._one = mk._grp.find(m => m.id === id) || null;
+      mk.openPopup();
+    }
     function drawMap() {
       if (!map || !window.L) return;
       if (layer) layer.remove();
@@ -1250,15 +1263,22 @@
         L.marker([l.start.geo.lat, l.start.geo.lon], { draggable: true, icon: L.divIcon({ className: 'wl-pin start', html: '🏠', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(layer)
           .bindPopup('התחלה: ' + l.start.addr.replace(/</g, '&lt;') + '<br><i>אפשר לגרור כדי לדייק</i>')
           .on('dragend', e => { const p = e.target.getLatLng(); l.start.geo = { lat: p.lat, lon: p.lng, key: l.start.addr, manual: true }; persist(); redraw(); });
+      // כמה מוסדות באותה כתובת: סיכה אחת. מרחוק המספר הראשון (ונקודה קטנה שמסמנת שיש עוד), ובקירוב כל המספרים (1-2)
+      const groups = new Map();
       vis().forEach(id => {
-        const i = l.route.indexOf(id);
         const r = l.rows.find(x => x.id === id), g = geo.get(id);
         if (!r || !g) return;
-        const lb = label(r);
-        const icon = L.divIcon({ className: 'wl-pin' + (done(r) ? ' done' : '') + (g.approx ? ' approx' : ''), html: String(i + 1), iconSize: [30, 30], iconAnchor: [15, 15] });
+        const k = g.lat.toFixed(5) + ',' + g.lon.toFixed(5);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push({ id, r, g, i: l.route.indexOf(id) });
+        ll.push([g.lat, g.lon]);
+      });
+      pinOf.clear(); pinDraws = [];
+      const popOf = (m, mk) => {
+        const { id, r, g, i } = m, lb = label(r);
         const mv = pos => { if (moveInRoute(l, id, pos)) { persist(); map.closePopup(); redraw(); } };
-        const pop = () => h('div', { class: 'wl-popup', dir: 'rtl' },
-          h('b', {}, lb.name), h('div', {}, lb.addr), g.approx ? h('i', {}, 'מיקום משוער (מרכז העיר)') : null,
+        return h('div', { class: 'wl-popup', dir: 'rtl' },
+          h('b', {}, `${i + 1}. ${lb.name}`), h('div', {}, lb.addr), g.approx ? h('i', {}, 'מיקום משוער (מרכז העיר)') : null,
           h('div', { class: 'row', style: 'gap:6px;align-items:center;margin-top:6px' }, 'מקום בסדר:',
             rnumInput(l, id, () => { persist(); map.closePopup(); redraw(); }),
             h('button', { class: 'btn', title: 'מוקדם יותר', disabled: i === 0 ? true : null, onclick: () => mv(i) }, '↑'),
@@ -1267,11 +1287,33 @@
           h('div', { class: 'row', style: 'gap:10px;align-items:center;margin-top:6px' },
             h('button', { class: 'btn', onclick: () => { map.closePopup(); fixLoc(r); } }, '📍 תקן מיקום'),
             h('a', { href: navUrl(r), target: '_blank', rel: 'noopener' }, 'נווט בוויז')),
-          h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם לגרור את הנקודה'));
-        L.marker([g.lat, g.lon], { icon, draggable: g.src !== 'gps' }).addTo(layer).bindPopup(pop)
-          .on('dragend', e => { const p = e.target.getLatLng(); setManual(r, { lat: p.lat, lon: p.lng }); ui.toast('המיקום של ' + lb.name + ' עודכן', 2500); });
-        ll.push([g.lat, g.lon]);
-      });
+          h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם לגרור את הנקודה'),
+          mk && mk._grp.length > 1 ? h('button', { class: 'btn', style: 'margin-top:6px', onclick: e => { e.stopPropagation(); setTimeout(() => { mk._one = null; mk.setPopupContent(mk._pop()); }, 0); } }, `↩ כל ${mk._grp.length} המוסדות בכתובת הזו`) : null);
+      };
+      for (const ms of groups.values()) {
+        ms.sort((a, b) => a.i - b.i);
+        const g = ms[0].g, nums = ms.map(m => m.i + 1);
+        const consec = nums.every((n, k) => !k || n === nums[k - 1] + 1);
+        const full = ms.length === 1 ? String(nums[0]) : consec ? nums[0] + '-' + nums[nums.length - 1] : nums.join(',');
+        const cls = 'wl-pin' + (ms.every(m => done(m.r)) ? ' done' : '') + (g.approx ? ' approx' : '') + (ms.length > 1 ? ' multi' : '');
+        const iconFor = hl => {
+          const z = map.getZoom(), near = z >= 15, big = z >= 17;
+          const txt = near ? full : String(nums[0]);
+          const hgt = big ? 38 : 30, w = Math.max(hgt, Math.round(txt.length * (big ? 12 : 9.5)) + 14);
+          return L.divIcon({ className: cls + (near ? ' near' : '') + (big ? ' big' : '') + (hl ? ' hl' : ''), html: `<span dir="ltr">${txt}</span>` + (!near && ms.length > 1 ? `<i>+${ms.length - 1}</i>` : ''), iconSize: [w, hgt], iconAnchor: [w / 2, hgt / 2] });
+        };
+        const mk = L.marker([g.lat, g.lon], { icon: iconFor(false), draggable: g.src !== 'gps' });
+        mk._grp = ms; mk._one = null; mk._icon2 = iconFor;
+        mk._pop = () => mk._one || ms.length === 1 ? popOf(mk._one || ms[0], mk) : h('div', { class: 'wl-popup', dir: 'rtl' },
+          h('b', {}, `${ms.length} מוסדות באותה כתובת`), h('div', {}, label(ms[0].r).addr),
+          ...ms.map(m => h('button', { class: 'btn block', style: 'margin-top:6px;text-align:start', onclick: e => { e.stopPropagation(); setTimeout(() => { mk._one = m; mk.setPopupContent(mk._pop()); }, 0); } }, `${m.i + 1}. ${label(m.r).name}` + (done(m.r) ? ' ✓' : ''))),
+          h('div', { class: 'muted small', style: 'margin-top:6px' }, 'גרירת הנקודה מזיזה את כולם יחד'));
+        mk.addTo(layer).bindPopup(() => mk._pop(), { minWidth: 220 })
+          .on('popupclose', () => { mk._one = null; })
+          .on('dragend', e => { const p = e.target.getLatLng(); ms.forEach(m => { m.r.geo = { lat: p.lat, lon: p.lng, key: (m.r.geo && m.r.geo.key) || '', manual: true }; m.r.u = Date.now(); geo.set(m.id, m.r.geo); }); persist(); redraw(); ui.toast(ms.length > 1 ? `המיקום של ${ms.length} המוסדות עודכן` : 'המיקום של ' + label(ms[0].r).name + ' עודכן', 2500); });
+        ms.forEach(m => pinOf.set(m.id, mk));
+        pinDraws.push(() => mk.setIcon(iconFor(hlPin === mk)));
+      }
       if (ll.length && !userMoved) map.fitBounds(L.latLngBounds(ll).pad(0.15), { maxZoom: 15 });
       if (ll.length < 2) { drive = null; return; }
       const key = ll.map(x => x.join(',')).join(';');
@@ -1300,7 +1342,7 @@
         const move = dlt => { const o = vs[k + dlt]; if (!o) return; const j = l.route.indexOf(o); [l.route[i], l.route[j]] = [l.route[j], l.route[i]]; persist(); redraw(); };
         return h('div', { class: 'wl-stop' + (done(r) ? ' done' : '') },
           rnumInput(l, id, () => { persist(); redraw(); }),
-          h('div', { style: 'flex:1;min-width:0' }, h('b', {}, lb.name), done(r) ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הסתיים') : null,
+          h('div', { class: 'wl-stop-go', style: 'flex:1;min-width:0', role: 'button', tabindex: '0', title: 'הצג במפה', onclick: () => jumpTo(id), onkeydown: e => { if (e.key === 'Enter') jumpTo(id); } }, h('b', {}, lb.name), done(r) ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הסתיים') : null,
             h('div', { class: 'muted small' }, lb.addr + (g ? (g.manual ? ' · מיקום שתיקנת' : g.approx ? ' · מיקום משוער' : '') : geo.has(id) ? ' · לא נמצא במפה, לחץ 📍' : ''))),
           h('button', { class: 'icon-btn', title: 'למעלה', 'aria-label': 'הזז למעלה', disabled: k === 0 ? true : null, onclick: () => move(-1) }, '↑'),
           h('button', { class: 'icon-btn', title: 'למטה', 'aria-label': 'הזז למטה', disabled: k === vs.length - 1 ? true : null, onclick: () => move(1) }, '↓'),
@@ -1418,6 +1460,8 @@
       await ui.leaflet();
       map = L.map(mapEl, { zoomControl: true }).setView([32.3, 35.0], 8);
       map.on('dragstart', () => { userMoved = true; });
+      map.on('zoomend', () => { const z = map.getZoom(), b = z >= 17 ? 2 : z >= 15 ? 1 : 0; if (b !== zoomBand) { zoomBand = b; pinDraws.forEach(f => f()); } });
+      map.on('popupclose', () => { if (hlPin) { hlPin = null; pinDraws.forEach(f => f()); } });
       map.on('click', e => { if (!pickLoc) return; const f = pickLoc; pickLoc = null; mapEl.classList.remove('picking'); userMoved = true; f(e.latlng); }); mapEl.addEventListener('wheel', () => { userMoved = true; }, { passive: true });
       const g = ui.mapLayers()['גוגל – מפה'];
       L.tileLayer(g[0], g[1]).addTo(map);

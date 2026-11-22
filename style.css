@@ -681,3 +681,10 @@ img.docv-page { object-fit: contain; }
 .wl-daylbl { position: sticky; right: 8px; font-weight: 800; font-size: 16px; }
 .wl-pin.start { background: #fff; border-color: var(--accent); font-size: 16px; }
 .wl-mapview.picking, .wl-mapview.picking .leaflet-container { cursor: crosshair !important; outline: 3px solid var(--accent); }
+.wl-pin.multi { border-radius: 999px; }
+.wl-pin.multi i { position: absolute; top: -9px; inset-inline-end: -9px; min-width: 18px; height: 18px; padding: 0 3px; border-radius: 999px; background: #fff; color: #1b3d14; border: 1.5px solid #2e6b33; font-size: 11px; font-style: normal; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+.wl-pin.near { font-size: 15px; }
+.wl-pin.big { font-size: 19px; }
+.wl-pin.hl { outline: 4px solid #ffd400; box-shadow: 0 0 0 8px rgba(255,212,0,.35), 0 1px 4px rgba(0,0,0,.45); z-index: 1000 !important; }
+.wl-stop-go { cursor: pointer; }
+.wl-stop-go:hover b { text-decoration: underline; }
