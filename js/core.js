@@ -57,9 +57,29 @@
     return words.some(w => /^(ארנ|הארנ|אארנ|אנרנ|האנרנ)/.test(w));
   }
 
-  // ערך עמודה J: כמות אורנים ו/או "פצל"
+  // "אורנים" (רבים) בשדה המין: בחלון האורנים שואלים קודם כמה. "אורן" (יחיד): ישר לפרטים של אורן אחד
+  function pinePlural(species) {
+    const words = String(species || '').split(/[\s,;/\\\-–+.()]+/).filter(Boolean);
+    return words.some(w => /^[הו]?או?רני?ם$/.test(w));
+  }
+  // פרטי האורנים בשורה (1.116): t.pineList = [{ loc, h, c, trunks: [..], lat, lon, itmX, itmY }]. בסקר ישן רק כמות (t.pines)
+  function pineCount(t) {
+    if (Array.isArray(t.pineList)) return t.pineList.length || null;
+    const n = t.pines != null && t.pines !== '' ? Number(t.pines) : null;
+    return n != null && !isNaN(n) ? n : null;
+  }
+  // אורן שחסרים בו פרטים: מחזיר את שמות השדות החסרים
+  function pineMissing(p) {
+    const out = [];
+    if (!String(p.loc || '').trim()) out.push('מיקום');
+    if (p.h == null || p.h === '') out.push('גובה');
+    if (!(p.trunks || []).some(x => x != null && x !== '')) out.push('קוטר גזע');
+    return out;
+  }
+
+  // ערך עמודה J: כמות אורנים ו/או "פצל" (לא מודפס)
   function jValue(tree) {
-    const n = tree.pines != null && tree.pines !== '' ? Number(tree.pines) : null;
+    const n = pineCount(tree);
     if (tree.split && n != null) return n + ' פצל';
     if (tree.split) return 'פצל';
     if (n != null && !isNaN(n)) return n;
@@ -223,7 +243,8 @@
     if (trees.length > MAX_TREES) w.push(`יש ${trees.length} עצים, ובתבנית יש מקום ל-${MAX_TREES} בלבד.`);
     for (const t of sortTrees(trees)) {
       const name = 'עץ ' + (t.num || t.species);
-      if (isPine(t.species) && (t.pines == null || t.pines === '')) w.push(`${name}: אורן בלי כמות אורנים.`);
+      if (isJerusalem(survey) && isPine(t.species) && !(t.pineList || []).length) w.push(`${name}: אורן בלי פרטי אורנים.`);
+      (t.pineList || []).forEach((p, i) => { const m = pineMissing(p); if (m.length) w.push(`${name}: באורן ${i + 1} חסר ${m.join(', ')}.`); });
       if (t.split && !splitActive(t)) w.push(`${name}: סומן פצל אבל מספר העץ לא תקין לפיצול.`);
       if (!(t.photos || []).length) w.push(`${name}: אין תמונה.`);
       if (survey.warnGps && t.lat == null) w.push(`${name}: אין נ"צ.`);
@@ -244,12 +265,12 @@
     return { name: t(s.siteName), address: [t(s.street), t(s.city)].filter(Boolean).join(', ') };
   }
 
-  // עבודה בירושלים: העיר, הרחוב, שם המוסד או הפרויקט כוללים "ירושלים" (גם "ירושליים"). רק בהן קופץ "כמה אורנים?"
+  // עבודה בירושלים: העיר, הרחוב, שם המוסד או הפרויקט כוללים "ירושלים" (גם "ירושליים"). רק בהן קופץ חלון פרטי האורנים
   function isJerusalem(s) {
     return [s.project, s.city, s.street, s.siteName, s.site].some(x => /ירושלי?ים|jerusalem/i.test(x || ''));
   }
 
-  const api = { placeOf, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, jValue, hasContent,
+  const api = { placeOf, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, pinePlural, pineCount, pineMissing, jValue, hasContent,
     sortTrees, splitActive, slotsOf, photoForSlot, groupKey, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
     nextNum, warnings, OK, DEFAULT_URGENCY, isOk, urgencyCell, notesCell, setUrgency };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;

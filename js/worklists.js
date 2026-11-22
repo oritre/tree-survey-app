@@ -173,7 +173,9 @@
   function scoreOf(v, text, code) {
     const hay = norm(text);
     let sc = 0;
-    if (v.code && code && String(code).replace(/\D+/g, '') === String(v.code).replace(/\D+/g, '')) sc += 10;
+    // מוסד עם שני סמלים ("629477 406512"): מספיק שאחד מהם תואם
+    const codes = c => String(c || '').split(/[^\d]+/).filter(x => x.length >= 3);
+    if (v.code && code && (codes(code).some(x => codes(v.code).includes(x)) || String(code).replace(/\D+/g, '') === String(v.code).replace(/\D+/g, ''))) sc += 10;
     const city = norm(v.city), first = city.split(' ')[0];
     const cityHit = city && (hay.includes(city) || (first.length >= 3 && hasWord(hay, first)));
     if (cityHit) sc += 3;
@@ -240,7 +242,8 @@
       // שאילתות לדרייב: סמל, מילת הרחוב, העיר, ועוד המילים הארוכות מהתאים האחרים (גם בתוך תוכן הקבצים)
       const { word } = streetKey(v.street);
       const extra = words.filter(w => !/^\d+$/.test(w) && w.length >= 3).sort((a, b) => b.length - a.length);
-      const terms = [...new Set([v.code || '', word && word.length >= 2 ? word : '', clean(v.city), ...extra].filter(Boolean))].slice(0, 7);
+      const codeTerms = String(v.code || '').split(/[^\d]+/).filter(x => x.length >= 3);
+      const terms = [...new Set([...(codeTerms.length > 1 ? codeTerms : [v.code || '']), word && word.length >= 2 ? word : '', clean(v.city), ...extra].filter(Boolean))].slice(0, 7);
       arch = (await archiveFiles(terms))
         .map(x => Object.assign(x, scoreAll(v, words, x.f.name.replace(/\.xls[xm]$/i, '') + ' ' + x.path.slice(-2).join(' '), '')))
         .filter(x => x.cityHit || x.numHit || x.hits >= 2)
@@ -256,7 +259,8 @@
       for (const f of fieldsOf(l)) {
         if (!v[f.key]) continue;
         if (fromPrev && (l.map[f.key] || {}).prev && clean(s[f.key])) continue;
-        s[f.key] = v[f.key];
+        // שני סמלי מוסד בתא אחד: שניהם נכנסים לדוח, מופרדים בפסיק
+        s[f.key] = f.key === 'code' && root.Reports ? root.Reports.codeText(v[f.key]) : v[f.key];
       }
       if (l.project) s.project = l.project;
       s.listRef = { list: l.id, row: r.id, name: l.name };

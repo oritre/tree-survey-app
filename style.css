@@ -639,3 +639,8 @@ textarea.doc-text.b { font-weight: 700; }
 .wl-prev.none { color: var(--muted); font-weight: 400; }
 .wl-prev .link-btn { margin-inline-start: 6px; }
 .wl-find { display: block; margin: 4px auto 0; white-space: nowrap; }
+
+/* פרטי אורנים (1.116) */
+.btn.alert { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); font-weight: 700; }
+.pine-card { border: 1px solid var(--border-strong); box-shadow: none; }
+.pine-pin { background: none; border: none; }
