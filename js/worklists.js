@@ -227,7 +227,7 @@
     const list = [...files.values()];
     const paths = await Promise.all(list.map(f => U().pathOf(f).catch(() => [])));
     return list.map((f, i) => ({ kind: 'file', f, path: paths[i], year: yearOf(paths[i], f) }))
-      .filter(x => !x.path.some(n => /^גיבוי אפליקציית סקרי עצים$/.test(n)) && !/^טעינת עצים/.test(x.f.name));
+      .filter(x => !x.path.some(n => /^גיבוי אפליקציית סקרי עצים$/.test(n)) && !/^טעינת עצים/.test(x.f.name) && !/דו["״”]?ח\s*מנהלים/.test(x.f.name)); // דוח מנהלים הוא ריכוז, לא סקר
   }
   // סקרים באפליקציה (בטאבלט ובאינדקס בענן) ובארכיון (קובצי אקסל, מכל השנים) שמתאימים לשורה
   // כל הסקרים באפליקציה (בטאבלט ובאינדקס בענן) מסוג הרשימה
@@ -941,7 +941,12 @@
     const skip = (l.prevSkip || []).map(norm).filter(Boolean);
     const keep = xs => skip.length ? xs.filter(x => !skip.some(w => norm(x.f.name).includes(w))) : xs;
     // קובץ שבשם שלו יש סמל של מוסד אחר (כמה גנים באותה כתובת) לא מוצע
-    const other = x => (x.f.name.match(/\d{5,7}/g) || []).some(n => !codes.includes(n));
+    // (1.133) קובץ כזה כן מוצע, אבל אחרי קבצים בלי סמל אחר, ואף פעם לא מסומן מראש: אולי הסמל השתנה ואולי זה מוסד אחר באותה כתובת
+    const otherCode = x => (x.f.name.match(/\d{5,7}/g) || []).find(n => !codes.includes(n)) || '';
+    // סמל של שורה אחרת ברשימה הזו: הקובץ שייך למוסד ההוא, לא מוצע כאן
+    const listCodes = new Set(l.rows.filter(q => !q.deleted && q !== r).flatMap(q => String(valuesOf(l, q).code || '').split(/[^\d]+/).filter(x => x.length >= 4)));
+    const own = xs => { xs.forEach(x => { x.oc = otherCode(x); }); xs = xs.filter(x => !(x.f.name.match(/\d{5,7}/g) || []).some(n => listCodes.has(n) && !codes.includes(n))); return [...xs.filter(x => !x.oc), ...xs.filter(x => x.oc)]; };
+    const ocWhy = x => ' · לא סומן: בשם הקובץ יש סמל מוסד אחר (' + x.oc + '), כדאי לבדוק שזה אותו מוסד';
     // אותו קובץ בכמה תיקיות (אותו שם ואותו גודל) נחשב קובץ אחד; שאר המקומות נשמרים ב-dups להצגה
     const uniq = xs => { const m = new Map(), out = []; for (const x of xs) { const k = x.f.size ? x.f.name + '|' + x.f.size : 'id' + x.f.id, a = m.get(k); if (a) (a.dups = a.dups || []).push(x); else { m.set(k, x); out.push(x); } } return out; };
     const tie = xs => ' · לא סומן: יש עוד קובץ שמתאים באותה מידה (ב"' + (xs[1].path.slice(-2).join(' / ') || 'דרייב') + '"), אפשר לראות ולבחור למטה';
@@ -959,22 +964,22 @@
       async street() {
         const { word, num } = streetKey(v.street);
         if (!word || word.length < 2 || !num) return null;
-        const xs = uniq(keep(score(await archiveFiles([word], l.folder || null))).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder) && !other(x)));
+        const xs = own(uniq(keep(score(await archiveFiles([word], l.folder || null))).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder))));
         if (!xs.length) return null;
         xs[0].alts = xs;
-        const sure = xs.length === 1 || xs[0].sc > xs[1].sc;
-        return Object.assign(xs[0], { sure, why: 'לפי רחוב ומספר' + (sure ? '' : tie(xs)) });
+        const clear = xs.length === 1 || xs[0].sc > xs[1].sc || !!xs[1].oc, sure = clear && !xs[0].oc;
+        return Object.assign(xs[0], { sure, why: 'לפי רחוב ומספר' + (xs[0].oc ? ocWhy(xs[0]) : clear ? '' : tie(xs)) });
       },
       // שם המוסד: כל המילים של השם (בלי מילים כלליות ומספרים) צריכות להופיע בשם הקובץ
       async name() {
         const ws = [...new Set(norm(v.siteName || '').split(' ').filter(w => w.length >= 2 && !/\d/.test(w) && !STOP.has(w)))];
         if (!ws.length || ws.join('').length < 4) return null;
         const long = ws.slice().sort((a, b) => b.length - a.length)[0];
-        const xs = uniq(keep(score(await archiveFiles([long], l.folder || null))).filter(x => { const hay = norm(x.f.name); return ws.every(w => hasWord(hay, w)) && !other(x); }));
+        const xs = own(uniq(keep(score(await archiveFiles([long], l.folder || null))).filter(x => { const hay = norm(x.f.name); return ws.every(w => hasWord(hay, w)); })));
         if (!xs.length) return null;
         xs[0].alts = xs;
-        const sure = xs.length === 1 || xs[0].sc > xs[1].sc;
-        return Object.assign(xs[0], { sure, why: 'לפי שם המוסד' + (sure ? '' : tie(xs)) });
+        const clear = xs.length === 1 || xs[0].sc > xs[1].sc || !!xs[1].oc, sure = clear && !xs[0].oc;
+        return Object.assign(xs[0], { sure, why: 'לפי שם המוסד' + (xs[0].oc ? ocWhy(xs[0]) : clear ? '' : tie(xs)) });
       },
     };
     for (const k of prevBy(l)) {
