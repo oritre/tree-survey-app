@@ -912,16 +912,24 @@
     return clean(m ? m[1] : st);
   }
   const NOMI = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=il&accept-language=he&q=';
-  let lastGeo = 0;
-  async function nominatim(q) {
-    const wait = 1100 - (Date.now() - lastGeo); // לכל היותר בקשה אחת בשנייה (מדיניות השירות)
-    if (wait > 0) await new Promise(r => setTimeout(r, wait));
-    lastGeo = Date.now();
-    const res = await fetch(NOMI + encodeURIComponent(q));
-    if (!res.ok) throw new Error('שירות המפה לא זמין (' + res.status + ')');
-    const j = await res.json();
-    return j && j[0] ? { lat: +j[0].lat, lon: +j[0].lon } : null;
+  let lastGeo = 0, geoQueue = Promise.resolve();
+  // לכל היותר בקשה אחת בשנייה (מדיניות השירות), גם כשכמה חיפושים רצים ביחד: בתור
+  function nominatim(q) {
+    const run = async () => {
+      const wait = 1100 - (Date.now() - lastGeo);
+      if (wait > 0) await new Promise(r => setTimeout(r, wait));
+      lastGeo = Date.now();
+      const res = await fetch(NOMI + encodeURIComponent(q));
+      if (!res.ok) throw new Error('שירות המפה לא זמין (' + res.status + ')');
+      const j = await res.json();
+      return j && j[0] ? { lat: +j[0].lat, lon: +j[0].lon } : null;
+    };
+    const p = geoQueue.then(run, run);
+    geoQueue = p.catch(() => {});
+    return p;
   }
+  // אותה כתובת בכמה שורות (כמה גנים באותו מבנה): מחפשים פעם אחת
+  const geoMem = new Map();
   // שמות קצרים של ערים שבשירות המפה מתבלבלים עם מקום אחר (חצור -> חצור אשדוד)
   const CITY_FULL = { 'חצור': 'חצור הגלילית', 'מעלות': 'מעלות תרשיחא', 'קרית מוצקין': 'קריית מוצקין', 'קרית שמונה': 'קריית שמונה', 'קרית גת': 'קריית גת', 'קרית ביאליק': 'קריית ביאליק', 'קרית אתא': 'קריית אתא', 'קרית ים': 'קריית ים', 'קרית מלאכי': 'קריית מלאכי', 'קרית ארבע': 'קריית ארבע', 'קרית טבעון': 'קריית טבעון', 'קרית עקרון': 'קריית עקרון' };
   const fullCity = c => CITY_FULL[clean(c)] || clean(c);
@@ -940,6 +948,7 @@
     const st = geoStreet(v.street), city = fullCity(v.city);
     const key = 'v2|' + st + '|' + city;
     if (r.geo && r.geo.key === key) return r.geo;
+    if (geoMem.has(key)) { const m = geoMem.get(key); if (m) r.geo = Object.assign({}, m); return m ? r.geo : null; }
     if (!st && !city) return null;
     const c = city ? await cityGeo(city) : null;
     const near = g => g && (!c || km(c, g) <= 12);
@@ -948,9 +957,35 @@
     if (!g && st && city) { const w = st.replace(/\s*\d+\s*$/, ''); if (w && w !== st) { g = await nominatim(w + ', ' + city); if (!near(g)) g = null; } }
     if (!g && c) { g = c; approx = true; }
     if (!g && st && !city) g = await nominatim(st);
-    if (!g) return null;
+    if (!g) { geoMem.set(key, null); return null; }
     r.geo = { lat: g.lat, lon: g.lon, key, approx };
+    geoMem.set(key, r.geo);
     return r.geo;
+  }
+  // איתור כל התחנות ברקע: ממשיך גם כשיוצאים ממסך המסלול, נשמר כל כמה שורות, ומסך שנפתח שוב מצטרף אליו
+  const geoJobs = new Map();
+  function geoJob(l, local) {
+    let j = geoJobs.get(l.id);
+    if (j && !j.done) return j;
+    j = { i: 0, n: 0, subs: new Set(), done: false };
+    geoJobs.set(l.id, j);
+    j.p = (async () => {
+      const need = l.route.map(id => l.rows.find(r => r.id === id)).filter(r => r && !r.deleted);
+      j.n = need.length;
+      let dirty = 0;
+      for (const r of need) {
+        j.i++;
+        const before = JSON.stringify(r.geo || null);
+        let g = null;
+        try { g = await locate(l, r, local); } catch (e) { j.err = e.message; }
+        if (JSON.stringify(r.geo || null) !== before) { r.u = Date.now(); if (++dirty >= 5) { dirty = 0; await save(l); } }
+        j.subs.forEach(f => f(r, g));
+      }
+      if (dirty) await save(l);
+      j.done = true;
+      j.subs.forEach(f => f(null));
+    })();
+    return j;
   }
   const rad = d => d * Math.PI / 180;
   function km(a, b) {
@@ -977,7 +1012,9 @@
       return o;
     };
     let best = null;
-    const starts = start ? [-1] : pts.map((_, i) => i);
+    // בלי נקודת התחלה: מנסים להתחיל מהקצוות (צפון, דרום, מזרח, מערב), ובמסלול קצר מכל נקודה
+    const ext = () => { const by = f => pts.reduce((b, p, i) => f(p) > f(pts[b]) ? i : b, 0); return [...new Set([by(p => p.lat), by(p => -p.lat), by(p => p.lon), by(p => -p.lon)])]; };
+    const starts = start ? [-1] : n <= 30 ? pts.map((_, i) => i) : ext();
     for (const s0 of starts) {
       const left = new Set(pts.map((_, i) => i));
       const o = [];
@@ -1012,10 +1049,17 @@
     const j = await osrm('table/v1/driving/' + coordsOf(pts) + '?annotations=duration');
     return j.durations;
   }
+  // מסלול ארוך: בחלקים של עד 80 נקודות (מגבלת השירות), מחוברים
   async function driveRoute(pts) {
-    const j = await osrm('route/v1/driving/' + coordsOf(pts) + '?overview=full&geometries=geojson');
-    const r = j.routes[0];
-    return { line: r.geometry.coordinates.map(([lo, la]) => [la, lo]), km: r.distance / 1000, min: r.duration / 60 };
+    const out = { line: [], km: 0, min: 0 };
+    for (let i = 0; i < pts.length - 1; i += 79) {
+      const part = pts.slice(i, i + 80);
+      const j = await osrm('route/v1/driving/' + coordsOf(part) + '?overview=full&geometries=geojson');
+      const r = j.routes[0];
+      out.line.push(...r.geometry.coordinates.map(([lo, la]) => [la, lo]));
+      out.km += r.distance / 1000; out.min += r.duration / 60;
+    }
+    return out;
   }
 
   async function renderRoute(l) {
@@ -1062,7 +1106,7 @@
       return null;
     }
     const linksBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
-    let map = null, layer = null, pickAfter = null;
+    let map = null, layer = null, pickAfter = null, userMoved = false;
     const persist = () => save(l);
     // יום עבודה שנבחר (עמודת "יום"): במפה, ברשימה ובקישורים רק התחנות שלו. המספרים נשארים לפי המסלול כולו
     const dc = dayCol(l), days = daysOf(l);
@@ -1125,7 +1169,7 @@
         L.marker([g.lat, g.lon], { icon }).addTo(layer).bindPopup(pop);
         ll.push([g.lat, g.lon]);
       });
-      if (ll.length) map.fitBounds(L.latLngBounds(ll).pad(0.15), { maxZoom: 15 });
+      if (ll.length && !userMoved) map.fitBounds(L.latLngBounds(ll).pad(0.15), { maxZoom: 15 });
       if (ll.length < 2) { drive = null; return; }
       const key = ll.map(x => x.join(',')).join(';');
       const air = L.polyline(ll, { color: '#2e6b33', weight: 3, opacity: .6, dashArray: '6 6' }).addTo(layer);
@@ -1165,34 +1209,54 @@
         h('div', { style: 'flex:1;min-width:0' }, label(r).name, done(r) ? ' ✓' : '', h('div', { class: 'muted small' }, label(r).addr)),
         h('button', { class: 'btn', onclick: async () => { l.route.push(r.id); persist(); await locateAll(); redraw(); } }, '➕ הוסף')))] : []));
       const links = gmapsLinks();
-      linksBox.replaceChildren(...links.map((u, i) => h('a', { class: 'btn primary', href: u, target: '_blank', rel: 'noopener' }, '🧭 פתח בגוגל מפות' + (links.length > 1 ? ` (חלק ${i + 1})` : ''))));
+      linksBox.replaceChildren(
+        links.length > 1 ? h('div', { class: 'muted small', style: 'flex-basis:100%' }, `גוגל מפות מקבל עד 10 תחנות בקישור, ולכן המסלול מחולק ל-${links.length} קישורים לפי הסדר (כל חלק מתחיל איפה שהקודם נגמר):`) : '',
+        ...links.map((u, i) => h('a', { class: 'btn primary', href: u, target: '_blank', rel: 'noopener' }, '🧭 גוגל מפות' + (links.length > 1 ? ` ${i + 1}/${links.length}` : ''))),
+        h('button', { class: 'btn', title: 'קובץ CSV עם כל התחנות ממוספרות, לייבוא ל-Google My Maps (המפות שלי)', onclick: exportMyMaps }, '⬇ כל התחנות ל-Google My Maps'));
       airKm = tot; showStatus();
     }
     let drive = null, airKm = 0;
     const driveCache = new Map();
     const hm = m => m >= 60 ? `${Math.floor(m / 60)} ש' ${Math.round(m % 60)} דק'` : `${Math.round(m)} דק'`;
     function showStatus() {
-      status.textContent = (day ? `${day}: ` : '') + `${vis().length} תחנות במסלול` + (drive ? ` · ${Math.round(drive.km)} ק"מ נסיעה בכבישים · כ-${hm(drive.min)} (בלי עצירות)` : airKm ? ` · כ-${Math.round(airKm)} ק"מ בקו אווירי` : '');
+      status.textContent = (job && !job.done ? `מאתר כתובות במפה… ${job.i} מתוך ${job.n} (ממשיך גם אם יוצאים מהמסך) · ` : '') + (day ? `${day}: ` : '') + `${vis().length} תחנות במסלול` + (drive ? ` · ${Math.round(drive.km)} ק"מ נסיעה בכבישים · כ-${hm(drive.min)} (בלי עצירות)` : airKm ? ` · כ-${Math.round(airKm)} ק"מ בקו אווירי` : '');
     }
     const redraw = () => { drawList(); drawMap(); };
-    async function locateAll() {
-      const need = l.route.map(id => l.rows.find(r => r.id === id)).filter(r => r && !geo.has(r.id));
-      let i = 0, changed = false;
-      for (const r of need) {
-        status.textContent = `מאתר כתובות במפה… ${++i} מתוך ${need.length}`;
-        const before = JSON.stringify(r.geo || null);
-        try { geo.set(r.id, await locate(l, r, local)); } catch (e) { geo.set(r.id, null); status.textContent = e.message; }
-        if (JSON.stringify(r.geo || null) !== before) changed = true;
-      }
-      if (changed) persist();
+    // כל התחנות (בלי הגבלה) ממוספרות לפי הסדר: CSV לייבוא ב-Google My Maps (שכבה חדשה > ייבוא, מיקום לפי Latitude/Longitude, כותרת לפי "שם")
+    function exportMyMaps() {
+      const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const lines = [['מספר', 'שם', 'כתובת', 'Latitude', 'Longitude', 'סטטוס'].map(q).join(',')];
+      vis().forEach(id => {
+        const r = l.rows.find(x => x.id === id); if (!r) return;
+        const i = l.route.indexOf(id) + 1, lb = label(r), g = geo.get(id) || r.geo;
+        lines.push([i, `${i}. ${lb.name}`, lb.addr, g ? g.lat.toFixed(6) : '', g ? g.lon.toFixed(6) : '', done(r) ? 'הסתיים' : ''].map(q).join(','));
+      });
+      ui.downloadFile(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), ui.safeName((l.name || 'רשימה') + ' - מסלול') + '.csv');
+      ui.toast('הקובץ הורד. ב-My Maps: שכבה חדשה > ייבוא > בחר את הקובץ > מיקום לפי Latitude ו-Longitude > כותרת לפי "שם"', 8000);
+    }
+    // האיתור רץ ברקע (geoJob); המסך מתעדכן תוך כדי, כל כמה תחנות
+    let lastDraw = 0, job = null;
+    function locateAll() {
+      job = geoJob(l, local);
+      if (!job.subs.has(onGeo)) job.subs.add(onGeo);
+      return job.p;
+    }
+    function onGeo(r, g) {
+      if (!document.body.contains(status)) { job && job.subs.delete(onGeo); return; }
+      if (r) geo.set(r.id, g);
+      if (!r || Date.now() - lastDraw > 2500) { lastDraw = Date.now(); redraw(); }
+      if (job.err && r) status.textContent = 'שגיאה באיתור: ' + job.err;
     }
     async function auto() {
+      if (l.start.mode === 'addr') { l.start.addr = clean(startAddr.value); }
+      const start0 = startPoint(); // נקודת ההתחלה קודם, לפני שאר הכתובות בתור
+      const jb = geoJob(l, local);
+      if (!jb.done) ui.toast(`מאתר עוד כתובות (${jb.i} מתוך ${jb.n}). הסידור יתבצע מיד כשזה ייגמר`, 4000);
       await locateAll();
       const scope = vis(), slots = scope.map(id => l.route.indexOf(id)); // יום שנבחר: מסדרים רק אותו, במקומות שלו במסלול
       const ids = scope.filter(id => geo.get(id));
       const rest = scope.filter(id => !geo.get(id));
-      if (l.start.mode === 'addr') { l.start.addr = clean(startAddr.value); }
-      const start = await startPoint();
+      const start = await start0;
       const pts = ids.map(id => geo.get(id));
       let cost = null;
       if (pts.length > 1 && pts.length < 99) {
@@ -1249,13 +1313,15 @@
     try {
       await ui.leaflet();
       map = L.map(mapEl, { zoomControl: true }).setView([32.3, 35.0], 8);
+      map.on('dragstart', () => { userMoved = true; }); mapEl.addEventListener('wheel', () => { userMoved = true; }, { passive: true });
       const g = ui.mapLayers()['גוגל – מפה'];
       L.tileLayer(g[0], g[1]).addTo(map);
       showMe();
     } catch (e) { mapEl.replaceChildren(h('div', { class: 'muted small', style: 'padding:16px' }, 'המפה לא נטענה: ' + e.message)); }
     if (navigator.onLine === false) { status.textContent = 'אין קליטה: אי אפשר לאתר כתובות במפה'; for (const id of l.route) { const r = l.rows.find(x => x.id === id); if (r && r.geo) geo.set(id, r.geo); } redraw(); return; }
-    await locateAll();
+    for (const id of l.route) { const r = l.rows.find(x => x.id === id); if (r && r.geo) geo.set(id, r.geo); }
     redraw();
+    locateAll().then(() => { status.textContent = ''; redraw(); });
   }
 
   // גרירת קובץ רשימה (אקסל / CSV) למסכי הרשימות: ייבוא כרשימה חדשה. בתוך רשימה: הוספת מסמכים לרשימה
