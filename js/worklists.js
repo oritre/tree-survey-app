@@ -182,6 +182,11 @@
     const words = w.filter(x => !/\d/.test(x) && x.length > 1);
     return { word: words[words.length - 1] || '', num: '' };
   }
+  // מילות שם הרחוב (לפני מספר הבית), 3 אותיות ומעלה
+  function streetWords(street) {
+    const w = norm(street).split(' '), i = w.findIndex(x => /^\d+[א-ת]?$/.test(x));
+    return [...new Set((i > 0 ? w.slice(0, i) : w).filter(x => !/\d/.test(x) && x.length >= 3))];
+  }
   function scoreOf(v, text, code) {
     const hay = norm(text);
     let sc = 0;
@@ -191,11 +196,15 @@
     const city = norm(v.city), first = city.split(' ')[0];
     const cityHit = city && (hay.includes(city) || (first.length >= 3 && hasWord(hay, first)));
     if (cityHit) sc += 3;
-    const { word, num } = streetKey(v.street);
-    const stHit = word && word.length >= 2 && hasWord(hay, word);
+    // (1.135) כל מילות הרחוב נבדקות, לא רק זו שלפני המספר: ברשימות הרחוב כתוב לפעמים "בן אליעזר אריה 21" או "רובוביץ אלכסנדר 10",
+    // ובשם הקובץ "בן אליעזר 21" / "אלכסנדר רובוביץ 10". stHit: לפחות חצי מהמילים; stFull: כולן
+    const { word, num } = streetKey(v.street), sw = streetWords(v.street);
+    const got = sw.filter(w => hasWord(hay, w)).length;
+    const stHit = sw.length ? got >= Math.ceil(sw.length / 2) : !!(word && word.length >= 2 && hasWord(hay, word));
+    const stFull = stHit && got === sw.length;
     const numHit = !!(stHit && num && hasWord(hay, num));
-    if (stHit) sc += numHit ? 4 : 3;
-    return { sc, cityHit, stHit, numHit };
+    if (stHit) sc += (numHit ? 4 : 3) - (stFull ? 0 : 0.5);
+    return { sc, cityHit, stHit, stFull, numHit };
   }
   // כל המילים בכל התאים של השורה (בלי טלפונים): לחיפוש ולדירוג. מילים כלליות לא נספרות
   const STOP = new Set(['מעון', 'גן', 'בית', 'ספר', 'סקר', 'עצים', 'יציבות', 'בטיחות', 'של', 'על', 'את', 'עם']);
@@ -255,7 +264,7 @@
       const { word } = streetKey(v.street);
       const extra = words.filter(w => !/^\d+$/.test(w) && w.length >= 3).sort((a, b) => b.length - a.length);
       const codeTerms = String(v.code || '').split(/[^\d]+/).filter(x => x.length >= 3);
-      const terms = [...new Set([...(codeTerms.length > 1 ? codeTerms : [v.code || '']), word && word.length >= 2 ? word : '', clean(v.city), ...extra].filter(Boolean))].slice(0, 7);
+      const terms = [...new Set([...(codeTerms.length > 1 ? codeTerms : [v.code || '']), word && word.length >= 2 ? word : '', ...streetWords(v.street), clean(v.city), ...extra].filter(Boolean))].slice(0, 7);
       arch = (await archiveFiles(terms))
         .map(x => Object.assign(x, scoreAll(v, words, x.f.name.replace(/\.xls[xm]$/i, '') + ' ' + x.path.slice(-2).join(' '), '')))
         .filter(x => x.cityHit || x.numHit || x.hits >= 2)
@@ -964,11 +973,11 @@
       async street() {
         const { word, num } = streetKey(v.street);
         if (!word || word.length < 2 || !num) return null;
-        const xs = own(uniq(keep(score(await archiveFiles([word], l.folder || null))).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder))));
+        const xs = own(uniq(keep(score(await archiveFiles([...new Set([word, ...streetWords(v.street)])], l.folder || null))).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder))));
         if (!xs.length) return null;
         xs[0].alts = xs;
-        const clear = xs.length === 1 || xs[0].sc > xs[1].sc || !!xs[1].oc, sure = clear && !xs[0].oc;
-        return Object.assign(xs[0], { sure, why: 'לפי רחוב ומספר' + (xs[0].oc ? ocWhy(xs[0]) : clear ? '' : tie(xs)) });
+        const clear = xs.length === 1 || xs[0].sc > xs[1].sc || !!xs[1].oc, sure = clear && !xs[0].oc && xs[0].stFull;
+        return Object.assign(xs[0], { sure, why: 'לפי רחוב ומספר' + (xs[0].oc ? ocWhy(xs[0]) : !clear ? tie(xs) : !xs[0].stFull ? ' · לא סומן: רק חלק משם הרחוב מופיע בשם הקובץ' : '') });
       },
       // שם המוסד: כל המילים של השם (בלי מילים כלליות ומספרים) צריכות להופיע בשם הקובץ
       async name() {
@@ -1936,5 +1945,5 @@
     });
   })();
 
-  root.WorkLists = { render, sync, _t: { geoStreet, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
+  root.WorkLists = { render, sync, _t: { geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
 })(window);
