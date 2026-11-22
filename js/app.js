@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.128.0';
+  const APP_VERSION = '1.128.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -4096,7 +4096,8 @@
     if (!navigator.onLine) { toast('אין קליטה'); return; }
     const stack = [{ id: null, name: 'הדרייב שלי' }];
     if (start && start.id) stack.push({ id: start.id, name: start.name });
-    const list = h('div', { class: 'stack', style: 'max-height:55vh;overflow:auto' });
+    // רשת קבועה (לא שורה שנשברת): הכפתורים לא זזים כשמצביעים עליהם או כשמופיע פס גלילה
+    const list = h('div', { class: 'drive-pick', style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;align-content:start;max-height:55vh;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;padding:2px' });
     const title = h('b', {});
     const close = () => ov.remove();
     const choose = h('button', { class: 'btn primary', onclick: async () => {
@@ -4109,14 +4110,14 @@
     const draw = async () => {
       const cur = stack[stack.length - 1];
       title.textContent = stack.map(x => x.name).join(' / ');
-      list.replaceChildren(h('div', { class: 'muted small' }, 'טוען…'));
+      list.replaceChildren(h('div', { class: 'muted small', style: 'grid-column:1/-1' }, 'טוען…'));
       try {
         const folders = (await OD.children(cur.id)).filter(x => x.folder);
         list.replaceChildren(...[
           stack.length > 1 ? h('button', { class: 'btn', onclick: () => { stack.pop(); draw(); } }, '⬆ חזרה') : null,
-          ...folders.map(x => h('button', { class: 'btn', style: 'justify-content:flex-start', onclick: () => { stack.push({ id: x.id, name: x.name }); draw(); } }, '📁 ' + x.name)),
-          folders.length ? null : h('div', { class: 'muted small' }, 'אין כאן תתי תיקיות')].filter(Boolean));
-      } catch (e) { list.replaceChildren(h('div', {}, (e instanceof OD.AuthError ? 'צריך להתחבר לגוגל דרייב. ' : 'נכשל: ') + e.message)); }
+          ...folders.map(x => h('button', { class: 'btn', type: 'button', style: 'justify-content:flex-start;min-width:0;white-space:normal;text-align:start;overflow-wrap:anywhere', onclick: () => { stack.push({ id: x.id, name: x.name }); draw(); } }, '📁 ' + x.name)),
+          folders.length ? null : h('div', { class: 'muted small', style: 'grid-column:1/-1' }, 'אין כאן תתי תיקיות')].filter(Boolean));
+      } catch (e) { list.replaceChildren(h('div', { style: 'grid-column:1/-1' }, (e instanceof OD.AuthError ? 'צריך להתחבר לגוגל דרייב. ' : 'נכשל: ') + e.message)); }
     };
     const ov = h('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90;display:flex;align-items:center;justify-content:center;padding:16px' },
       h('div', { class: 'card stack', style: 'width:min(560px,100%)' },
