@@ -265,12 +265,19 @@
     return { name: t(s.siteName), address: [t(s.street), t(s.city)].filter(Boolean).join(', ') };
   }
 
+  // סמלי מוסד: "629477 406512" / "629477, 406512" -> ['629477', '406512']. סמל אחד (או טקסט אחר) נשאר כמו שהוא
+  function codesOf(code) {
+    const c = String(code == null ? '' : code).trim();
+    const parts = c.split(/[\s,;/\\|+&]+/).map(x => x.trim()).filter(Boolean);
+    return parts.length > 1 && parts.every(x => /^\d{3,}$/.test(x)) ? parts : c ? [c] : [];
+  }
+
   // עבודה בירושלים: העיר, הרחוב, שם המוסד או הפרויקט כוללים "ירושלים" (גם "ירושליים"). רק בהן קופץ חלון פרטי האורנים
   function isJerusalem(s) {
     return [s.project, s.city, s.street, s.siteName, s.site].some(x => /ירושלי?ים|jerusalem/i.test(x || ''));
   }
 
-  const api = { placeOf, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, pinePlural, pineCount, pineMissing, jValue, hasContent,
+  const api = { placeOf, codesOf, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, pinePlural, pineCount, pineMissing, jValue, hasContent,
     sortTrees, splitActive, slotsOf, photoForSlot, groupKey, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
     nextNum, warnings, OK, DEFAULT_URGENCY, isOk, urgencyCell, notesCell, setUrgency };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;

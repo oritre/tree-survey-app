@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.120.0';
+  const APP_VERSION = '1.121.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1566,7 +1566,7 @@
       const blob = await Reports.pinesXlsx(list);
       await deliver(blob, name);
       const tot = rows[rows.length - 1];
-      let m = `✓ האקסל הורד: ${list.length} מוסדות, ${tot[6]} אורנים` + (tot[7] ? ` (ב-${tot[7]} חסרים פרטים)` : '') + '.';
+      let m = `✓ האקסל הורד: ${list.length} מוסדות, ${tot[tot.length - 3]} אורנים` + (tot[tot.length - 2] ? ` (ב-${tot[tot.length - 2]} חסרים פרטים)` : '') + '.';
       const saved = await saveSummaryToCloud(list, name, blob);
       if (saved) m += ` נשמר גם בגוגל דרייב: ${saved}.`;
       return m;

@@ -362,7 +362,9 @@
 
     // כותרת
     // סמל מוסד / מנהל שלא מולאו: גם הכותרת שלהם לא מופיעה בדוח
-    if (survey.code) sheet.setCell('B5', valueCell(strings, survey.code)); else sheet.setCell('A5', emptyCell());
+    // כמה סמלי מוסד (למשל "629477 406512"): כל סמל בתא משלו באותה שורה, B5, C5…
+    if (survey.code) Core.codesOf(survey.code).forEach((c, i) => sheet.setCell(String.fromCharCode(66 + i) + '5', valueCell(strings, c)));
+    else sheet.setCell('A5', emptyCell());
     if (survey.manager) sheet.setCell('B6', strCell(strings, survey.manager)); else sheet.setCell('A6', emptyCell());
     // F9 שם המוסד, D10 הכתובת ("רחוב, עיר"), כמו בדוחות במחשב
     const place = Core.placeOf(survey);
