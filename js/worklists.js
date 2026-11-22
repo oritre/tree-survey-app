@@ -1681,7 +1681,14 @@
     function setManual(r, p, q, S) {
       r.geo = { lat: p.lat, lon: p.lon, key: (r.geo && r.geo.key) || '', manual: true };
       if (q) r.geo.q = q;
-      r.u = Date.now(); (S ? S.geo : geo).set(r.id, r.geo); save(S ? S.L : l); redraw();
+      r.u = Date.now(); (S ? S.geo : geo).set(r.id, r.geo);
+      // (1.139.1) שאר השורות באותה כתובת בדיוק (כמה גנים במתחם אחד) עוברות יחד, אם לא תוקנו ביד בעצמן ואין להן נ"צ מעצים
+      const LL = S ? S.L : l, G = S ? S.geo : geo, ak = x => { const v = valuesOf(LL, x); return norm(v.street) + '|' + norm(v.city); }, k = ak(r);
+      let n = 0;
+      if (norm(valuesOf(LL, r).street)) for (const x of LL.rows) if (x !== r && !x.deleted && !(x.geo && (x.geo.manual || x.geo.src === 'gps')) && !(G.get(x.id) && G.get(x.id).src === 'gps') && ak(x) === k) {
+        x.geo = { lat: p.lat, lon: p.lon, key: (x.geo && x.geo.key) || '', manual: true }; if (q) x.geo.q = q; x.u = Date.now(); G.set(x.id, x.geo); n++; }
+      if (n) ui.toast(`המיקום עודכן גם ל-${n} שורות נוספות באותה כתובת`, 3500);
+      save(LL); redraw();
     }
     function fixLoc(r, S) {
       const LL = S ? S.L : l, G = S ? S.geo : geo;
