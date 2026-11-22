@@ -1,31 +1,76 @@
-// סיכומים על פני כמה סקרים: מספר האורנים בכל מוסד (קובץ אקסל), ומפת עצים לשיתוף (דף אינטרנט אחד)
+// סיכומים: ריכוז אורנים (אקסל לסקר אחד או לכמה מוסדות), ומפת עצים לשיתוף (דף אינטרנט אחד)
 (function (root) {
   'use strict';
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const fmtDate = iso => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
 
-  // ---------- קובץ xlsx פשוט (גיליון אחד, מימין לשמאל) ----------
+  // ---------- קובץ xlsx פשוט (גיליון אחד או כמה, מימין לשמאל) ----------
   function colName(n) { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
-  async function xlsx(rows, opts) {
-    opts = opts || {};
-    const sheetRows = rows.map((r, i) => `<row r="${i + 1}">` + r.map((v, j) => {
+  // סגנונות: 0 רגיל, 1 כותרת טבלה (מודגש, רקע ירוק, מסגרת), 2 קישור, 3 מודגש, 4 כותרת גדולה, 5 תא בטבלה (מסגרת), 6 קישור בטבלה, 7 מיושר לימין
+  const STYLES = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+    + '<fonts count="4"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="11"/><name val="Arial"/></font><font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Arial"/></font><font><b/><sz val="15"/><name val="Arial"/></font></fonts>'
+    + '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2EFDA"/></patternFill></fill></fills>'
+    + '<borders count="2"><border/><border><left style="thin"><color rgb="FFA6A6A6"/></left><right style="thin"><color rgb="FFA6A6A6"/></right><top style="thin"><color rgb="FFA6A6A6"/></top><bottom style="thin"><color rgb="FFA6A6A6"/></bottom></border></borders>'
+    + '<cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="8"><xf/>'
+    + '<xf fontId="1" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment wrapText="1" vertical="center" horizontal="center"/></xf>'
+    + '<xf fontId="2" applyFont="1"/><xf fontId="1" applyFont="1"/><xf fontId="3" applyFont="1"/>'
+    + '<xf borderId="1" applyBorder="1" applyAlignment="1"><alignment wrapText="1" vertical="top" horizontal="right"/></xf>'
+    + '<xf fontId="2" borderId="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" horizontal="right"/></xf><xf applyAlignment="1"><alignment horizontal="right"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+  // תא: ערך, או { v, link, s }. sheet: { name, rows, widths, head (מספר שורת הכותרת של הטבלה, מ-0), table (עד איזו שורה יש מסגרת), boldLast, styles: { rowIndex: s } }
+  function sheetXml(sh) {
+    const rows = sh.rows, head = sh.head || 0, links = [];
+    const tableEnd = sh.table != null ? sh.table : -1;
+    const sheetRows = rows.map((r, i) => `<row r="${i + 1}">` + r.map((c, j) => {
       const ref = colName(j + 1) + (i + 1);
-      const st = (i === 0 || (opts.boldLast && i === rows.length - 1)) ? ' s="1"' : '';
-      if (v == null || v === '') return `<c r="${ref}"${st}/>`;
-      if (typeof v === 'number') return `<c r="${ref}"${st}><v>${v}</v></c>`;
-      return `<c r="${ref}"${st} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
+      const o = c != null && typeof c === 'object' ? c : { v: c };
+      const inTable = i > head && i <= tableEnd;
+      let st = o.s != null ? o.s : i === head || (sh.boldLast && i === rows.length - 1) ? 1 : (sh.styles && sh.styles[i] != null) ? sh.styles[i] : inTable ? 5 : 0;
+      if (o.link) { links.push({ ref, url: o.link }); if (o.s == null) st = inTable ? 6 : 2; }
+      const sa = st ? ` s="${st}"` : '';
+      const v = o.v;
+      if (v == null || v === '') return `<c r="${ref}"${sa}/>`;
+      if (typeof v === 'number') return `<c r="${ref}"${sa}><v>${v}</v></c>`;
+      return `<c r="${ref}"${sa} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
     }).join('') + '</row>').join('');
-    const cols = (opts.widths || []).map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('');
+    const cols = (sh.widths || []).map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('');
+    const width = Math.max(1, ...rows.map(r => r.length));
+    const lastData = sh.boldLast ? rows.length - 1 : rows.length;
+    const filter = (sh.head != null || !sh.noFilter) && lastData > head ? `<autoFilter ref="A${head + 1}:${colName((rows[head] || []).length || width)}${lastData}"/>` : '';
+    const hl = links.length ? '<hyperlinks>' + links.map((l, k) => `<hyperlink ref="${l.ref}" r:id="rIdL${k + 1}"/>`).join('') + '</hyperlinks>' : '';
+    const merges = (sh.merges || []).length ? `<mergeCells count="${sh.merges.length}">` + sh.merges.map(m => `<mergeCell ref="${m}"/>`).join('') + '</mergeCells>' : '';
+    const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><sheetViews><sheetView rightToLeft="1" workbookViewId="0">${sh.freeze === false ? '' : `<pane ySplit="${head + 1}" topLeftCell="A${head + 2}" activePane="bottomLeft" state="frozen"/>`}</sheetView></sheetViews>${cols ? `<cols>${cols}</cols>` : ''}<sheetData>${sheetRows}</sheetData>${filter}${merges}${hl}<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`;
+    const rels = links.length ? '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + links.map((l, k) => `<Relationship Id="rIdL${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${esc(l.url)}" TargetMode="External"/>`).join('') + '</Relationships>' : null;
+    return { xml, rels };
+  }
+  async function book(sheets) {
     const zip = new JSZip();
-    zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>');
+    const n = sheets.length;
+    zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+      + sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')
+      + '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>');
     zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
-    zip.file('xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${esc(opts.sheet || 'סיכום')}" sheetId="1" r:id="rId1"/></sheets></workbook>`);
-    zip.file('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
-    zip.file('xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="11"/><name val="Arial"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2EFDA"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf/><xf fontId="1" fillId="2" applyFont="1" applyFill="1"/></cellXfs></styleSheet>');
-    zip.file('xl/worksheets/sheet1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView rightToLeft="1" workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>${cols ? `<cols>${cols}</cols>` : ''}<sheetData>${sheetRows}</sheetData><autoFilter ref="A1:${colName(rows[0].length)}${rows.length - (opts.boldLast ? 1 : 0)}"/></worksheet>`);
+    const sname = (sh, i) => esc(String(sh.name || sh.sheet || 'סיכום ' + (i + 1)).replace(/[\\/?*[\]:]/g, ' ').slice(0, 31));
+    zip.file('xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets>`
+      + sheets.map((sh, i) => `<sheet name="${sname(sh, i)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('') + '</sheets>'
+      + (sheets.some((sh, i) => sh.head != null || !sh.noFilter) ? '<definedNames>' + sheets.map((sh, i) => {
+        const head = sh.head || 0, last = sh.boldLast ? sh.rows.length - 1 : sh.rows.length;
+        return last > head ? `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${sname(sh, i).replace(/'/g, "''")}'!$A$${head + 1}:$${colName((sh.rows[head] || []).length || 1)}$${last}</definedName>` : '';
+      }).join('') + '</definedNames>' : '') + '</workbook>');
+    zip.file('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')
+      + `<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`);
+    zip.file('xl/styles.xml', STYLES);
+    sheets.forEach((sh, i) => {
+      const r = sheetXml(sh);
+      zip.file(`xl/worksheets/sheet${i + 1}.xml`, r.xml);
+      if (r.rels) zip.file(`xl/worksheets/_rels/sheet${i + 1}.xml.rels`, r.rels);
+    });
     const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
     return new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   }
+  // גיליון אחד (כמו קודם): rows[0] = כותרות
+  function xlsx(rows, opts) { return book([Object.assign({ name: (opts || {}).sheet }, opts || {}, { rows })]); }
 
   // ---------- מוסדות ----------
   // מוסד מזוהה לפי סמל מוסד, ואם אין — לפי שם + כתובת
@@ -45,25 +90,83 @@
     return [...m.values()];
   }
 
-  // ---------- סיכום אורנים ----------
+  // ---------- ריכוז אורנים (1.116) ----------
+  // כל אורן בשורה משלו: מיקום, גובה, קוטר צמרת, קוטרי הגזעים, נ"צ ברשת ישראל ובגוגל, וקישור שפותח את המקום בגוגל מפות
+  const num = v => v == null || v === '' || isNaN(+v) ? '' : +v;
+  const gmaps = (lat, lon) => `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lon).toFixed(6)}`;
+  // סמלי מוסד: "629477 406512" / "629477/406512" -> "629477, 406512"
+  function codesOf(code) {
+    const c = String(code == null ? '' : code).trim();
+    const parts = c.split(/[\s,;/\\|+&]+|\bו(?=\d)/).map(x => x.trim()).filter(Boolean);
+    return parts.length > 1 && parts.every(x => /^\d{3,}$/.test(x)) ? parts : c ? [c] : [];
+  }
+  const codeText = code => codesOf(code).join(', ');
+  // העצים עם אורנים בסקר, לפי סדר העצים
+  function pineTrees(s) {
+    return Core.sortTrees((s.trees || []).filter(t => Core.hasContent(t) && !t.ref && (Core.isPine(t.species) || (t.pineList || []).length || Core.pineCount(t))));
+  }
+  function pineTotal(s) { return pineTrees(s).reduce((a, t) => a + (Core.pineCount(t) || 0), 0); }
+  const PINE_HEAD = ['מס\' אורן', 'מספר העץ בסקר', 'מין העץ', 'מיקום', 'גובה (מ\')', 'קוטר צמרת (מ\')', 'מספר גזעים', 'קוטרי הגזעים (ס"מ)', 'X רשת ישראל', 'Y רשת ישראל', 'קו רוחב', 'קו אורך', 'גוגל מפות'];
+  const PINE_W = [9, 12, 16, 34, 10, 12, 10, 18, 13, 13, 12, 12, 16];
+  function pineLines(s, k0) {
+    const out = [];
+    let k = k0 || 0;
+    for (const t of pineTrees(s)) {
+      const list = (t.pineList || []).length ? t.pineList : Array.from({ length: Core.pineCount(t) || 1 }, () => ({}));
+      for (const p of list) {
+        const trunks = (p.trunks || []).filter(x => x != null && x !== '' && !isNaN(+x)).map(Number);
+        const lat = p.lat != null ? p.lat : null, lon = p.lon != null ? p.lon : null;
+        out.push([++k, String(t.num || '').trim() || (Core.isOk(t) ? 'תקין' : ''), (t.species || '').trim(), (p.loc || '').trim(), num(p.h), num(p.c),
+          trunks.length || '', trunks.length === 1 ? trunks[0] : trunks.join(', '),
+          p.itmX != null ? Math.round(p.itmX * 10) / 10 : '', p.itmY != null ? Math.round(p.itmY * 10) / 10 : '',
+          lat != null ? +(+lat).toFixed(6) : '', lon != null ? +(+lon).toFixed(6) : '',
+          lat != null ? { v: 'פתח בגוגל מפות', link: gmaps(lat, lon) } : '']);
+      }
+    }
+    return out;
+  }
+  // קובץ לסקר אחד: פרטי המוסד למעלה, ומתחת טבלת האורנים
+  function pinesSheet(s) {
+    const p = Core.placeOf(s);
+    const lines = pineLines(s);
+    const info = [
+      [{ v: 'ריכוז אורנים', s: 4 }],
+      [{ v: 'שם המוסד:', s: 3 }, '', '', { v: p.name, s: 7 }],
+      [{ v: codesOf(s.code).length > 1 ? 'סמלי מוסד:' : 'סמל מוסד:', s: 3 }, '', '', { v: codeText(s.code), s: 7 }],
+      [{ v: 'כתובת:', s: 3 }, '', '', { v: p.address, s: 7 }],
+      [{ v: 'מנהל/ת:', s: 3 }, '', '', { v: (s.manager || '').trim(), s: 7 }],
+      [{ v: 'תאריך הסקר:', s: 3 }, '', '', { v: fmtDate(s.date), s: 7 }],
+      [{ v: 'מספר אורנים:', s: 3 }, '', '', { v: lines.length, s: 7 }],
+      []];
+    const head = info.length;
+    return { name: 'ריכוז אורנים', rows: [...info, PINE_HEAD, ...lines], head, table: head + lines.length, widths: PINE_W, freeze: false,
+      merges: info.slice(1, 7).map((_, i) => `A${i + 2}:C${i + 2}`) };
+  }
+  async function surveyPinesXlsx(s) { return book([pinesSheet(s)]); }
+
+  // כמה מוסדות (מסך "אורנים ומפות"): גיליון מוסדות (שורה לכל מוסד), וגיליון כל האורנים עם פרטי המוסד בכל שורה
   function pineRows(surveys) {
-    const head = ['פרויקט', 'סמל מוסד', 'שם המוסד', 'כתובת', 'תאריך הסקר', 'מספר אורנים', 'עצי אורן בלי כמות', 'עצים בסקר'];
+    const head = ['פרויקט', 'סמל מוסד', 'שם המוסד', 'כתובת', 'מנהל/ת', 'תאריך הסקר', 'מספר אורנים', 'אורנים בלי פרטים', 'עצים בסקר'];
     const rows = surveys.map(s => {
       const p = Core.placeOf(s);
       const trees = (s.trees || []).filter(Core.hasContent);
-      let pines = 0, missing = 0;
-      for (const t of trees) {
-        if (t.pines != null && t.pines !== '' && !isNaN(+t.pines)) pines += +t.pines;
-        else if (Core.isPine(t.species)) missing++;
-      }
-      return [s.project || '', (s.code || '').trim(), p.name, p.address, fmtDate(s.date), pines, missing || '', trees.length];
+      const lines = pineLines(s);
+      const missing = pineTrees(s).flatMap(t => t.pineList || []).filter(x => Core.pineMissing(x).length).length
+        + pineTrees(s).filter(t => !(t.pineList || []).length).reduce((a, t) => a + (Core.pineCount(t) || 1), 0);
+      return [s.project || '', codeText(s.code), p.name, p.address, (s.manager || '').trim(), fmtDate(s.date), lines.length, missing || '', trees.length];
     }).sort((a, b) => a[0].localeCompare(b[0], 'he') || a[2].localeCompare(b[2], 'he'));
     const sum = i => rows.reduce((a, r) => a + (+r[i] || 0), 0);
-    return [head, ...rows, ['סה"כ', '', `${rows.length} מוסדות`, '', '', sum(5), sum(6) || '', sum(7)]];
+    return [head, ...rows, ['סה"כ', '', `${rows.length} מוסדות`, '', '', '', sum(6), sum(7) || '', sum(8)]];
   }
-
   async function pinesXlsx(surveys) {
-    return xlsx(pineRows(surveys), { sheet: 'אורנים', widths: [14, 12, 30, 30, 12, 13, 16, 11], boldLast: true });
+    const inst = pineRows(surveys);
+    const head = ['פרויקט', 'סמל מוסד', 'שם המוסד', 'כתובת', ...PINE_HEAD];
+    const sorted = surveys.slice().sort((a, b) => (a.project || '').localeCompare(b.project || '', 'he') || Core.placeOf(a).name.localeCompare(Core.placeOf(b).name, 'he'));
+    let k = 0;
+    const all = sorted.flatMap(s => { const p = Core.placeOf(s); return pineLines(s).map(l => [s.project || '', codeText(s.code), p.name, p.address, ++k, ...l.slice(1)]); });
+    return book([
+      { name: 'מוסדות', rows: inst, widths: [14, 16, 30, 30, 18, 12, 12, 15, 11], boldLast: true, table: inst.length - 2 },
+      { name: 'כל האורנים', rows: [head, ...all], widths: [14, 16, 26, 26, ...PINE_W], table: all.length }]);
   }
 
   // ---------- מפה לשיתוף ----------
@@ -92,7 +195,7 @@
         let img = null;
         if (ph && getThumb) { try { const b = await getThumb(s, ph); if (b) img = await toData(b); } catch (_) {} }
         points.push({ la: +t.lat.toFixed(7), lo: +t.lon.toFixed(7), n: t.num || '', sp: t.species || '', no: t.notes || '',
-          u: URG[(t.urgency || '').trim()] || (t.urgency || ''), pi: t.pines || '', bad: needsCare(t) ? 1 : 0,
+          u: URG[(t.urgency || '').trim()] || (t.urgency || ''), pi: Core.pineCount(t) || '', bad: needsCare(t) ? 1 : 0,
           si: p.name, ad: p.address, co: s.code || '', d: fmtDate(s.date), img });
         n++;
       }
@@ -152,5 +255,5 @@ if(D.points.length)map.fitBounds(D.points.map(p=>[p.la,p.lo]),{padding:[30,30],m
     return { blob: new Blob([html], { type: 'text/html' }), points: points.length, noGps, sites };
   }
 
-  root.Reports = { xlsx, pinesXlsx, pineRows, mapHtml, latestPerPlace, placeKey, needsCare };
+  root.Reports = { xlsx, book, pinesXlsx, pineRows, surveyPinesXlsx, pineTrees, pineTotal, codesOf, codeText, gmaps, mapHtml, latestPerPlace, placeKey, needsCare };
 })(self);

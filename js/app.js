@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.115.0';
+  const APP_VERSION = '1.116.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -309,6 +309,7 @@
 
   window.App = {
     version: APP_VERSION,
+    pinesFile: s => pinesFile(s),
     live: id => (cur && cur.id === id ? cur : null),
     // BricsCAD במחשב (1.95.0, js/cadlink.js): ייעוד שהגיע מ-TREESTABLE לסקר הפתוח
     cadUpdated(id, changed) {
@@ -531,12 +532,12 @@
   // (בלי התמונות מהאקסל) ולשמור אותו מעל הגרסה המלאה, וכך התמונות נעלמות מהסקר
   async function copySurvey(old, withPhotos, save = true) {
     // גם המיקום על המדידה (סקר לבנייה): בלי זה הסקר החדש נפתח בלי המדידה ובלי סימוני העצים
-    const keep = ['num', 'okNum', 'species', 'notes', 'urgency', 'pines', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS,
+    const keep = ['num', 'okNum', 'species', 'notes', 'urgency', 'pines', 'pineList', 'split', 'lat', 'lon', 'acc', 'gpsTime', 'gpsSrc', ...Construction.FIELDS,
       'px', 'py', 'pref', 'pname', 'polyId'];
     const s = { id: uid(), type: Construction.typeOf(old), project: old.project || '', siteName: old.siteName != null ? old.siteName : (old.site || ''), street: old.street || '', city: old.city || '',
       code: old.code || '', manager: old.manager || '', gush: old.gush || '', helka: old.helka || '', purpose: old.purpose || undefined, planNo: old.planNo || undefined, cset: old.cset ? Object.assign({}, old.cset) : undefined, warnGps: !!old.warnGps, date: today(), created: Date.now(), prev: { id: old.id, date: old.date }, odLayout: 2, trees: [] };
     for (const t of old.trees || []) {
-      const nt = Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, t[k]])));
+      const nt = Object.assign({ id: uid(), photos: [], created: Date.now() }, Object.fromEntries(keep.filter(k => t[k] !== undefined).map(k => [k, k === 'pineList' ? JSON.parse(JSON.stringify(t[k])) : t[k]])));
       if (withPhotos) for (const p of t.photos || []) {
         // תמונה מהסקר הקודם: מסומנת בתאריך שלו, לא נשלחת שוב לטלגרם, ונכנסת לדוח עד שמצלמים תמונה חדשה לאותו עץ
         const np = Object.assign({}, p, { id: uid(), fromOld: p.fromOld || old.date || '' });
@@ -1484,11 +1485,11 @@
     const list = h('div', { class: 'stack' });
     const sel = new Set();
     let entries = [];
-    const btnP = h('button', { class: 'btn primary big', disabled: true }, '🌲 סיכום אורנים (אקסל)');
+    const btnP = h('button', { class: 'btn primary big', disabled: true }, '🌲 ריכוז אורנים (אקסל)');
     const btnM = h('button', { class: 'btn primary big', disabled: true }, '🗺 מפה לשיתוף');
     app.replaceChildren(bar(wl ? { title: 'אורנים ומפות', sub: wl.name } : 'אורנים ומפות', back), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
-        h('div', { class: 'small' }, 'בחר פרויקט שלם או כמה סקרים. סיכום האורנים יוצא כאקסל: שורה לכל מוסד (לפי סמל מוסד, ובלי סמל לפי שם וכתובת). המפה היא דף אינטרנט: נקודה ירוקה לעץ תקין, אדומה לעץ שדורש טיפול, ולחיצה על נקודה מציגה את פרטי העץ.'),
+        h('div', { class: 'small' }, 'בחר פרויקט שלם או כמה סקרים. ריכוז האורנים יוצא כאקסל עם שני גיליונות: "מוסדות" (שורה לכל מוסד עם הסמלים, הכתובת ומספר האורנים) ו"כל האורנים" (כל אורן עם המיקום, הגובה, הצמרת, הגזעים, נ"צ וקישור לגוגל מפות). המפה היא דף אינטרנט: נקודה ירוקה לעץ תקין, אדומה לעץ שדורש טיפול, ולחיצה על נקודה מציגה את פרטי העץ.'),
         h('label', { class: 'row small', style: 'gap:8px' }, latest, 'רק הסקר האחרון בכל מוסד (כדי לא לספור פעמיים)'),
         h('div', { class: 'row' }, btnP, btnM), status),
       q, msg, list));
@@ -1561,11 +1562,11 @@
     btnP.onclick = run(btnP, async () => {
       const list = await chosen();
       const rows = Reports.pineRows(list);
-      const name = safeName(`סיכום אורנים - ${titleOf(list)} - ${fmtDate(today()).replace(/\//g, '.')}`) + '.xlsx';
+      const name = safeName(`ריכוז אורנים - ${titleOf(list)} - ${fmtDate(today()).replace(/\//g, '.')}`) + '.xlsx';
       const blob = await Reports.pinesXlsx(list);
       await deliver(blob, name);
       const tot = rows[rows.length - 1];
-      let m = `✓ האקסל הורד: ${list.length} מוסדות, ${tot[5]} אורנים` + (tot[6] ? ` (${tot[6]} עצי אורן בלי כמות)` : '') + '.';
+      let m = `✓ האקסל הורד: ${list.length} מוסדות, ${tot[6]} אורנים` + (tot[7] ? ` (ב-${tot[7]} חסרים פרטים)` : '') + '.';
       const saved = await saveSummaryToCloud(list, name, blob);
       if (saved) m += ` נשמר גם בגוגל דרייב: ${saved}.`;
       return m;
@@ -1873,7 +1874,9 @@
   }
 
   function treeRow(t) {
-    const pineMissing = !Construction.isConstruction(cur) && Core.isPine(t.species) && (t.pines == null || t.pines === '');
+    const pineMissing = !Construction.isConstruction(cur) && Core.isPine(t.species) && Core.isJerusalem(cur)
+      && (!(t.pineList || []).length || t.pineList.some(p => Core.pineMissing(p).length));
+    const pineN = !Construction.isConstruction(cur) && (t.pineList || []).length;
     const urgCls = v => v === Core.OK ? 'ok' : v;
     const urg = !Construction.isConstruction(cur) && t.urgency ? ' u-' + urgCls(t.urgency) : '';
     const picked = selMode && selIds.has(t.id);
@@ -1888,7 +1891,8 @@
         Construction.isConstruction(cur) ? constructionBadge(t)
           : t.urgency ? h('span', { class: 'badge u-' + urgCls(t.urgency) }, t.urgency) : null,
         t.ref ? h('span', { class: 'badge soft', title: 'לא להתייחסות: נשמר בסקר בלבד, לא נכנס לקבצים' }, 'לא להתייחסות') : null,
-        pineMissing ? h('span', { class: 'badge alert', title: 'חסרה כמות אורנים' }, 'אורנים?') : null,
+        pineMissing ? h('span', { class: 'badge alert', title: 'חסרים פרטי אורנים' }, pineN ? `🌲${pineN}?` : 'אורנים?')
+          : pineN ? h('span', { class: 'badge soft', title: 'אורנים עם פרטים' }, '🌲' + pineN) : null,
         (t.photos || []).length ? h('span', { class: 'badge soft', title: 'תמונות' }, icon('camera'), (t.photos || []).length) : null,
         t.lat != null ? h('span', { class: 'badge soft', title: 'יש נ"צ' }, icon('pin')) : null,
         Construction.isConstruction(cur) ? transplantDot(t) : null));
@@ -2361,23 +2365,24 @@
     };
     showSplit(); showDup();
 
-    // מין העץ + אורנים
-    const pineIn = h('input', { class: 'in', type: 'number', inputmode: 'numeric', min: 0, value: t.pines == null ? '' : t.pines,
-      oninput: e => { t.pines = e.target.value === '' ? null : Number(e.target.value); markPine(); changed(); } });
-    const pineWrap = field('כמה אורנים?', pineIn);
+    // מין העץ + אורנים: כפתור "פרטי אורנים" (חלון לכל אורן בשורה: מיקום, גובה, צמרת, גזעים, נ"צ)
+    const pineInfo = h('span', { class: 'small' });
+    const pineBtn = h('button', { class: 'btn', type: 'button', onclick: () => openPines(t, () => { markPine(); changed(); }) }, '🌲 פרטי אורנים');
+    const pineWrap = h('div', { class: 'row pine-box', style: 'gap:10px;align-items:center;flex-wrap:wrap' }, pineBtn, pineInfo);
     const markPine = () => {
       const pine = Core.isPine(t.species) && !Construction.isConstruction(cur);
-      pineWrap.classList.toggle('hidden', !pine && (t.pines == null || t.pines === ''));
-      pineIn.classList.toggle('alert', pine && (t.pines == null || t.pines === ''));
+      const has = (t.pineList || []).length > 0;
+      pineWrap.classList.toggle('hidden', !pine && !has);
+      const miss = pine && (!has || t.pineList.some(p => Core.pineMissing(p).length));
+      pineBtn.classList.toggle('alert', miss);
+      pineInfo.textContent = pineSummary(t);
     };
-    // כשנכתב אורן (גם עם עוד מינים או בשגיאת כתיב) ואין כמות: שואל מיד "כמה אורנים?"
+    // כשנכתב אורן (גם עם עוד מינים או בשגיאת כתיב) ועוד אין פרטים: החלון נפתח מיד (רק בעבודות בירושלים)
     const askPines = async () => {
-      if (Construction.isConstruction(cur) || !Core.isJerusalem(cur)) return; // החלון רק בעבודות בירושלים (ori)
-      if (!Core.isPine(t.species) || (t.pines != null && t.pines !== '') || t._askedPines === t.species) return;
+      if (Construction.isConstruction(cur) || !Core.isJerusalem(cur)) return;
+      if (!Core.isPine(t.species) || (t.pineList || []).length || t._askedPines === t.species) return;
       t._askedPines = t.species;
-      const n = await askNumber('כמה אורנים?', `במין העץ "${t.species}" זוהה אורן`);
-      if (n == null) { pineIn.focus(); return; }
-      t.pines = n; pineIn.value = n; markPine(); changed();
+      await openPines(t, () => { markPine(); changed(); });
     };
     const spIn = h('input', { class: 'in', value: t.speciesAuto ? '' : t.species || '', placeholder: t.speciesAuto ? t.species.trim() : '', 'aria-label': 'מין עץ',
       oninput: e => { t.species = e.target.value; if (t.speciesAuto) { delete t.speciesAuto; spIn.placeholder = ''; } markPine(); changed(); if (Construction.isConstruction(cur) && constructionFields.refresh) constructionFields.refresh(); if (e.inputType === 'insertReplacementText' || !e.inputType) askPines(); },
@@ -2674,6 +2679,197 @@
     });
   }
 
+  // ---------- פרטי אורנים (1.116, ori) ----------
+  // כשמין העץ הוא אורן (בירושלים): חלון שבו לכל אורן בשורה מיקום, גובה, קוטר צמרת, קוטר לכל גזע ונ"צ (סמן על תצלום אוויר).
+  // ההערות של העץ נשארות נפרדות. מזה יוצא "ריכוז אורנים" באקסל, בנוסף לדוח הרגיל
+  const newPine = () => ({ id: uid(), loc: '', h: '', c: '', trunks: [''] });
+  const pineNum = v => { const x = String(v == null ? '' : v).replace(',', '.').trim(); return x === '' || isNaN(+x) ? '' : +x; };
+  // משנה את מספר האורנים בשורה (גם מהדיבור). t.pines נשאר מספר, לעמודה J באקסל (לא מודפסת)
+  function setPineCount(t, n) {
+    n = Math.max(0, Math.round(+n || 0));
+    const list = Array.isArray(t.pineList) ? t.pineList : [];
+    while (list.length < n) list.push(newPine());
+    while (list.length > n) list.pop();
+    t.pineList = list;
+    t.pines = n || null;
+  }
+  function pineSummary(t) {
+    const list = t.pineList || [];
+    if (!list.length) return Core.pineCount(t) ? `${Core.pineCount(t)} אורנים, בלי פרטים` : 'אין פרטי אורנים';
+    const miss = list.filter(p => Core.pineMissing(p).length).length;
+    return `${list.length === 1 ? 'אורן אחד' : list.length + ' אורנים'}` + (miss ? ` · חסרים פרטים ב-${miss}` : ' · הכול מלא');
+  }
+  function toItm(lat, lon) {
+    if (!window.proj4) return null;
+    const p = window.proj4('WGS84', ITM, [lon, lat]);
+    return { x: Math.round(p[0] * 10) / 10, y: Math.round(p[1] * 10) / 10 };
+  }
+  async function setPinePos(p, lat, lon, src) {
+    await loadProj4().catch(() => {});
+    p.lat = +lat.toFixed(7); p.lon = +lon.toFixed(7); p.src = src;
+    const i = toItm(lat, lon);
+    if (i) { p.itmX = i.x; p.itmY = i.y; } else { delete p.itmX; delete p.itmY; }
+  }
+  const gmapsUrl = (lat, lon) => `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lon).toFixed(6)}`;
+  function myPos() {
+    return new Promise(r => navigator.geolocation
+      ? navigator.geolocation.getCurrentPosition(p => r(p), () => r(null), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 })
+      : r(null));
+  }
+
+  // מפה עם סמן שגוררים בדיוק אל העץ (גם כשעומדים קצת רחוק). נגיעה במפה מעבירה את הסמן לשם. מחזיר [lat, lon] או null
+  async function pickOnMap({ start, title, others }) {
+    if (!navigator.onLine) { toast('אין קליטה: המפה צריכה אינטרנט', 3000); return null; }
+    try { await loadLeaflet(); } catch (e) { toast(e.message, 3000); return null; }
+    let at = start;
+    if (!at) { const p = await myPos(); at = p ? [p.coords.latitude, p.coords.longitude] : [31.7683, 35.2137]; }
+    const L = window.L;
+    const mapEl = h('div', { class: 'map-box' });
+    const info = h('div', { class: 'small' });
+    let close;
+    const ov = h('div', { class: 'annot map-ov' },
+      h('div', { class: 'annot-bar' },
+        h('span', { class: 'sp', style: 'font-weight:600' }, title),
+        h('button', { class: 'txt', onclick: () => close() }, 'ביטול'),
+        h('button', { class: 'txt', onclick: async () => {
+          const p = await myPos();
+          if (!p) return toast('לא התקבל מיקום מה-GPS', 2500);
+          const ll = [p.coords.latitude, p.coords.longitude];
+          mk.setLatLng(ll); map.setView(ll, Math.max(map.getZoom(), 19)); upd();
+        } }, '📍 אני כאן'),
+        h('button', { class: 'txt save', onclick: () => { const c = mk.getLatLng(); close([c.lat, c.lng]); } }, 'שמור מיקום')),
+      h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl),
+      h('div', { class: 'map-info' }, info));
+    document.body.append(ov);
+    const map = L.map(mapEl, { zoomControl: true, attributionControl: true, maxZoom: 22 }).setView(at, 20);
+    const base = {};
+    for (const [name, [url, o]] of Object.entries(LAYERS)) base[name] = tileLayer(url, o);
+    const pref = await DB.getKV('mapLayer', 'גוגל – לוויין');
+    (base[pref] || base['גוגל – לוויין']).addTo(map);
+    L.control.layers(base, null, { position: 'topleft', collapsed: false }).addTo(map);
+    map.on('baselayerchange', e => DB.setKV('mapLayer', e.name));
+    for (const o of others || []) L.circleMarker([o.lat, o.lon], { radius: 6, color: '#fff', weight: 2, fillColor: o.color || '#2e7d32', fillOpacity: 1 })
+      .bindTooltip(o.label, { permanent: true, direction: 'top', offset: [0, -6] }).addTo(map);
+    const pin = L.divIcon({ className: 'pine-pin', iconSize: [36, 48], iconAnchor: [18, 46],
+      html: '<svg viewBox="0 0 36 48" width="36" height="48"><path d="M18 47C18 47 33 29 33 17A15 15 0 0 0 3 17C3 29 18 47 18 47Z" fill="#e53935" stroke="#fff" stroke-width="2.5"/><circle cx="18" cy="17" r="5.5" fill="#fff"/></svg>' });
+    const mk = L.marker(at, { draggable: true, icon: pin, autoPan: true, zIndexOffset: 1000 }).addTo(map);
+    const upd = () => {
+      const c = mk.getLatLng(), i = toItm(c.lat, c.lng);
+      info.textContent = 'גרור את הסמן האדום בדיוק אל העץ (או גע במפה במקום העץ). '
+        + (i ? `רשת ישראל: ${Math.round(i.x)} / ${Math.round(i.y)} · ` : '') + `${c.lat.toFixed(6)}, ${c.lng.toFixed(6)}`;
+    };
+    mk.on('drag dragend', upd);
+    map.on('click', e => { mk.setLatLng(e.latlng); upd(); });
+    upd();
+    setTimeout(() => map.invalidateSize(), 50);
+    const res = await new Promise(r => { close = r; });
+    map.remove(); ov.remove();
+    return res || null;
+  }
+
+  // החלון: לפי מספר האורנים בשורה. "אורנים" (רבים) או כמה מינים: קודם שואל כמה. onChange נקרא בכל שינוי
+  async function openPines(t, onChange) {
+    if (!(t.pineList || []).length) {
+      let n = Core.pineCount(t); // סקר ישן: הכמות שנרשמה
+      if (n == null) {
+        if (Core.pinePlural(t.species)) {
+          n = await askNumber('כמה עצי אורן יש בשורה?', `במין העץ "${(t.species || '').trim()}" זוהו אורנים`);
+          if (n == null || n < 1) return;
+        } else n = 1;
+      }
+      setPineCount(t, n);
+      onChange();
+    }
+    await loadProj4().catch(() => {});
+    const list = h('div', { class: 'stack pine-list' });
+    const countEl = h('b', { style: 'font-size:22px;min-width:2ch;text-align:center' });
+    // מיקומים שכבר נכתבו בסקר הזה, לבחירה מהירה
+    const locs = () => [...new Set(cur.trees.flatMap(x => (x.pineList || []).map(p => (p.loc || '').trim())).filter(Boolean))].slice(0, 10);
+    const numIn = (p, k, ph) => h('input', { class: 'in', type: 'text', inputmode: 'decimal', placeholder: ph, value: p[k] == null ? '' : p[k], style: 'width:100%',
+      oninput: e => { p[k] = pineNum(e.target.value); onChange(); } });
+    const card = (p, i) => {
+      const missEl = h('span', { class: 'small', style: 'color:var(--danger)' });
+      const showMiss = () => { const m = Core.pineMissing(p); missEl.textContent = m.length ? 'חסר: ' + m.join(', ') : ''; };
+      const ch = () => { onChange(); showMiss(); };
+      const locIn = h('input', { class: 'in', value: p.loc || '', placeholder: 'למשל: בחצר האחורית, ליד השער', oninput: e => { p.loc = e.target.value; ch(); } });
+      const chips = h('div', { class: 'chips' }, ...locs().filter(l => l !== (p.loc || '').trim()).map(l => h('button', { class: 'chip', type: 'button', onclick: () => { p.loc = l; locIn.value = l; ch(); } }, l)));
+      const trunks = h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;align-items:center' });
+      const drawTrunks = () => {
+        if (!(p.trunks || []).length) p.trunks = [''];
+        trunks.replaceChildren(...p.trunks.map((v, j) => h('span', { class: 'row', style: 'gap:2px;align-items:center' },
+          h('input', { class: 'in', type: 'text', inputmode: 'decimal', value: v == null ? '' : v, placeholder: p.trunks.length > 1 ? `גזע ${j + 1}` : 'ס"מ', style: 'width:86px',
+            oninput: e => { p.trunks[j] = pineNum(e.target.value); ch(); } }),
+          p.trunks.length > 1 ? h('button', { class: 'icon-btn', type: 'button', title: 'הסר גזע', style: 'font-size:22px', onclick: () => { p.trunks.splice(j, 1); drawTrunks(); ch(); } }, '×') : null)),
+          h('button', { class: 'btn small', type: 'button', onclick: () => { p.trunks.push(''); drawTrunks(); ch(); const ins = trunks.querySelectorAll('input'); ins[ins.length - 1].focus(); } }, icon('plus'), 'גזע נוסף'));
+      };
+      drawTrunks();
+      const posEl = h('div', { class: 'small' });
+      const drawPos = () => {
+        const has = p.lat != null;
+        posEl.replaceChildren(...(has ? [
+          h('span', {}, (p.itmX != null ? `רשת ישראל: ${Math.round(p.itmX)} / ${Math.round(p.itmY)} · ` : '') + `גוגל: ${p.lat.toFixed(6)}, ${p.lon.toFixed(6)} `),
+          h('a', { href: gmapsUrl(p.lat, p.lon), target: '_blank', rel: 'noopener' }, 'פתח בגוגל מפות')] : [h('span', { class: 'muted' }, 'אין נ"צ לאורן')]));
+      };
+      drawPos();
+      const others = () => cur.trees.flatMap(x => (x.pineList || []).map((q, k) => ({ q, label: `${x.num || ''}${(x.pineList || []).length > 1 ? '/' + (k + 1) : ''}` })))
+        .filter(o => o.q !== p && o.q.lat != null).map(o => ({ lat: o.q.lat, lon: o.q.lon, label: 'אורן ' + o.label, color: '#1b5e20' }))
+        .concat(cur.trees.filter(x => x.lat != null && !(x.pineList || []).length).map(x => ({ lat: x.lat, lon: x.lon, label: 'עץ ' + (x.num || ''), color: '#607d8b' })));
+      const gpsBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
+        gpsBtn.disabled = true; gpsBtn.lastChild.textContent = 'מאתר…';
+        const r = await myPos();
+        gpsBtn.disabled = false; gpsBtn.lastChild.textContent = 'נ"צ כאן';
+        if (!r) return toast('לא התקבל מיקום מה-GPS', 2500);
+        await setPinePos(p, r.coords.latitude, r.coords.longitude, 'gps'); p.acc = Math.round(r.coords.accuracy);
+        drawPos(); ch(); toast(`נ"צ נשמר (±${p.acc} מ'). אפשר לדייק בתצ"א`, 2500);
+      } }, icon('pin'), h('span', {}, 'נ"צ כאן'));
+      const mapBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
+        const first = cur.trees.flatMap(x => x.pineList || []).find(q => q.lat != null);
+        const start = p.lat != null ? [p.lat, p.lon] : t.lat != null ? [t.lat, t.lon] : first ? [first.lat, first.lon] : null;
+        const ll = await pickOnMap({ start, title: `אורן ${i + 1}${t.num ? ' בעץ ' + t.num : ''}`, others: others() });
+        if (!ll) return;
+        await setPinePos(p, ll[0], ll[1], 'map'); delete p.acc;
+        drawPos(); ch();
+      } }, '🗺 סמן על תצ"א');
+      const del = (t.pineList || []).length > 1
+        ? h('button', { class: 'btn small danger', type: 'button', onclick: () => {
+          if ((p.loc || p.h !== '' || p.lat != null) && !confirm(`למחוק את אורן ${i + 1} ואת הפרטים שלו?`)) return;
+          t.pineList.splice(t.pineList.indexOf(p), 1); t.pines = t.pineList.length || null; onChange(); draw();
+        } }, icon('trash'), 'מחק אורן') : null;
+      showMiss();
+      return h('div', { class: 'card stack pine-card' },
+        h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' }, h('b', { style: 'font-size:18px' }, `🌲 אורן ${i + 1}`), missEl, del),
+        field('מיקום', locIn), chips,
+        h('div', { class: 'grid2' }, field('גובה (מ\')', numIn(p, 'h', 'מטר')), field('קוטר צמרת (מ\')', numIn(p, 'c', 'מטר'))),
+        field('קוטר גזע (ס"מ), לכל גזע בנפרד', trunks),
+        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' }, gpsBtn, mapBtn), posEl);
+    };
+    const draw = () => {
+      countEl.textContent = t.pineList.length;
+      list.replaceChildren(...t.pineList.map(card));
+    };
+    let done;
+    const ov = h('div', { class: 'modal', style: 'align-items:stretch' },
+      h('div', { class: 'card stack', style: 'max-width:640px;width:100%;margin:auto' },
+        h('div', { class: 'row', style: 'justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px' },
+          h('h2', { style: 'margin:0;font-size:21px' }, `פרטי אורנים${t.num ? ' · עץ ' + t.num : ''}`),
+          h('div', { class: 'row', style: 'gap:6px;align-items:center' }, h('span', { class: 'small' }, 'מספר אורנים:'),
+            h('button', { class: 'btn', type: 'button', 'aria-label': 'פחות אורנים', onclick: () => {
+              if (t.pineList.length <= 1) return;
+              const last = t.pineList[t.pineList.length - 1];
+              if ((last.loc || last.h !== '' || last.lat != null) && !confirm(`לאורן ${t.pineList.length} יש פרטים. למחוק אותו?`)) return;
+              setPineCount(t, t.pineList.length - 1); onChange(); draw();
+            } }, '−'), countEl,
+            h('button', { class: 'btn', type: 'button', 'aria-label': 'עוד אורן', onclick: () => { setPineCount(t, t.pineList.length + 1); onChange(); draw(); list.lastChild.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, '+'))),
+        h('div', { class: 'muted small' }, `מין העץ: ${(t.species || '').trim()}. הפרטים כאן נכנסים לריכוז האורנים בלבד, וההערות של העץ נשארות כמו שהן.`),
+        list,
+        h('div', { class: 'row', style: 'justify-content:flex-end' }, h('button', { class: 'btn primary big', onclick: () => done() }, 'סיום'))));
+    draw();
+    document.body.append(ov);
+    await new Promise(r => { done = r; });
+    ov.remove();
+    onChange();
+  }
+
   // ---------- GPS ----------
   function renderGps(t, box) {
     box = box || $('#gpsBox');
@@ -2884,9 +3080,9 @@
     const undo = []; // { t, created, before, photos }
     let askPinesFor = null;
     const label = t => t.num ? 'עץ ' + t.num : Core.isOk(t) ? 'עץ תקין' : 'עץ';
-    const pinesOf = t => t.pines == null || t.pines === '' ? null : t.pines;
+    const pinesOf = t => Core.pineCount(t);
     const card = t => [label(t) + (t.species ? ' · ' + t.species : ''), t.notes || '',
-      [t.urgency ? 'דחיפות ' + t.urgency : '', pinesOf(t) != null ? t.pines + ' אורנים' : '', t.lat != null ? 'נ"צ ✓' : '', t.photos.length ? '📷 ' + t.photos.length : ''].filter(Boolean).join(' · ')].filter(Boolean);
+      [t.urgency ? 'דחיפות ' + t.urgency : '', pinesOf(t) != null ? pinesOf(t) + ' אורנים' : '', t.lat != null ? 'נ"צ ✓' : '', t.photos.length ? '📷 ' + t.photos.length : ''].filter(Boolean).join(' · ')].filter(Boolean);
     const newTree = num => {
       const t = { id: uid(), num, species: '', notes: '', urgency: '', pines: null, split: false, photos: [], created: Date.now() };
       defaultUrgency(t);
@@ -2895,7 +3091,7 @@
     };
     const findTree = num => cur.trees.find(x => String(x.num || '').replace(/\s/g, '') === num);
     const refresh = () => { renderTreeList(); renderEditor(); };
-    const before = t => ({ species: t.species, notes: t.notes, urgency: t.urgency, urgencyAuto: t.urgencyAuto, pines: t.pines, split: t.split });
+    const before = t => ({ species: t.species, notes: t.notes, urgency: t.urgency, urgencyAuto: t.urgencyAuto, pines: t.pines, pineList: t.pineList ? JSON.parse(JSON.stringify(t.pineList)) : undefined, split: t.split });
     const start = (t, created) => {
       const u = { t, created, before: before(t), photos: [] };
       undo.push(u);
@@ -2959,7 +3155,7 @@
         ? [t.species, t.notes].filter(Boolean).join(', ') || `${t.photos.length} תמונות` : null;
       const u = start(t, created);
       if (p.species) { t.species = p.species; delete t.speciesAuto; }
-      if (p.pines != null) t.pines = p.pines;
+      if (p.pines != null) setPineCount(t, p.pines); // שאר הפרטים (מיקום, גובה, גזעים) בחלון האורנים במסך העץ
       if (p.urgency) applyUrgency(t, p.urgency);
       if (p.split && !Core.isOk(t)) t.split = true;
       if (p.notes.length) {
@@ -3253,6 +3449,39 @@
       h('div', { class: 'small muted' }, 'לחיצה על עץ פותחת אותו להשלמה. אם זה בכוונה, אפשר לסיים בכל זאת.'));
   }
   const NO_SIG = 'אין במכשיר הזה חתימה וחותמת, והדוח ייצא בלעדיהן. מוסיפים בהגדרות, או מתחברים לגוגל דרייב והיא תיטען משם.';
+  // ריכוז אורנים לסקר (1.116): אקסל נפרד עם פרטי המוסד וכל אורן. עולה גם לגוגל דרייב ב"סיום סקר", ליד הדוח
+  function pinesFileName(s) { return safeName('ריכוז אורנים - ' + fileBase(s)) + '.xlsx'; }
+  async function pinesFile(s) {
+    if (Construction.isConstruction(s) || !Reports.pineTrees(s).length) return null;
+    return { name: pinesFileName(s), blob: await Reports.surveyPinesXlsx(s) };
+  }
+  function pineCard(s, status) {
+    const rows = Reports.pineTrees(s);
+    if (!rows.length) return null;
+    const n = Reports.pineTotal(s);
+    const miss = rows.reduce((a, t) => a + ((t.pineList || []).length ? t.pineList.filter(p => Core.pineMissing(p).length).length : 1), 0);
+    const run = (drive) => async e => {
+      const btn = e.currentTarget; btn.disabled = true;
+      try {
+        await saveNow();
+        const f = await pinesFile(s);
+        if (!drive) { await deliver(f.blob, f.name); status.textContent = `✓ ריכוז האורנים הורד: ${f.name}`; return; }
+        if (!(await OD.connected())) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
+        status.textContent = 'שומר את ריכוז האורנים בגוגל דרייב…';
+        const where = await Sync.uploadFile(s, f.name, f.blob);
+        status.textContent = `✓ ריכוז האורנים נשמר בגוגל דרייב${where && where.path ? ` בתיקייה "${where.path}"` : ''}.`;
+      } catch (err) { console.error(err); status.textContent = 'נכשל: ' + err.message; }
+      finally { btn.disabled = false; }
+    };
+    return h('div', { class: 'card stack' },
+      h('h2', { style: 'margin:0;font-size:20px' }, '🌲 ריכוז אורנים'),
+      h('div', { class: 'muted small' }, `${n} אורנים ב-${rows.length} שורות. אקסל נפרד מהדוח: פרטי המוסד (${Reports.codesOf(s.code).length > 1 ? 'שני סמלי המוסד' : 'סמל מוסד'}, שם, כתובת), ולכל אורן מיקום, גובה, קוטר צמרת, הגזעים, נ"צ ברשת ישראל ובגוגל וקישור לגוגל מפות. עולה לבד לגוגל דרייב ב"סיום סקר".`),
+      miss ? h('div', { class: 'small', style: 'color:var(--danger)' }, `ב-${miss} אורנים חסרים פרטים (ראה "בדיקה לפני הפקה").`) : null,
+      h('div', { class: 'row' },
+        h('button', { class: 'btn primary big', onclick: run(false) }, 'הורד ריכוז אורנים (אקסל)'),
+        h('button', { class: 'btn big', onclick: run(true) }, '⬆ שמור בגוגל דרייב')));
+  }
+
   async function renderExport(body) {
     if (Construction.isConstruction(cur)) return renderConstructionExport(body);
     const warns = Core.warnings(cur).concat(fitWarnings(cur));
@@ -3356,6 +3585,7 @@
           h('button', { class: 'btn big', onclick: () => exportZip(status) }, 'תמונות בקובץ ZIP')),
         pdfBox(cur),
         status),
+      pineCard(cur, status),
       h('div', { class: 'card stack' },
         h('h2', { style: 'margin:0;font-size:20px' }, 'גיבוי וסנכרון'),
         h('div', { class: 'muted small' }, 'כל שינוי נשמר מיד בטאבלט. נתוני הסקר עולים לגוגל דרייב אחרי כל שינוי, והתמונות לטלגרם ולגוגל דרייב מיד אחרי הצילום.'),
