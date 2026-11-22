@@ -1002,7 +1002,7 @@
   async function prevManager(l, redrawTable) {
     const ui = U(), { h } = ui;
     const nameCol = l.cols.find(c => /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר)/.test(c.name)) || null;
-    const nm = r => { const v = valuesOf(l, r); return { name: (nameCol && clean(r.cells[nameCol.id])) || v.siteName || 'שורה', sub: [v.code ? 'סמל ' + v.code : null, geoStreet(v.street), v.city].filter(Boolean).join(' · ') }; };
+    const nm = r => { const v = valuesOf(l, r); return { name: v.siteName || (nameCol && clean(r.cells[nameCol.id])) || 'שורה', sub: [v.code ? 'סמל ' + v.code : null, geoStreet(v.street), v.city].filter(Boolean).join(' · ') }; };
     const rows = () => l.rows.filter(r => !r.deleted && !r.sid);
     const ix = await prevIndex();
     const prop = new Map(), sel = new Set(), ok = new Set(), open = new Set();
