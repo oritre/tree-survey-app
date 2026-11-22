@@ -1278,7 +1278,7 @@
       const res = await fetch(NOMI + encodeURIComponent(q));
       if (!res.ok) throw new Error('OpenStreetMap ' + res.status);
       const j = await res.json();
-      return j && j[0] ? { lat: +j[0].lat, lon: +j[0].lon, kind: /^(house|building|residential|road|street|primary|secondary|tertiary|footway|pedestrian)$/.test(j[0].type) || j[0].category === 'building' || j[0].category === 'amenity' ? 'street' : 'place' } : null;
+      return j && j[0] ? { lat: +j[0].lat, lon: +j[0].lon, label: j[0].display_name || '', kind: /^(house|building|residential|road|street|primary|secondary|tertiary|footway|pedestrian)$/.test(j[0].type) || j[0].category === 'building' || j[0].category === 'amenity' ? 'street' : 'place' } : null;
     };
     const p = geoQueue.then(run, run);
     geoQueue = p.catch(() => {});
@@ -1292,7 +1292,7 @@
     const c = j.candidates && j.candidates[0];
     if (!c || c.score < 75) return null;
     const t = (c.attributes && c.attributes.Addr_type) || '';
-    return { lat: +c.location.y, lon: +c.location.x, kind: /^(PointAddress|StreetAddress|StreetAddressExt|StreetInt|StreetName|StreetMidBlock|Subaddress|POI|DistanceMarker)$/.test(t) ? 'street' : 'place' };
+    return { lat: +c.location.y, lon: +c.location.x, label: c.address || '', kind: /^(PointAddress|StreetAddress|StreetAddressExt|StreetInt|StreetName|StreetMidBlock|Subaddress|POI|DistanceMarker)$/.test(t) ? 'street' : 'place' };
   }
   async function photon(q) {
     const res = await fetch(PHOTON + encodeURIComponent(q));
@@ -1301,7 +1301,8 @@
     const f = j.features && j.features[0];
     if (!f) return null;
     const t = (f.properties && f.properties.type) || '';
-    return { lat: +f.geometry.coordinates[1], lon: +f.geometry.coordinates[0], kind: /^(house|street|other)$/.test(t) ? 'street' : 'place' };
+    const pp = f.properties || {};
+    return { lat: +f.geometry.coordinates[1], lon: +f.geometry.coordinates[0], label: [pp.street || pp.name, pp.housenumber, pp.city].filter(Boolean).join(' '), kind: /^(house|street|other)$/.test(t) ? 'street' : 'place' };
   }
   const GEOS = [['ArcGIS', arcgis], ['Photon', photon], ['OpenStreetMap', nominatim]];
   const geoFails = new Map(); // שירות שנכשל 3 פעמים ברצף: מדלגים עליו עד הטעינה הבאה
@@ -1314,7 +1315,7 @@
       try {
         const g = await fn(q);
         geoFails.set(name, 0);
-        if (g && isFinite(g.lat) && isFinite(g.lon) && (kind !== 'street' || g.kind === 'street')) return { lat: g.lat, lon: g.lon };
+        if (g && isFinite(g.lat) && isFinite(g.lon) && (kind !== 'street' || g.kind === 'street')) return { lat: g.lat, lon: g.lon, label: g.label || '' };
       } catch (e) { geoFails.set(name, (geoFails.get(name) || 0) + 1); errs.push(e.message); }
     }
     if (!tried || (errs.length && errs.length === tried)) throw new Error('שירותי המפה לא זמינים' + (errs.length ? ' (' + errs.join(', ') + ')' : ''));
@@ -1332,6 +1333,7 @@
   }
   // מיקום לשורה: נ"צ של עצים בסקר המקושר, אחרת חיפוש הכתובת (נשמר בשורה, ומתחדש כשהכתובת משתנה).
   // תוצאה של רחוב שרחוקה מהעיר (רחוב "טבריה" בירושלים במקום רחוב ירושלים בטבריה) נפסלת ונשאר מרכז העיר
+  const approxTxt = g => 'מיקום משוער (' + (g.note || 'מרכז העיר') + ')';
   async function locate(l, r, local) {
     // מיקום שתוקן ביד (גרירה / סימון במפה / חיפוש בכתובת אחרת) נשאר תמיד
     if (r.geo && r.geo.manual) return r.geo;
@@ -1340,21 +1342,33 @@
     if (pts.length) return { lat: pts.reduce((a, t) => a + t.lat, 0) / pts.length, lon: pts.reduce((a, t) => a + t.lon, 0) / pts.length, src: 'gps' };
     const v = valuesOf(l, r);
     const st = geoStreet(v.street), city = fullCity(v.city);
-    const key = 'v2|' + st + '|' + city;
+    const key = 'v3|' + st + '|' + city; // v3 (1.138): בודקים שהכתובת שהשירות מצא היא באמת הרחוב והמספר שביקשנו
     if (r.geo && r.geo.key === key) return r.geo;
     if (geoMem.has(key)) { const m = geoMem.get(key); if (m) r.geo = Object.assign({}, m); return m ? r.geo : null; }
     if (!st && !city) return null;
     let c = null, cErr = null;
     if (city) { try { c = await cityGeo(city); } catch (e) { cErr = e; } }
     const near = g => g && (!c || km(c, g) <= 12);
-    let g = null, approx = false;
-    if (st && city) { g = await geocode(st + ', ' + city, 'street'); if (!near(g)) g = null; }
-    if (!g && st && city) { const w = st.replace(/\s*\d+\s*$/, ''); if (w && w !== st) { g = await geocode(w + ', ' + city, 'street'); if (!near(g)) g = null; } }
-    if (!g && c) { g = c; approx = true; }
-    if (!g && st && !city) g = await geocode(st);
+    let g = null, approx = false, note = '';
+    // מדויק (ירוק) רק כשבכתובת שהשירות החזיר מופיעים שם הרחוב וגם מספר הבית. אחרת המיקום מסומן משוער (כתום) עם הסיבה
+    const check = x => {
+      const lab = norm(x.label || ''), ws = streetWords(st), num = streetKey(st).num;
+      if (!/[א-ת]/.test(lab)) return 'לא אומת מול שם הרחוב';
+      if (ws.length && !ws.every(w => hasWord(lab, w))) return (ws.some(w => hasWord(lab, w)) ? 'שם הרחוב תואם רק בחלקו, נמצא: ' : 'נמצא רחוב אחר: ') + clean(x.label).split(',')[0];
+      if (num && !hasWord(lab, num)) return 'נמצא הרחוב, בלי מספר הבית';
+      return '';
+    };
+    if (st && city) { g = await geocode(st + ', ' + city, 'street'); if (!near(g)) g = null; else { note = check(g); approx = !!note; } }
+    if ((!g || /^נמצא רחוב אחר/.test(note)) && st && city) {
+      const w = st.replace(/\s*\d+\s*$/, '');
+      if (w && w !== st) { const g2 = await geocode(w + ', ' + city, 'street'); if (near(g2)) { const n2 = check(g2); if (!g || !/^נמצא רחוב אחר/.test(n2)) { g = g2; note = n2 || 'נמצא הרחוב, בלי מספר הבית'; approx = true; } } }
+    }
+    if (!g && c) { g = c; approx = true; note = 'מרכז העיר'; }
+    if (!g && st && !city) { g = await geocode(st); if (g) { note = check(g); approx = !!note; } }
     if (!g && cErr) throw cErr;
     if (!g) { geoMem.set(key, null); return null; }
     r.geo = { lat: g.lat, lon: g.lon, key, approx };
+    if (note) r.geo.note = note;
     geoMem.set(key, r.geo);
     return r.geo;
   }
@@ -1541,7 +1555,7 @@
       const bad = rs.filter(r => !sideGeo.get(r.id) || sideGeo.get(r.id).approx);
       const row = r => { const lb = labelIn(side, r), g = sideGeo.get(r.id); return h('div', { class: 'wl-stop side' },
         h('div', { class: 'wl-stop-go', style: 'flex:1;min-width:0', role: 'button', tabindex: '0', title: 'הצג במפה', onclick: () => jumpSide(r.id) }, h('b', {}, lb.name), nearIds.has(r.id) ? h('span', { class: 'wl-badge near', style: 'margin-inline-start:6px' }, 'קרוב לתחנה') : null,
-          h('div', { class: 'muted small' }, lb.addr + (g ? (g.manual ? ' · מיקום שתיקנת' : g.approx ? ' · מיקום משוער' : '') : sideGeo.has(r.id) ? ' · לא נמצא במפה, לחץ 📍' : ' · מאתר…'))),
+          h('div', { class: 'muted small' }, lb.addr + (g ? (g.manual ? ' · מיקום שתיקנת' : g.approx ? ' · ' + approxTxt(g) : '') : sideGeo.has(r.id) ? ' · לא נמצא במפה, לחץ 📍' : ' · מאתר…'))),
         h('button', { class: 'icon-btn', title: 'תקן מיקום במפה', 'aria-label': 'תקן מיקום', onclick: () => fixLoc(r, SIDE()) }, '📍'),
         h('button', { class: 'btn', onclick: () => openRow(side, r, true) }, 'פתח סקר')); };
       const open = sideBox.querySelector('details[open]') ? true : null;
@@ -1566,7 +1580,7 @@
         const lb = labelIn(side, r);
         const mk = L.marker([g.lat, g.lon], { draggable: g.src !== 'gps', zIndexOffset: -500, icon: L.divIcon({ className: 'wl-pin side' + (g.approx ? ' approx' : ''), html: '+', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(layer);
         mk.bindPopup(() => h('div', { class: 'wl-popup', dir: 'rtl' },
-          h('b', {}, lb.name), h('div', {}, lb.addr), h('div', { class: 'muted small' }, 'רשימה משנית: ' + side.name), g.approx ? h('i', {}, 'מיקום משוער (מרכז העיר)') : null,
+          h('b', {}, lb.name), h('div', {}, lb.addr), h('div', { class: 'muted small' }, 'רשימה משנית: ' + side.name), g.approx ? h('i', {}, approxTxt(g)) : null,
           h('div', { class: 'row', style: 'gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap' },
             h('button', { class: 'btn primary', onclick: () => { map.closePopup(); openRow(side, r, true); } }, 'פתח סקר'),
             h('button', { class: 'btn', onclick: () => { map.closePopup(); fixLoc(r, SIDE()); } }, '📍 תקן מיקום'),
@@ -1687,10 +1701,17 @@
       const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
         h('div', { class: 'card stack', style: 'max-width:560px;width:96%' },
           h('h2', { style: 'margin:0;font-size:20px' }, '📍 מיקום של ' + lb.name),
-          h('div', { class: 'muted small' }, 'בטבלה: ' + (lb.addr || '—') + (g ? (g.manual ? ' · כרגע: מיקום שתיקנת' : g.approx ? ' · כרגע: מיקום משוער' : '') : ' · כרגע: לא נמצא')),
+          h('div', { class: 'muted small' }, 'בטבלה: ' + (lb.addr || '—') + (g ? (g.manual ? ' · כרגע: מיקום שתיקנת' : g.approx ? ' · כרגע: ' + approxTxt(g) : '') : ' · כרגע: לא נמצא')),
           h('div', { class: 'row', style: 'gap:8px' }, q, h('button', { class: 'btn primary', onclick: search }, '🔎 חפש')),
           msg,
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+            // מיקום משוער שבדקת במפה והוא נכון: מאשרים, והוא נשמר כמיקום שלך (גם לשאר המוסדות באותה כתובת)
+            g && g.approx && !g.manual && g.note !== 'מרכז העיר' ? h('button', { class: 'btn primary', onclick: () => {
+              close();
+              const same = LL.rows.filter(x => !x.deleted && x.geo && x.geo.key === g.key && x.geo.approx && !x.geo.manual);
+              (same.length ? same : [r]).forEach(x => setManual(x, g, null, S));
+              ui.toast(same.length > 1 ? `המיקום אושר ל-${same.length} מוסדות באותה כתובת` : 'המיקום אושר', 2500);
+            } }, '✓ המיקום נכון') : null,
             h('button', { class: 'btn', onclick: () => { close(); pickOnMap('לחץ על המפה במקום של ' + lb.name, ll => { setManual(r, { lat: ll.lat, lon: ll.lng }, null, S); ui.toast('המיקום נשמר', 2500); }); } }, '👆 סמן במפה'),
             r.geo && r.geo.manual ? h('button', { class: 'btn', onclick: async () => { close(); delete r.geo; G.delete(r.id); r.u = Date.now(); try { const g2 = await locate(LL, r, local); G.set(r.id, g2 || null); } catch (e) { ui.toast(e.message, 4000); } save(LL); redraw(); } }, '↩ חזור לאיתור האוטומטי') : null,
             h('button', { class: 'btn', onclick: close }, 'ביטול'))));
@@ -1734,7 +1755,7 @@
         const { id, r, g, i } = m, lb = label(r);
         const mv = pos => { if (moveInRoute(l, id, pos)) { persist(); map.closePopup(); redraw(); } };
         return h('div', { class: 'wl-popup', dir: 'rtl' },
-          h('b', {}, `${i + 1}. ${lb.name}`), h('div', {}, lb.addr), g.approx ? h('i', {}, 'מיקום משוער (מרכז העיר)') : null,
+          h('b', {}, `${i + 1}. ${lb.name}`), h('div', {}, lb.addr), g.approx ? h('i', {}, approxTxt(g)) : null,
           h('div', { class: 'row', style: 'gap:6px;align-items:center;margin-top:6px' }, 'מקום בסדר:',
             rnumInput(l, id, () => { persist(); map.closePopup(); redraw(); }),
             h('button', { class: 'btn', title: 'מוקדם יותר', disabled: i === 0 ? true : null, onclick: () => mv(i) }, '↑'),
@@ -1801,7 +1822,7 @@
         return h('div', { class: 'wl-stop' + (done(r) ? ' done' : '') },
           rnumInput(l, id, () => { persist(); redraw(); }),
           h('div', { class: 'wl-stop-go', style: 'flex:1;min-width:0', role: 'button', tabindex: '0', title: 'הצג במפה', onclick: () => jumpTo(id), onkeydown: e => { if (e.key === 'Enter') jumpTo(id); } }, h('b', {}, lb.name), done(r) ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הסתיים') : null,
-            h('div', { class: 'muted small' }, lb.addr + (g ? (g.manual ? ' · מיקום שתיקנת' : g.approx ? ' · מיקום משוער' : '') : geo.has(id) ? ' · לא נמצא במפה, לחץ 📍' : '')),
+            h('div', { class: 'muted small' }, lb.addr + (g ? (g.manual ? ' · מיקום שתיקנת' : g.approx ? ' · ' + approxTxt(g) : '') : geo.has(id) ? ' · לא נמצא במפה, לחץ 📍' : '')),
             nearOf(id).length ? h('button', { class: 'chip wl-near', title: 'מוסדות מהרשימה המשנית שקרובים לתחנה הזו', onclick: e => { e.stopPropagation(); showNear(id); } }, nearTxt(nearOf(id).length)) : null),
           h('button', { class: 'icon-btn', title: 'למעלה', 'aria-label': 'הזז למעלה', disabled: k === 0 ? true : null, onclick: () => move(-1) }, '↑'),
           h('button', { class: 'icon-btn', title: 'למטה', 'aria-label': 'הזז למטה', disabled: k === vs.length - 1 ? true : null, onclick: () => move(1) }, '↓'),
