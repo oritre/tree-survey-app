@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.128.1';
+  const APP_VERSION = '1.129.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -82,7 +82,7 @@
   function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
   // שם קובץ לשיתוף (וואטסאפ וכו'): וואטסאפ משבש שמות עם גרשיים עבריים, אז ״ -> '' ו-׳ -> '
   // ori: שמות קבצים בלי גרשיים בכלל (ליד"ה -> לידה), כי וואטסאפ משבש שמות איתם
-  const QUOTES = /["'\u05F3\u05F4\u201C\u201D\u2018\u2019]/g;
+  const QUOTES = /["'\u05F3\u05F4\u201C\u201D\u2018\u2019`´„‚′″«»]/g;
   const shareName = s => String(s || '').replace(QUOTES, '');
   const safeName = s => String(s || '').replace(QUOTES, '').replace(/[\\/:*?<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
 

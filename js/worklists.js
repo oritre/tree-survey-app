@@ -844,10 +844,11 @@
         missing.length ? h('div', { class: 'card small', style: 'background:#fff2cc;color:#5a4300' }, `⚠ עוד לא נבחרה עמודה ל: ${missing.join(', ')}. לחץ על החץ ▾ בכותרת של העמודה ובחר "העמודה הזו היא", או ב"שיוך עמודות".`) : null,
         dayBox, chipsBox, counts, table));
     draw();
+    prevAuto(l, draw);
 
     // סקרים שנפתחו במכשיר אחר: הסטטוס מהאינדקס בענן
     if (navigator.onLine !== false && await OD.connected()) Sync.cloudIndex().then(list => { idx = new Map(list.map(e => [e.id, e])); if (!table.contains(document.activeElement)) draw(); }).catch(() => {});
-    syncThen(async () => { const n = await byId(l.id); if (n) { Object.assign(l, n); draw(); docs.redraw(); ListDocs.syncDocs(l, save, docs.redraw); } else ui.go('#/lists'); });
+    syncThen(async () => { const n = await byId(l.id); if (n) { Object.assign(l, n); draw(); docs.redraw(); ListDocs.syncDocs(l, save, docs.redraw); prevAuto(l, draw); } else ui.go('#/lists'); });
   }
 
 
@@ -864,6 +865,22 @@
     await DB.setKV(PKEY(f.id), b);
     const ix = await prevIndex(); ix[f.id] = { size: b.size, t: Date.now() }; await DB.setKV('wlPrevIdx', ix);
     return b;
+  }
+  // הורדה מראש שסומנה במכשיר אחר (r.prev.pre): מורידים ברקע את מה שחסר במכשיר הזה
+  const preBusy = new Set();
+  async function prevAuto(l, done) {
+    if (preBusy.has(l.id) || navigator.onLine === false) return;
+    const ix = await prevIndex();
+    const fs = l.rows.filter(r => !r.deleted && !r.sid && r.prev && r.prev.pre && r.prev.kind === 'file' && r.prev.f && !ix[r.prev.f.id]);
+    if (!fs.length) return;
+    preBusy.add(l.id);
+    try {
+      if (!(await OD.connected())) return;
+      U().toast(`מוריד מראש ${fs.length} סקרים קודמים למכשיר הזה…`, 4000);
+      let ok = 0;
+      for (const r of fs) { try { await prevBlob(r.prev.f); ok++; } catch (e) { /* ננסה שוב בפתיחה הבאה */ } }
+      if (ok) { U().toast(`${ok} סקרים קודמים הורדו מראש` + (ok < fs.length ? `, ${fs.length - ok} נכשלו` : ''), 4000); if (done) done(); }
+    } finally { preBusy.delete(l.id); }
   }
   const prevPath = p => p && p.kind === 'file' ? (p.path || []).join(' / ') : 'סקר באפליקציה';
   // פתיחת הקובץ של הסקר הקודם: אקסל (הקובץ עצמו), או PDF באותו שם שנמצא לידו בדרייב
@@ -890,19 +907,47 @@
     const score = xs => xs.map(x => Object.assign(x, scoreAll(v, words, x.f.name.replace(/\.xls[xm]$/i, '') + ' ' + x.path.slice(-2).join(' '), '')))
       .sort((a, b) => b.sc - a.sc || (b.year || '').localeCompare(a.year || '') || (b.f.lastModifiedDateTime || '').localeCompare(a.f.lastModifiedDateTime || ''));
     const codes = String(v.code || '').split(/[^\d]+/).filter(x => x.length >= 4);
-    if (codes.length) {
-      const xs = score(await archiveFiles(codes, l.folder || null));
-      if (xs.length === 1) return Object.assign(xs[0], { sure: true, byCode: true, why: 'לפי סמל המוסד' });
-      if (xs.length) { xs[0].byCode = true; const t = xs[0]; return Object.assign(t, { sure: !!(t.stHit || t.hits >= 2) && t.sc > (xs[1].sc || 0) - 1e-9 && (t.sc > xs[1].sc || (t.year || '') > (xs[1].year || '')), why: `לפי סמל המוסד (${xs.length} קבצים, נבחר המתאים ביותר)` }); }
-    }
-    const { word, num } = streetKey(v.street);
-    if (!word || word.length < 2 || !num) return null;
+    // קבצים שהמשתמש ביקש להתעלם מהם (מילים בשם הקובץ, למשל "פירוט ביצוע")
+    const skip = (l.prevSkip || []).map(norm).filter(Boolean);
+    const keep = xs => skip.length ? xs.filter(x => !skip.some(w => norm(x.f.name).includes(w))) : xs;
     // קובץ שבשם שלו יש סמל של מוסד אחר (כמה גנים באותה כתובת) לא מוצע
     const other = x => (x.f.name.match(/\d{5,7}/g) || []).some(n => !codes.includes(n));
-    const xs = score(await archiveFiles([word], l.folder || null)).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder) && !other(x));
-    if (!xs.length) return null;
-    return Object.assign(xs[0], { sure: xs.length === 1 || xs[0].sc > xs[1].sc, why: 'לפי רחוב ומספר' });
+    const tie = xs => ' · לא סומן: יש עוד קובץ שמתאים באותה מידה ("' + xs[1].f.name + '")';
+    const by = {
+      async code() {
+        if (!codes.length) return null;
+        const xs = keep(score(await archiveFiles(codes, l.folder || null)));
+        if (xs.length === 1) return Object.assign(xs[0], { sure: true, byCode: true, why: 'לפי סמל המוסד' });
+        if (!xs.length) return null;
+        xs[0].byCode = true; const t = xs[0];
+        const named = !!(t.stHit || t.hits >= 2), ahead = t.sc > xs[1].sc || (t.sc > (xs[1].sc || 0) - 1e-9 && (t.year || '') > (xs[1].year || ''));
+        return Object.assign(t, { sure: named && ahead, why: `לפי סמל המוסד (${xs.length} קבצים, נבחר המתאים ביותר)` + (!named ? ' · לא סומן: שם הקובץ לא מזכיר את הכתובת או את שם המוסד' : !ahead ? tie(xs) : '') });
+      },
+      async street() {
+        const { word, num } = streetKey(v.street);
+        if (!word || word.length < 2 || !num) return null;
+        const xs = keep(score(await archiveFiles([word], l.folder || null))).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder) && !other(x));
+        if (!xs.length) return null;
+        const sure = xs.length === 1 || xs[0].sc > xs[1].sc;
+        return Object.assign(xs[0], { sure, why: 'לפי רחוב ומספר' + (sure ? '' : tie(xs)) });
+      },
+      // שם המוסד: כל המילים של השם (בלי מילים כלליות ומספרים) צריכות להופיע בשם הקובץ
+      async name() {
+        const ws = [...new Set(norm(v.siteName || '').split(' ').filter(w => w.length >= 2 && !/\d/.test(w) && !STOP.has(w)))];
+        if (!ws.length || ws.join('').length < 4) return null;
+        const long = ws.slice().sort((a, b) => b.length - a.length)[0];
+        const xs = keep(score(await archiveFiles([long], l.folder || null))).filter(x => { const hay = norm(x.f.name); return ws.every(w => hasWord(hay, w)) && !other(x); });
+        if (!xs.length) return null;
+        const sure = xs.length === 1 || xs[0].sc > xs[1].sc;
+        return Object.assign(xs[0], { sure, why: 'לפי שם המוסד' + (sure ? '' : tie(xs)) });
+      },
+    };
+    for (const k of prevBy(l)) { const x = by[k] ? await by[k]() : null; if (x) return x; }
+    return null;
   }
+  // לפי מה משייכים ובאיזה סדר (1.129): l.prevBy, ברירת מחדל סמל מוסד ואחריו רחוב ומספר
+  const PREV_BY = [['code', 'סמל מוסד'], ['street', 'רחוב ומספר'], ['name', 'שם המוסד']];
+  const prevBy = l => Array.isArray(l.prevBy) ? l.prevBy.filter(k => PREV_BY.some(x => x[0] === k)) : ['code', 'street'];
   async function prevManager(l, redrawTable) {
     const ui = U(), { h } = ui;
     const nameCol = l.cols.find(c => /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר)/.test(c.name)) || null;
@@ -917,12 +962,28 @@
     const filesOf = () => linked().filter(r => sel.has(r.id) && r.prev.kind === 'file');
     const btnAuto = h('button', { class: 'btn primary', onclick: () => run(btnAuto, auto) }, '🔗 שיוך אוטומטי לשורות בלי סקר');
     const btnOk = h('button', { class: 'btn primary', hidden: true, onclick: () => run(btnOk, confirmProps) }, 'אשר את ההצעות המסומנות');
-    const btnGet = h('button', { class: 'btn', onclick: () => run(btnGet, preload) }, '⬇ הורד מראש לטאבלט');
+    const btnGet = h('button', { class: 'btn', onclick: () => run(btnGet, preload) }, '⬇ הורד מראש (גם לטאבלט)');
     const btnZip = h('button', { class: 'btn', onclick: () => run(btnZip, zip) }, '💾 שמור כקבצים (ZIP)');
+    // לפי מה לשייך: סימון = להתייחס, הסדר = העדיפות (הראשון שמוצא קובץ קובע)
+    const byBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' });
+    const setBy = ks => { l.prevBy = ks; save(l); prop.clear(); ok.clear(); drawBy(); draw(); };
+    function drawBy() {
+      const on = prevBy(l), order = [...on, ...PREV_BY.map(x => x[0]).filter(k => !on.includes(k))];
+      byBox.replaceChildren(h('b', { class: 'small' }, 'לשייך לפי:'), ...order.map(k => {
+        const i = on.indexOf(k), name = PREV_BY.find(x => x[0] === k)[1];
+        return h('span', { class: 'chip' + (i >= 0 ? ' on' : ''), style: 'display:inline-flex;align-items:center;gap:6px' },
+          h('label', { style: 'display:inline-flex;align-items:center;gap:6px;cursor:pointer' },
+            h('input', { type: 'checkbox', checked: i >= 0, onchange: e => setBy(e.target.checked ? [...on, k] : on.filter(x => x !== k)) }), (i >= 0 ? (i + 1) + '. ' : '') + name),
+          i > 0 ? h('button', { class: 'link-btn', title: 'העלה בעדיפות', 'aria-label': 'העלה בעדיפות את ' + name, onclick: () => { const ks = on.slice(); ks.splice(i - 1, 2, ks[i], ks[i - 1]); setBy(ks); } }, '⬆') : null);
+      }));
+    }
+    const skipInp = h('input', { type: 'text', value: (l.prevSkip || []).join(', '), placeholder: 'למשל: פירוט ביצוע, הצעת מחיר', style: 'flex:1;min-width:180px',
+      onchange: e => { l.prevSkip = e.target.value.split(/[,،;\n]+/).map(x => x.trim()).filter(Boolean); if (!l.prevSkip.length) delete l.prevSkip; save(l); } });
     const allBox = h('input', { type: 'checkbox', onchange: () => { linked().forEach(r => allBox.checked ? sel.add(r.id) : sel.delete(r.id)); draw(); } });
     async function run(btn, fn) { const all = [btnAuto, btnOk, btnGet, btnZip]; all.forEach(b => { b.disabled = true; }); try { await fn(); } catch (e) { status.textContent = 'נכשל: ' + e.message; } finally { all.forEach(b => { b.disabled = false; }); draw(); } }
     async function auto() {
       if (navigator.onLine === false || !(await OD.connected())) { status.textContent = 'צריך חיבור לגוגל דרייב כדי לחפש סקרים קודמים.'; return; }
+      if (!prevBy(l).length) { status.textContent = 'סמן לפחות דבר אחד לשייך לפיו.'; return; }
       const todo = rows().filter(r => !(r.prev && !r.prev.none));
       prop.clear(); ok.clear();
       let i = 0, found = 0;
@@ -949,8 +1010,11 @@
       const fs = filesOf();
       if (!fs.length) { status.textContent = 'סמן שורות עם קובץ משויך.'; return; }
       let i = 0, bad = 0;
+      // הסימון נשמר בשורה ומסתנכרן: כל מכשיר אחר (הטאבלט) מוריד את הקבצים האלה לבד כשהרשימה נפתחת בו
+      for (const r of fs) if (!r.prev.pre) { r.prev.pre = true; r.u = Date.now(); }
+      await save(l);
       for (const r of fs) { status.textContent = `מוריד… ${++i} מתוך ${fs.length}`; try { await prevBlob(r.prev.f); } catch (e) { bad++; } draw(); }
-      status.textContent = `הורדו ${fs.length - bad} קבצים לטאבלט. "פתח" בשורות האלה יעבוד מהר, גם בלי קליטה.` + (bad ? ` ${bad} נכשלו.` : '');
+      status.textContent = `הורדו ${fs.length - bad} קבצים למכשיר הזה. בטאבלט ובטלפון הם יורדו לבד בפעם הבאה שהרשימה תיפתח שם עם קליטה.` + (bad ? ` ${bad} נכשלו.` : '');
     }
     async function zip() {
       const fs = filesOf();
@@ -987,12 +1051,15 @@
       h('div', { class: 'card stack', style: 'max-width:860px;width:96%' },
         h('h2', { style: 'margin:0;font-size:21px' }, '📎 סקרים קודמים של הרשימה'),
         h('div', { class: 'muted small' }, 'החיפוש ב: ' + (l.folder ? 'התיקייה "' + l.folder.name + '"' : 'הארכיון הרגיל') + '. שיוך אוטומטי רק מציע: שום סקר לא נפתח ושום דבר לא נשמר עד שתאשר. שורות שכבר נפתח להן סקר לא מופיעות כאן.'),
+        byBox,
+        h('div', { class: 'muted small' }, 'הסדר הוא העדיפות: קודם מחפשים לפי 1, ורק אם לא נמצא קובץ עוברים ל-2. מה שלא מסומן לא נבדק.'),
+        h('label', { class: 'row small', style: 'gap:8px;align-items:center;flex-wrap:wrap' }, 'להתעלם מקבצים שבשם שלהם יש:', skipInp),
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, btnAuto, btnOk),
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' }, h('label', { class: 'row small', style: 'gap:6px;align-items:center' }, allBox, 'בחר את כל המשויכים'), btnGet, btnZip),
         status, box,
         h('button', { class: 'btn', onclick: close }, 'סגור')));
     document.body.append(ov);
-    draw();
+    drawBy(); draw();
   }
 
   // ---------- דוח מנהלים (1.98.0): כמו "דו"ח מנהלים, סקר יציבות עצים" של ori: שורה לכל עץ שדורש טיפול בכל מוסד ברשימה ----------
