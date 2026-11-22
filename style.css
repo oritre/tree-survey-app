@@ -644,7 +644,8 @@ textarea.doc-text.b { font-weight: 700; }
 .btn.alert { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); font-weight: 700; }
 .pine-card { border: 1px solid var(--border-strong); box-shadow: none; }
 .pine-pin { background: none; border: none; }
-/* מסמכים ברשימת עבודה (1.116.0) */
+
+/* מסמכים ברשימת עבודה (1.117.0) */
 .wl-docs { gap: 8px; }
 .wl-doc-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
 .wl-doc { display: flex; align-items: center; gap: 2px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); padding-inline-end: 2px; }
