@@ -1268,9 +1268,9 @@
   }
   // איתור כתובות: כמה שירותים חינמיים בתור. אם אחד חוסם או לא מוצא, עוברים לבא.
   // ArcGIS מכיר טוב כתובות בישראל; Photon ו-OpenStreetMap (Nominatim) לגיבוי. kind='street': רק תוצאה ברמת רחוב/בית
-  const NOMI = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=il&accept-language=he&q=';
-  const ARC = 'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&maxLocations=1&countryCode=ISR&langCode=he&outFields=Addr_type&SingleLine=';
-  const PHOTON = 'https://photon.komoot.io/api/?limit=1&bbox=34.2,29.4,35.95,33.4&q=';
+  const NOMI = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=il&accept-language=he&q=';
+  const ARC = 'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&maxLocations=5&countryCode=ISR&langCode=he&outFields=Addr_type&SingleLine=';
+  const PHOTON = 'https://photon.komoot.io/api/?limit=5&bbox=34.2,29.4,35.95,33.4&q=';
   let lastGeo = 0, geoQueue = Promise.resolve();
   // Nominatim: לכל היותר בקשה אחת בשנייה (מדיניות השירות), גם כשכמה חיפושים רצים ביחד: בתור
   function nominatim(q) {
@@ -1281,7 +1281,7 @@
       const res = await fetch(NOMI + encodeURIComponent(q));
       if (!res.ok) throw new Error('OpenStreetMap ' + res.status);
       const j = await res.json();
-      return j && j[0] ? { lat: +j[0].lat, lon: +j[0].lon, label: j[0].display_name || '', kind: /^(house|building|residential|road|street|primary|secondary|tertiary|footway|pedestrian)$/.test(j[0].type) || j[0].category === 'building' || j[0].category === 'amenity' ? 'street' : 'place' } : null;
+      return (j || []).map(x => ({ lat: +x.lat, lon: +x.lon, label: x.display_name || '', kind: /^(house|building|residential|road|street|primary|secondary|tertiary|footway|pedestrian)$/.test(x.type) || x.category === 'building' || x.category === 'amenity' ? 'street' : 'place' }));
     };
     const p = geoQueue.then(run, run);
     geoQueue = p.catch(() => {});
@@ -1292,37 +1292,38 @@
     if (!res.ok) throw new Error('ArcGIS ' + res.status);
     const j = await res.json();
     if (j.error) throw new Error('ArcGIS ' + (j.error.message || j.error.code));
-    const c = j.candidates && j.candidates[0];
-    if (!c || c.score < 75) return null;
-    const t = (c.attributes && c.attributes.Addr_type) || '';
-    return { lat: +c.location.y, lon: +c.location.x, label: c.address || '', kind: /^(PointAddress|StreetAddress|StreetAddressExt|StreetInt|StreetName|StreetMidBlock|Subaddress|POI|DistanceMarker)$/.test(t) ? 'street' : 'place' };
+    return (j.candidates || []).filter(c => c.score >= 75).map(c => { const t = (c.attributes && c.attributes.Addr_type) || '';
+      return { lat: +c.location.y, lon: +c.location.x, label: c.address || '', kind: /^(PointAddress|StreetAddress|StreetAddressExt|StreetInt|StreetName|StreetMidBlock|Subaddress|POI|DistanceMarker)$/.test(t) ? 'street' : 'place' }; });
   }
   async function photon(q) {
     const res = await fetch(PHOTON + encodeURIComponent(q));
     if (!res.ok) throw new Error('Photon ' + res.status);
     const j = await res.json();
-    const f = j.features && j.features[0];
-    if (!f) return null;
-    const t = (f.properties && f.properties.type) || '';
-    const pp = f.properties || {};
-    return { lat: +f.geometry.coordinates[1], lon: +f.geometry.coordinates[0], label: [pp.street || pp.name, pp.housenumber, pp.city].filter(Boolean).join(' '), kind: /^(house|street|other)$/.test(t) ? 'street' : 'place' };
+    return (j.features || []).map(f => { const pp = f.properties || {}, t = pp.type || '';
+      return { lat: +f.geometry.coordinates[1], lon: +f.geometry.coordinates[0], label: [pp.street || pp.name, pp.housenumber, pp.city].filter(Boolean).join(' '), kind: /^(house|street|other)$/.test(t) ? 'street' : 'place' }; });
   }
   const GEOS = [['ArcGIS', arcgis], ['Photon', photon], ['OpenStreetMap', nominatim]];
   const geoFails = new Map(); // שירות שנכשל 3 פעמים ברצף: מדלגים עליו עד הטעינה הבאה
-  async function geocode(q, kind) {
+  async function geocode(q, kind, ok) {
     const errs = [];
-    let tried = 0;
+    let tried = 0, fb = null;
+    // (1.140) כל שירות מחזיר עד 5 תוצאות. נבחרת הראשונה שבה מופיעות כל מילות הרחוב ומספר הבית שביקשנו;
+    // אם באף שירות אין כזו, חוזרת התוצאה הראשונה שנמצאה עם fit=false (המיקום יסומן משוער)
+    const part = norm(String(q).split(',')[0]).split(' '), ws = part.filter(w => w.length >= 3 && !/\d/.test(w)), num = (part.find(w => /^\d+/.test(w)) || '').replace(/\D+/g, '');
+    const fits = c => { const lab = norm(c.label || ''); return ws.every(w => hasWord(lab, w)) && (!num || hasWord(lab, num)); };
     for (const [name, fn] of GEOS) {
       if ((geoFails.get(name) || 0) >= 3) continue;
       tried++;
       try {
-        const g = await fn(q);
+        const cs = ((await fn(q)) || []).filter(g => isFinite(g.lat) && isFinite(g.lon) && (kind !== 'street' || g.kind === 'street') && (!ok || ok(g)));
         geoFails.set(name, 0);
-        if (g && isFinite(g.lat) && isFinite(g.lon) && (kind !== 'street' || g.kind === 'street')) return { lat: g.lat, lon: g.lon, label: g.label || '' };
+        const g = cs.find(fits);
+        if (g) return { lat: g.lat, lon: g.lon, label: g.label || '', fit: true };
+        if (!fb && cs[0]) fb = { lat: cs[0].lat, lon: cs[0].lon, label: cs[0].label || '', fit: false };
       } catch (e) { geoFails.set(name, (geoFails.get(name) || 0) + 1); errs.push(e.message); }
     }
-    if (!tried || (errs.length && errs.length === tried)) throw new Error('שירותי המפה לא זמינים' + (errs.length ? ' (' + errs.join(', ') + ')' : ''));
-    return null;
+    if (!fb && (!tried || (errs.length && errs.length === tried))) throw new Error('שירותי המפה לא זמינים' + (errs.length ? ' (' + errs.join(', ') + ')' : ''));
+    return fb;
   }
   // אותה כתובת בכמה שורות (כמה גנים באותו מבנה): מחפשים פעם אחת
   const geoMem = new Map();
@@ -1345,7 +1346,7 @@
     if (pts.length) return { lat: pts.reduce((a, t) => a + t.lat, 0) / pts.length, lon: pts.reduce((a, t) => a + t.lon, 0) / pts.length, src: 'gps' };
     const v = valuesOf(l, r);
     const st = geoStreet(v.street), city = fullCity(v.city);
-    const key = 'v3|' + st + '|' + city; // v3 (1.138): בודקים שהכתובת שהשירות מצא היא באמת הרחוב והמספר שביקשנו
+    const key = 'v4|' + st + '|' + city; // v4 (1.140): בחירה מתוך כמה תוצאות; v3 (1.138): בודקים שהכתובת שהשירות מצא היא באמת הרחוב והמספר שביקשנו
     if (r.geo && r.geo.key === key) return r.geo;
     if (geoMem.has(key)) { const m = geoMem.get(key); if (m) r.geo = Object.assign({}, m); return m ? r.geo : null; }
     if (!st && !city) return null;
@@ -1361,10 +1362,10 @@
       if (num && !hasWord(lab, num)) return 'נמצא הרחוב, בלי מספר הבית';
       return '';
     };
-    if (st && city) { g = await geocode(st + ', ' + city, 'street'); if (!near(g)) g = null; else { note = check(g); approx = !!note; } }
+    if (st && city) { g = await geocode(st + ', ' + city, 'street', near); if (!near(g)) g = null; else { note = check(g); approx = !!note; } }
     if ((!g || /^נמצא רחוב אחר/.test(note)) && st && city) {
       const w = st.replace(/\s*\d+\s*$/, '');
-      if (w && w !== st) { const g2 = await geocode(w + ', ' + city, 'street'); if (near(g2)) { const n2 = check(g2); if (!g || !/^נמצא רחוב אחר/.test(n2)) { g = g2; note = n2 || 'נמצא הרחוב, בלי מספר הבית'; approx = true; } } }
+      if (w && w !== st) { const g2 = await geocode(w + ', ' + city, 'street', near); if (near(g2)) { const n2 = check(g2); if (!g || !/^נמצא רחוב אחר/.test(n2)) { g = g2; note = n2 || 'נמצא הרחוב, בלי מספר הבית'; approx = true; } } }
     }
     if (!g && c) { g = c; approx = true; note = 'מרכז העיר'; }
     if (!g && st && !city) { g = await geocode(st); if (g) { note = check(g); approx = !!note; } }
@@ -1702,9 +1703,13 @@
         try {
           const p = await geocode(t);
           if (!p) { msg.textContent = `לא מצאתי את "${t}". נסה לכתוב אחרת, או סמן במפה.`; return; }
-          close(); setManual(r, p, t, S);
-          if (map) { userMoved = true; map.setView([p.lat, p.lon], 17); }
-          ui.toast('נמצא. אם הנקודה לא בדיוק במקום, גרור אותה', 4000);
+          const use = () => { close(); setManual(r, p, t, S);
+            if (map) { userMoved = true; map.setView([p.lat, p.lon], 17); }
+            ui.toast('נמצא. אם הנקודה לא בדיוק במקום, גרור אותה', 4000); };
+          // התוצאה לא מכילה את כל מה שכתבת (רחוב אחר / בלי מספר): לא מזיזים לבד, מראים מה נמצא ואתה מחליט
+          if (!p.fit) { msg.textContent = ''; msg.append(`לא מצאתי בדיוק את "${t}". הכי קרוב שנמצא: "${clean(p.label) || 'בלי שם'}". אם זה לא המקום, נסה כתיב אחר או סמן במפה. `,
+            h('button', { class: 'btn', onclick: use }, 'השתמש בזה בכל זאת')); return; }
+          use();
         } catch (e) { msg.textContent = e.message + '. אפשר לסמן במפה.'; }
       };
       q.addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
