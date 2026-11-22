@@ -135,7 +135,7 @@
       .map(r => ({ id: uid(), cells: Object.fromEntries(used.map(c => ['c' + c, cellText(r[c])])), u: Date.now() }));
     l.map = {};
     for (const f of FIELDS) {
-      const col = l.cols.find(c => f.re.test(c.name) && !(f.key === 'siteName' && /מנהל/.test(c.name)) && !Object.values(l.map).some(m => m.col === c.id));
+      const col = l.cols.find(c => f.re.test(c.name) && !(f.key === 'siteName' && /מנהל/.test(c.name)) && !Object.values(l.map).some(m => colsOf(m).includes(c.id)));
       l.map[f.key] = { col: col ? col.id : '', pre: '', prev: !!f.prev };
     }
   }
@@ -159,12 +159,15 @@
     l.map.city = { col: id, pre: '', prev: false };
   }
 
+  // העמודות של שדה, לפי הסדר (1.118: אפשר כמה, למשל סוג המוסד ואחריו שם המוסד)
+  const colsOf = m => m ? [m.col, ...(m.more || [])].filter(Boolean) : [];
+  const setCols = (m, arr) => { arr = arr.filter((c, i) => c && arr.indexOf(c) === i); m.col = arr[0] || ''; if (arr.length > 1) m.more = arr.slice(1); else delete m.more; };
   // ערכי הסקר לשורה, לפי השיוך
   function valuesOf(l, r) {
     const out = {};
     for (const f of fieldsOf(l)) {
       const m = l.map[f.key] || {};
-      const v = [clean(m.pre), m.col ? clean(r.cells[m.col]) : ''].filter(Boolean).join(' ');
+      const v = [clean(m.pre), ...colsOf(m).map(c => clean(r.cells[c]))].filter(Boolean).join(' ');
       if (v) out[f.key] = v;
     }
     return out;
@@ -560,12 +563,29 @@
         const m = draft.map[f.key] = draft.map[f.key] || { col: '', pre: '', prev: !!f.prev };
         const prevEl = h('label', { class: 'row small', style: 'gap:6px' }, h('input', { type: 'checkbox', checked: !!m.prev, onchange: e => { m.prev = e.target.checked; } }), 'אם יש סקר קודם: הערך שלו נשאר');
         const ex = h('div', { class: 'muted small' });
-        const upd = () => { ex.textContent = sample ? 'בשורה הראשונה: ' + ([clean(m.pre), m.col ? clean(sample.cells[m.col]) : ''].filter(Boolean).join(' ') || '—') : ''; };
+        const upd = () => { ex.textContent = sample ? 'בשורה הראשונה: ' + ([clean(m.pre), ...colsOf(m).map(c => clean(sample.cells[c]))].filter(Boolean).join(' ') || '—') : ''; };
         upd();
+        // כמה עמודות בסדר שבוחרים (למשל "סוג מוסד" ואז "שם המוסד": "גן ילדים אמונה")
+        const colsBox = h('div', { class: 'stack', style: 'gap:6px' });
+        const drawCols = () => {
+          const arr = colsOf(m).length ? colsOf(m) : [''];
+          colsBox.replaceChildren(...arr.map((cid, i) => h('div', { class: 'row', style: 'gap:6px;align-items:center' },
+            arr.length > 1 ? h('span', { class: 'wl-rnum', style: 'margin:0' }, String(i + 1)) : null,
+            h('select', { class: 'in', style: 'flex:1;min-width:160px', 'aria-label': 'עמודה ' + (i + 1), onchange: e => { const a = [...arr]; a[i] = e.target.value; setCols(m, a); drawCols(); upd(); } }, colOpts(cid)),
+            arr.length > 1 ? h('button', { class: 'icon-btn', title: 'קודם', 'aria-label': 'הזז קודם', disabled: i === 0 ? true : null, onclick: () => { const a = [...arr]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; setCols(m, a); drawCols(); upd(); } }, '↑') : null,
+            arr.length > 1 ? h('button', { class: 'icon-btn', title: 'אחר כך', 'aria-label': 'הזז אחר כך', disabled: i === arr.length - 1 ? true : null, onclick: () => { const a = [...arr]; [a[i + 1], a[i]] = [a[i], a[i + 1]]; setCols(m, a); drawCols(); upd(); } }, '↓') : null,
+            arr.length > 1 ? h('button', { class: 'icon-btn', title: 'הסר', 'aria-label': 'הסר עמודה', onclick: () => { const a = [...arr]; a.splice(i, 1); setCols(m, a); drawCols(); upd(); } }, '✕') : null)),
+            m.col ? h('button', { class: 'btn', style: 'align-self:flex-start', onclick: () => {
+              const free = draft.cols.find(c => !colsOf(m).includes(c.id));
+              if (!free) return;
+              setCols(m, [...colsOf(m), free.id]); drawCols(); upd();
+            } }, '➕ עוד עמודה לשדה הזה') : null);
+        };
+        drawCols();
         return h('div', { class: 'card stack wl-map' },
           h('b', {}, f.label),
-          h('div', { class: 'row', style: 'gap:8px;align-items:stretch' },
-            h('div', { style: 'flex:2;min-width:180px' }, field('עמודה ברשימה', h('select', { class: 'in', onchange: e => { m.col = e.target.value; upd(); } }, colOpts(m.col)))),
+          h('div', { class: 'row', style: 'gap:8px;align-items:flex-start' },
+            h('div', { style: 'flex:2;min-width:200px' }, h('label', { class: 'f' }, 'עמודות ברשימה (לפי הסדר)'), colsBox),
             h('div', { style: 'flex:1;min-width:150px' }, field('טקסט קבוע לפני', h('input', { class: 'in', value: m.pre || '', placeholder: 'למשל: מעון אמונה', oninput: e => { m.pre = e.target.value; upd(); } })))),
           ex, prevEl);
       };
@@ -590,7 +610,7 @@
             h('button', { class: 'btn danger', onclick: () => {
               if (!confirm(`למחוק את העמודה "${c.name}" ואת כל הערכים שבה?`)) return;
               draft.cols.splice(i, 1);
-              for (const k in draft.map) if (draft.map[k].col === c.id) draft.map[k].col = '';
+              for (const k in draft.map) setCols(draft.map[k], colsOf(draft.map[k]).filter(x => x !== c.id));
               draw();
             } }, 'מחק'))),
           h('button', { class: 'btn', onclick: () => { draft.cols.push({ id: 'n' + uid(), name: 'עמודה חדשה' }); draw(); } }, '➕ הוסף עמודה')),
@@ -661,13 +681,14 @@
         cid === '_st' && (l.route || []).length ? h('button', { class: 'btn block' + (view.sort && view.sort.col === '_route' ? ' primary' : ''), onclick: () => { view.sort = { col: '_route', dir: 1 }; saveView(); done(); draw(); } }, '🚗 מיון לפי סדר הנסיעה (1, 2, 3…)') : null,
         cid === '_st' ? null : h('label', { class: 'small', style: 'display:block' }, 'העמודה הזו היא (לפתיחת סקר):',
           h('select', { class: 'in', style: 'margin-top:4px', onchange: e => {
-            for (const f of FIELDS) { const m = l.map[f.key] = l.map[f.key] || { col: '', pre: '', prev: !!f.prev }; if (m.col === cid) m.col = ''; }
-            if (e.target.value) l.map[e.target.value].col = cid;
+            for (const f of FIELDS) { const m = l.map[f.key] = l.map[f.key] || { col: '', pre: '', prev: !!f.prev }; setCols(m, colsOf(m).filter(x => x !== cid)); }
+            if (e.target.value) { const m = l.map[e.target.value]; setCols(m, e.target.value === 'siteName' ? [...colsOf(m), cid] : [cid]); }
             save(l); done(); draw();
             ui.toast(e.target.value ? `"${name}" שויכה ל${FIELDS.find(f => f.key === e.target.value).label}` : `"${name}" לא משויכת לשדה`, 2500);
           } },
             h('option', { value: '' }, '— לא משויכת —'),
-            ...fieldsOf(l).map(f => h('option', { value: f.key, selected: (l.map[f.key] || {}).col === cid ? '' : null }, f.label + ((l.map[f.key] || {}).col && l.map[f.key].col !== cid ? ' (במקום "' + ((l.cols.find(c => c.id === l.map[f.key].col) || {}).name || '') + '")' : ''))))),
+            ...fieldsOf(l).map(f => { const cs = colsOf(l.map[f.key]), other = cs.filter(x => x !== cid).map(x => (l.cols.find(c => c.id === x) || {}).name).filter(Boolean);
+              return h('option', { value: f.key, selected: cs.includes(cid) ? '' : null }, f.label + (other.length && !cs.includes(cid) ? (f.key === 'siteName' ? ' (בנוסף ל"' + other.join('", "') + '")' : ' (במקום "' + other.join('", "') + '")') : '')); }))),
         sortBtn(1, '↓ מיון מהקטן לגדול (א→ת)'), sortBtn(-1, '↑ מיון מהגדול לקטן (ת→א)'),
         cid === '_st' ? null : h('button', { class: 'btn block', onclick: () => { l.hide = [...new Set([...(l.hide || []), cid])]; save(l); done(); draw(); ui.toast(`העמודה "${name}" הוסתרה. "הצג עמודות מוסתרות" מחזיר אותה`, 3000); } }, '🙈 הסתר את העמודה'),
         search, listBox,
@@ -729,7 +750,7 @@
       // רוחב כל עמודה לפי הטקסט הארוך בה (בגבולות), כדי שכתובת שלמה תיראה בלי לגלול בתוך התא
       const cols = visCols(l);
       const width = new Map(cols.map(c => [c.id, Math.min(38, Math.max(8, c.name.length, ...rs.map(r => (r.cells[c.id] || '').length)) + 2)]));
-      const mapped = new Map(Object.entries(l.map || {}).filter(([k, m]) => m.col && fieldsOf(l).some(f => f.key === k)).map(([k, m]) => [m.col, FIELDS.find(f => f.key === k).label]));
+      const mapped = new Map(Object.entries(l.map || {}).filter(([k]) => fieldsOf(l).some(f => f.key === k)).flatMap(([k, m]) => { const cs = colsOf(m); return cs.map((c, i) => [c, FIELDS.find(f => f.key === k).label + (cs.length > 1 ? ` (${i + 1})` : '')]); }));
       table.replaceChildren(h('table', { class: 'wl-table' },
         h('thead', {}, h('tr', {}, h('th', { class: 'wl-act' }, h('div', { class: 'wl-th' }, h('span', {}, 'סקר'), headBtn('_st', 'סטטוס הסקר'))), ...cols.map(c => h('th', {}, h('div', { class: 'wl-th' }, h('span', {}, c.name), headBtn(c.id, c.name)), mapped.has(c.id) ? h('div', { class: 'wl-tag' }, '← ' + mapped.get(c.id)) : null)), h('th', {}))),
         h('tbody', {}, shown.flatMap((r, i) => {
