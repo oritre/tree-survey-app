@@ -204,10 +204,11 @@
   }
   const yearOf = (path, f) => { const yi = path.findIndex(n => /^\s*(19|20)\d\d\s*$/.test(n)); return yi >= 0 ? path[yi].trim() : (f.lastModifiedDateTime || '').slice(0, 4); };
   // קבצים בארכיון (כמו בחיפוש הרגיל), עם התיקייה והשנה, בלי עותקי האפליקציה
-  async function archiveFiles(terms) {
-    const archive = await DB.getKV('gdArchive', null);
+  // folder: תיקייה בדרייב של הרשימה (למשל "אמונה 2025"); בלי: תיקיית הארכיון מההגדרות
+  async function archiveFiles(terms, folder) {
+    const archive = folder || await DB.getKV('gdArchive', null);
     const files = new Map();
-    for (const res of await Promise.all(terms.map(t => OD.searchExcel(t, archive && archive.id).catch(() => []))))
+    for (const res of await Promise.all(terms.map(t => OD.searchExcel(t, archive && archive.id, folder ? 'gdTreeList' : undefined).catch(() => []))))
       for (const f of res) files.set(f.id, f);
     const list = [...files.values()];
     const paths = await Promise.all(list.map(f => U().pathOf(f).catch(() => [])));
@@ -271,6 +272,17 @@
       ? { kind: 'file', year: x.year, name: x.f.name.replace(/\.xls[xm]$/i, ''), f: { id: x.f.id, name: x.f.name, parents: x.f.parents, lastModifiedDateTime: x.f.lastModifiedDateTime }, path: x.path, t: Date.now() }
       : { kind: 'app', year: (x.date || '').slice(0, 4), name: x.siteName || x.site || 'סקר', e: { id: x.id, local: !!x.local, type: x.type, dataId: x.dataId, code: x.code, siteName: x.siteName, street: x.street, city: x.city, site: x.site, date: x.date, project: x.project }, t: Date.now() };
   }
+  // תיקייה בדרייב לרשימה: שם מחפשים קודם את הסקרים הקודמים
+  async function pickListFolder(l, done) {
+    const ui = U();
+    const start = l.folder || await DB.getKV('gdArchive', null);
+    ui.pickDriveFolder(async val => {
+      if (val) l.folder = val; else delete l.folder;
+      await save(l);
+      ui.toast(val ? `החיפוש של הרשימה יהיה בתיקייה "${val.name}"` : 'החיפוש של הרשימה בארכיון הרגיל', 3000);
+      if (done) done();
+    }, start, 'הסקרים הקודמים של הרשימה יחופשו קודם בתיקייה שתבחר ובכל התיקיות שבתוכה (למשל אמונה 2025)');
+  }
   async function openFromPrev(l, r) {
     const ui = U(), v = valuesOf(l, r), p = r.prev, b = ui.h('button');
     ui.toast(`פותח סקר חדש מהיום על בסיס הסקר מ-${p.year || 'שנה קודמת'}: העצים וההערות משם, הפרטים מהרשימה…`, 4000);
@@ -310,6 +322,18 @@
     } }, ui.h('span', { class: 'muted' }, c.name + ': '), colVal(c))));
     q.value = cols.filter(x => picked.has(x.id)).map(colVal).join(' ');
     drawChips();
+    // איפה לחפש בדרייב: בתיקייה של הרשימה (ברירת מחדל, אם נבחרה) או בארכיון הרגיל
+    let scope = l.folder ? 'list' : 'all';
+    const scopeEl = ui.h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;align-items:center' });
+    const drawScope = async () => {
+      const arch = await DB.getKV('gdArchive', null);
+      const set = v => { scope = v; drawScope(); if (q.value.trim()) freeSearch(); };
+      scopeEl.replaceChildren(ui.h('span', { class: 'small', style: 'font-weight:700' }, 'בדרייב:'),
+        l.folder ? ui.h('button', { class: 'chip' + (scope === 'list' ? ' on' : ''), onclick: () => set('list') }, '📁 ' + l.folder.name) : null,
+        ui.h('button', { class: 'chip' + (scope === 'all' ? ' on' : ''), onclick: () => set('all') }, '🗂 הארכיון הרגיל' + (arch ? ` (${arch.name.split(' / ').pop()})` : ' (כל הדרייב)')),
+        ui.h('button', { class: 'link-btn small', onclick: () => pickListFolder(l, () => { scope = 'list'; drawScope(); }) }, l.folder ? 'החלף תיקייה לרשימה' : '📁 בחר תיקייה לרשימה'));
+    };
+    drawScope();
     const qBtn = ui.h('button', { class: 'btn', onclick: () => freeSearch() }, '🔎 חפש סקר קודם');
     q.addEventListener('keydown', e => { if (e.key === 'Enter') freeSearch(); });
     const ov = ui.h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
@@ -317,7 +341,7 @@
         ui.h('h2', { style: 'margin:0;font-size:21px' }, 'סקר עבור ' + title),
         ui.h('div', { class: 'muted small' }, [v.code ? 'סמל ' + v.code : null, v.manager ? 'מנהל/ת: ' + v.manager : null, l.project ? 'פרויקט ' + l.project : null].filter(Boolean).join(' · ')),
         ui.h('button', { class: 'btn big block', onclick: () => { close(); ui.lists.blank(l.type || 'safety', applier(l, r, v, false)); } }, '➕ סקר חדש ריק (בלי סקר קודם)'),
-        chipsEl,
+        chipsEl, scopeEl,
         ui.h('div', { class: 'row', style: 'gap:8px' }, q, qBtn),
         status, box,
         ui.h('button', { class: 'btn', onclick: close }, 'ביטול')));
@@ -363,8 +387,8 @@
           .sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 25).map(e => Object.assign(e, { sc: 0 }));
         let found = [];
         if (odOn) {
-          status.textContent = 'מחפש גם בארכיון בגוגל דרייב…';
-          found = (await archiveFiles([t])).sort((a, b) => (b.year || '').localeCompare(a.year || '') || (b.f.lastModifiedDateTime || '').localeCompare(a.f.lastModifiedDateTime || ''));
+          status.textContent = scope === 'list' ? `מחפש גם בתיקייה "${l.folder.name}" בדרייב…` : 'מחפש גם בארכיון בגוגל דרייב…';
+          found = (await archiveFiles([t], scope === 'list' ? l.folder : null)).sort((a, b) => (b.year || '').localeCompare(a.year || '') || (b.f.lastModifiedDateTime || '').localeCompare(a.f.lastModifiedDateTime || ''));
         }
         const n = app.length + found.length;
         status.textContent = n ? `${app.length} סקרים באפליקציה ו-${found.length} קבצים בארכיון עבור "${t}" (מהחדש לישן):`
@@ -712,6 +736,10 @@
           l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox),
         l.finished ? h('div', { class: 'card row', style: 'gap:10px;align-items:center;background:var(--accent-soft)' }, h('b', { style: 'flex:1' }, '✓ הרשימה הסתיימה ' + new Date(l.finished).toLocaleDateString('he-IL')),
           h('button', { class: 'btn', onclick: async () => { delete l.finished; delete l.offHome; await save(l); renderList(l); } }, '↩ החזר לפעילות')) : null,
+        h('div', { class: 'row small', style: 'gap:8px;align-items:center;flex-wrap:wrap' },
+          h('span', {}, '📁 תיקייה בדרייב לחיפוש סקרים קודמים: ', h('b', {}, l.folder ? l.folder.name : 'הארכיון הרגיל')),
+          h('button', { class: 'btn', onclick: () => pickListFolder(l, () => renderList(l)) }, l.folder ? 'החלף' : 'בחר תיקייה'),
+          l.folder ? h('button', { class: 'btn', onclick: async () => { delete l.folder; await save(l); renderList(l); } }, 'הארכיון הרגיל') : null),
         missing.length ? h('div', { class: 'card small', style: 'background:#fff2cc;color:#5a4300' }, `⚠ עוד לא נבחרה עמודה ל: ${missing.join(', ')}. לחץ על החץ ▾ בכותרת של העמודה ובחר "העמודה הזו היא", או ב"שיוך עמודות".`) : null,
         chipsBox, counts, table));
     draw();
