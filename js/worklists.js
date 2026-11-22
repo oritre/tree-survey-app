@@ -1054,6 +1054,17 @@
           const nw = [...o.slice(0, i), ...o.slice(i, k + 1).reverse(), ...o.slice(k + 1)];
           if (len(nw) < len(o) - 1e-9) { o = nw; better = true; }
         }
+        // העברת תחנה או 2-3 תחנות סמוכות למקום אחר במסלול (גם הפוך): מונע חזרה מאוחרת לאזור שכבר עברנו בו
+        for (let L = 1; L <= Math.min(3, n - 1); L++) for (let i = 0; i + L <= n; i++) {
+          const seg = o.slice(i, i + L), rest = [...o.slice(0, i), ...o.slice(i + L)];
+          for (let p = 0; p <= rest.length; p++) {
+            if (p === i) continue;
+            for (const sg of L > 1 ? [seg, seg.slice().reverse()] : [seg]) {
+              const nw = [...rest.slice(0, p), ...sg, ...rest.slice(p)];
+              if (len(nw) < len(o) - 1e-9) { o = nw; better = true; }
+            }
+          }
+        }
       }
       return o;
     };
