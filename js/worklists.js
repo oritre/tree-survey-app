@@ -1369,6 +1369,25 @@
       const im = improve(o);
       if (!best || len(im) < len(best)) best = im;
     }
+    // מוסדות צמודים ברצף (1.131): תחנה שיש לה שכנה עד 300 מ' אבל במסלול היא רחוקה ממנה (נאספת "בדרך הלוך" והשכנה "בדרך חזור")
+    // עוברת להיות צמודה לשכנה, אם זה כמעט לא מאריך את הדרך (עד 1% לכל העברה, 3% בסך הכול, בלי הקטע מנקודת ההתחלה)
+    const inner = o => len(o) - (start ? d(-1, o[0]) : 0);
+    const base = len(best), tol = inner(best) * 0.01;
+    for (let pass = 0, moved = true; moved && pass < n; pass++) {
+      moved = false;
+      for (let i = 0; i < n && !moved; i++) {
+        const a = best[i], near = j => j !== a && km(pts[a], pts[j]) <= 0.3;
+        if (!pts.some((_, j) => near(j)) || (i > 0 && near(best[i - 1])) || (i < n - 1 && near(best[i + 1]))) continue;
+        const rest = best.filter(x => x !== a);
+        let top = null;
+        for (let p = 0; p <= rest.length; p++) {
+          if (!((p > 0 && near(rest[p - 1])) || (p < rest.length && near(rest[p])))) continue;
+          const nw = [...rest.slice(0, p), a, ...rest.slice(p)], ln = len(nw);
+          if (!top || ln < top.ln) top = { nw, ln };
+        }
+        if (top && top.ln <= len(best) + tol && top.ln <= base + tol * 3) { best = top.nw; moved = true; }
+      }
+    }
     // בלי נקודת התחלה: מצפון לדרום
     if (!start && pts[best[0]].lat < pts[best[n - 1]].lat) best.reverse();
     return best;
