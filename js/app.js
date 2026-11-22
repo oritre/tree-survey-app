@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.126.0';
+  const APP_VERSION = '1.127.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1477,6 +1477,8 @@
   async function renderSummary(listId) {
     const wl = listId ? ((await DB.getKV('workLists', [])) || []).find(x => x.id === listId) : null;
     const back = wl ? '#/lists/' + encodeURIComponent(wl.id) : '#/lists';
+    // רק מתוך רשימת עבודה: בלי רשימה אין מסך כללי של כל הסקרים
+    if (!wl) { go('#/lists'); return; }
     const app = $('#app');
     const msg = h('div', { class: 'muted small', role: 'status' });
     const status = h('div', { class: 'small', role: 'status' });
@@ -1489,7 +1491,7 @@
     const btnM = h('button', { class: 'btn primary big', disabled: true }, '🗺 מפה לשיתוף');
     app.replaceChildren(bar(wl ? { title: 'אורנים ומפות', sub: wl.name } : 'אורנים ומפות', back), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
-        h('div', { class: 'small' }, 'בחר פרויקט שלם או כמה סקרים. ריכוז האורנים יוצא כאקסל עם שני גיליונות: "מוסדות" (שורה לכל מוסד עם הסמלים, הכתובת ומספר האורנים) ו"כל האורנים" (כל אורן עם המיקום, הגובה, הגזעים, נ"צ וקישור לגוגל מפות). המפה היא דף אינטרנט: נקודה ירוקה לעץ תקין, אדומה לעץ שדורש טיפול, ולחיצה על נקודה מציגה את פרטי העץ.'),
+        h('div', { class: 'small' }, 'כאן מופיעים רק סקרי האורנים שנפתחו מהרשימה הזו. ריכוז האורנים יוצא כאקסל עם שני גיליונות: "מוסדות" (שורה לכל מוסד עם הסמלים, הכתובת ומספר האורנים) ו"כל האורנים" (כל אורן עם המיקום, הגובה, הגזעים, נ"צ וקישור לגוגל מפות). המפה היא דף אינטרנט: נקודה ירוקה לעץ תקין, אדומה לעץ שדורש טיפול, ולחיצה על נקודה מציגה את פרטי העץ.'),
         h('label', { class: 'row small', style: 'gap:8px' }, latest, 'רק הסקר האחרון בכל מוסד (כדי לא לספור פעמיים)'),
         h('div', { class: 'row' }, btnP, btnM), status),
       q, msg, list));
@@ -1531,13 +1533,16 @@
     }
     const byId = new Map(cloud.filter(e => !e.deleted).map(e => [e.id, e]));
     for (const s of local) byId.set(s.id, Object.assign({}, byId.get(s.id) || {}, fromLocal(s)));
-    entries = [...byId.values()];
-    if (wl) {
-      const sids = new Set(wl.rows.filter(r => !r.deleted && r.sid).map(r => r.sid));
-      for (const e of entries) if (sids.has(e.id) || (e.listRef && e.listRef.list === wl.id)) sel.add(key(e));
-      if (!sel.size && wl.project) q.value = wl.project;
-    }
-    if (!entries.length) msg.textContent = 'אין סקרים.';
+    // רק הסקרים שנפתחו מהרשימה הזו, ורק סקרי אורנים ("ריכוז אורנים" דולק). סקרים אחרים לא מוצגים בכלל
+    const sids = new Set(wl.rows.filter(r => !r.deleted && r.sid).map(r => r.sid));
+    const mine = new Map(local.map(s => [s.id, s]));
+    entries = [...byId.values()].filter(e => {
+      const s = mine.get(e.id);
+      if (!(sids.has(e.id) || (e.listRef && e.listRef.list === wl.id) || (s && s.listRef && s.listRef.list === wl.id))) return false;
+      return s ? Core.pinesOn(s) : true;
+    });
+    for (const e of entries) sel.add(key(e));
+    if (!entries.length) msg.textContent = 'עוד אין ברשימה הזו סקרי אורנים. סקר נכנס לכאן כשהוא נפתח משורה ברשימה ו"ריכוז אורנים" דולק בו.';
     draw();
 
     async function chosen() {

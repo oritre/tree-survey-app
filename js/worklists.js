@@ -781,6 +781,8 @@
         }))));
     };
     q.addEventListener('input', draw);
+    // "אורנים ומפות" רק ברשימת אורנים: שורה שכתוב בה אורנים, או סקר של הרשימה ש"ריכוז אורנים" דולק בו
+    const pinesList = l.type !== 'construction' && (l.rows.some(r => !r.deleted && Object.values(r.cells || {}).some(v => /(^|[\s,;(])[הו]?או?רני?ם/.test(String(v || '')))) || [...local.values()].some(s => Core.pinesOn(s) && ((s.listRef && s.listRef.list === l.id) || l.rows.some(r => r.sid === s.id))));
     const exportXlsx = async () => {
       const rs = l.rows.filter(r => !r.deleted);
       // הרשימה כמו שהועלתה + בסוף (הצד השמאלי) סטטוס: בוצע / בתהליך / לא בוצע, ותאריך
@@ -801,7 +803,7 @@
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/route') }, '🗺 מסלול ומפה'),
           h('button', { class: 'btn', title: 'הרשימה שהעלית, עם עמודת סטטוס בסוף: בוצע / בתהליך / לא בוצע', onclick: exportXlsx }, '⬇ הורד לאקסל עם סטטוס'),
           h('button', { class: 'btn', onclick: ev => managersReport(l, ev.currentTarget) }, '📊 דוח מנהלים'),
-          h('button', { class: 'btn', title: 'סיכום אורנים ומפת עצים לשיתוף מהסקרים של הרשימה (ירושלים)', onclick: () => ui.go('#/summary/' + encodeURIComponent(l.id)) }, '🌲 אורנים ומפות'),
+          pinesList ? h('button', { class: 'btn', title: 'סיכום אורנים ומפת עצים לשיתוף מהסקרים של הרשימה (ירושלים)', onclick: () => ui.go('#/summary/' + encodeURIComponent(l.id)) }, '🌲 אורנים ומפות') : null,
           l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox, hideBox),
         l.finished ? h('div', { class: 'card row', style: 'gap:10px;align-items:center;background:var(--accent-soft)' }, h('b', { style: 'flex:1' }, '✓ הרשימה הסתיימה ' + new Date(l.finished).toLocaleDateString('he-IL')),
           h('button', { class: 'btn', onclick: async () => { delete l.finished; delete l.offHome; await save(l); renderList(l); } }, '↩ החזר לפעילות')) : null,
