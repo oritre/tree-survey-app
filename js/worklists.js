@@ -972,7 +972,16 @@
         return Object.assign(xs[0], { sure, why: 'לפי שם המוסד' + (sure ? '' : tie(xs)) });
       },
     };
-    for (const k of prevBy(l)) { const x = by[k] ? await by[k]() : null; if (x) return x; }
+    for (const k of prevBy(l)) {
+      const x = by[k] ? await by[k]() : null;
+      if (!x) continue;
+      // מה תואם ומה לא בין השורה לקובץ, בכל הבדיקות (גם אלה שלא לפיהן נמצא): להשוואה לפני אישור. null = אין מה לבדוק בשורה
+      const hay = norm(x.f.name), nws = [...new Set(norm(v.siteName || '').split(' ').filter(w => w.length >= 2 && !/\d/.test(w) && !STOP.has(w)))];
+      x.m = { code: codes.length ? !!x.byCode || codes.some(c => x.f.name.includes(c)) : null,
+        street: streetKey(v.street).word ? !!(x.stHit && x.numHit) : null,
+        name: nws.length ? nws.every(w => hasWord(hay, w)) : null };
+      return x;
+    }
     return null;
   }
   // לפי מה משייכים ובאיזה סדר (1.129): l.prevBy, ברירת מחדל סמל מוסד ואחריו רחוב ומספר
@@ -1068,7 +1077,9 @@
             : x ? h('input', { type: 'checkbox', 'aria-label': 'אשר הצעה', checked: ok.has(r.id), onchange: e => { e.target.checked ? ok.add(r.id) : ok.delete(r.id); draw(); } }) : h('span', { style: 'width:20px' }),
           h('div', { style: 'flex:1;min-width:0' }, h('b', {}, n.name), h('div', { class: 'muted small' }, n.sub),
             p ? fileLine(p, p.kind === 'file' && ix[p.f.id] ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הורד') : null)
-              : x ? h('div', {}, fileLine(prevOf(x)), h('div', { class: 'small', style: 'color:#8a5200' }, (x.sure ? 'הצעה: ' : 'הצעה לבדיקה: ') + x.why + (x.year ? ' · ' + x.year : '')))
+              : x ? h('div', {}, fileLine(prevOf(x)),
+                h('div', { class: 'small wl-match' }, 'בקובץ הקודם: ', ...PREV_BY.filter(c => x.m && x.m[c[0]] != null).map(c => h('span', { class: x.m[c[0]] ? 'yes' : 'no' }, (x.m[c[0]] ? '✓ ' : '✗ ') + c[1] + (x.m[c[0]] ? ' תואם' : ' שונה')))),
+                h('div', { class: 'small', style: 'color:#8a5200' }, (x.sure ? 'הצעה: ' : 'הצעה לבדיקה: ') + x.why + (x.year ? ' · ' + x.year : '')))
               : h('div', { class: 'muted small' }, 'אין סקר קודם משויך')),
           p && p.kind === 'file' ? h('button', { class: 'btn', onclick: () => openPrevFile(p, 'xlsx').then(draw) }, 'אקסל') : null,
           p && p.kind === 'file' ? h('button', { class: 'btn', onclick: () => openPrevFile(p, 'pdf') }, 'PDF') : null,
