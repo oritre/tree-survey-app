@@ -644,3 +644,31 @@ textarea.doc-text.b { font-weight: 700; }
 .btn.alert { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); font-weight: 700; }
 .pine-card { border: 1px solid var(--border-strong); box-shadow: none; }
 .pine-pin { background: none; border: none; }
+/* מסמכים ברשימת עבודה (1.116.0) */
+.wl-docs { gap: 8px; }
+.wl-doc-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.wl-doc { display: flex; align-items: center; gap: 2px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); padding-inline-end: 2px; }
+.wl-doc-open { flex: 1; min-width: 0; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 10px; align-items: center; text-align: start; padding: 10px 12px; min-height: 56px; border: 0; background: transparent; color: var(--text); cursor: pointer; border-radius: 12px; font: inherit; }
+.wl-doc-open:active { background: var(--surface-3); }
+.wl-doc-open:disabled { opacity: .6; }
+.wl-doc-ic { grid-row: 1 / 3; font-size: 26px; line-height: 1; }
+.wl-doc-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-doc .icon-btn { color: var(--muted); }
+.docv-body { --z: 1; flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; align-items: center; gap: 10px; -webkit-overflow-scrolling: touch; }
+.docv-page { width: calc(100% * var(--z)); max-width: calc(1000px * var(--z)); height: auto; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.5); flex: none; }
+img.docv-page { object-fit: contain; }
+.docv-msg { color: #fff; font-size: 17px; padding: 24px 12px; text-align: center; }
+.docv-tabs { align-self: stretch; }
+.docv-sheet { background: #fff; color: #111; width: fit-content; max-width: 100%; flex: none; overflow: auto; font-size: calc(14px * var(--z)); border-radius: 6px; }
+.docv-text { white-space: pre-wrap; padding: 12px; margin: 0; font-family: inherit; }
+.docv-table { border-collapse: collapse; }
+.docv-table th, .docv-table td { border: 1px solid #d0d7cc; padding: 3px 8px; white-space: nowrap; max-width: 40ch; overflow: hidden; text-overflow: ellipsis; }
+.docv-table th { background: #eef2ea; color: #445; font-weight: 600; position: sticky; top: 0; }
+.docv-table tbody th { position: sticky; inset-inline-start: 0; top: auto; }
+.docv-word { background: #fff; color: #111; width: calc(100% * var(--z)); max-width: calc(820px * var(--z)); padding: calc(28px * var(--z)) calc(32px * var(--z)); font-size: calc(15px * var(--z)); line-height: 1.45; box-shadow: 0 2px 8px rgba(0,0,0,.5); flex: none; overflow-wrap: anywhere; }
+.docv-word .docv-p { margin: 0 0 .35em; }
+.docv-word h2, .docv-word h3, .docv-word h4, .docv-word h5 { margin: .6em 0 .3em; }
+.docv-img { max-width: 100%; height: auto; vertical-align: middle; }
+.docv-txbx { border: 1px dashed #bbb; padding: 4px 8px; margin: 4px 0; }
+.docv-wtable { border-collapse: collapse; width: 100%; margin: 6px 0; }
+.docv-wtable td { border: 1px solid #999; padding: 4px 6px; vertical-align: top; }

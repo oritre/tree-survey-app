@@ -59,7 +59,11 @@
     const rows = new Map(o.rows.map(r => [r.id, r]));
     for (const r of n.rows) { const x = rows.get(r.id); rows.set(r.id, !x || (r.u || 0) >= (x.u || 0) ? r : x); }
     const order = [...n.rows.map(r => r.id), ...o.rows.map(r => r.id).filter(id => !n.rows.some(r => r.id === id))];
-    return Object.assign({}, n, { rows: order.map(id => rows.get(id)) });
+    const out = Object.assign({}, n, { rows: order.map(id => rows.get(id)) });
+    // מסמכים (1.116.0): מתמזגים לפי מסמך, כמו השורות
+    const docs = root.ListDocs ? ListDocs.merge(n.docs, o.docs) : n.docs;
+    if (docs) out.docs = docs;
+    return out;
   }
   let pushT = null, pulledAt = 0, syncing = null;
   const pushSoon = () => { clearTimeout(pushT); pushT = setTimeout(() => sync(true).catch(() => {}), 1500); };
@@ -727,6 +731,9 @@
       const blob = await Reports.xlsx(rows, { sheet: 'רשימה', widths: [...l.cols.map(() => 20), 18] });
       ui.downloadFile(blob, ui.safeName(l.name || 'רשימה') + '.xlsx');
     };
+    // מסמכים של הרשימה (אישורי כניסה וכו'): נפתחים בתוך האפליקציה
+    const docs = ListDocs.section(l, save);
+    dropDocs = { id: l.id, add: docs.add };
     const missing = fieldsOf(l).filter(f => ['street', 'city'].includes(f.key) && !(l.map[f.key] || {}).col && !clean((l.map[f.key] || {}).pre)).map(f => f.label);
     ui.app().replaceChildren(ui.bar({ title: l.name || 'רשימה', sub: [l.project ? 'פרויקט ' + l.project : null, Construction.TYPES[l.type || 'safety']].filter(Boolean).join(' · ') }, '#/lists'),
       h('main', { class: 'stack' },
@@ -740,6 +747,7 @@
           l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox),
         l.finished ? h('div', { class: 'card row', style: 'gap:10px;align-items:center;background:var(--accent-soft)' }, h('b', { style: 'flex:1' }, '✓ הרשימה הסתיימה ' + new Date(l.finished).toLocaleDateString('he-IL')),
           h('button', { class: 'btn', onclick: async () => { delete l.finished; delete l.offHome; await save(l); renderList(l); } }, '↩ החזר לפעילות')) : null,
+        docs.el,
         h('div', { class: 'row small', style: 'gap:8px;align-items:center;flex-wrap:wrap' },
           h('span', {}, '📁 תיקייה בדרייב לחיפוש סקרים קודמים: ', h('b', {}, l.folder ? l.folder.name : 'הארכיון הרגיל')),
           h('button', { class: 'btn', onclick: () => pickListFolder(l, () => renderList(l)) }, l.folder ? 'החלף' : 'בחר תיקייה'),
@@ -750,7 +758,7 @@
 
     // סקרים שנפתחו במכשיר אחר: הסטטוס מהאינדקס בענן
     if (navigator.onLine !== false && await OD.connected()) Sync.cloudIndex().then(list => { idx = new Map(list.map(e => [e.id, e])); if (!table.contains(document.activeElement)) draw(); }).catch(() => {});
-    syncThen(async () => { const n = await byId(l.id); if (n) { Object.assign(l, n); draw(); } else ui.go('#/lists'); });
+    syncThen(async () => { const n = await byId(l.id); if (n) { Object.assign(l, n); draw(); docs.redraw(); ListDocs.syncDocs(l, save, docs.redraw); } else ui.go('#/lists'); });
   }
 
 
@@ -1138,7 +1146,9 @@
     redraw();
   }
 
-  // גרירת קובץ רשימה (אקסל / CSV) למסכי הרשימות: ייבוא כרשימה חדשה
+  // גרירת קובץ רשימה (אקסל / CSV) למסכי הרשימות: ייבוא כרשימה חדשה. בתוך רשימה: הוספת מסמכים לרשימה
+  let dropDocs = null;
+  const docsTarget = () => { const m = /^#\/lists\/([^/]+)$/.exec(location.hash || ''); return m && dropDocs && dropDocs.id === decodeURIComponent(m[1]) ? dropDocs : null; };
   (function initDrop() {
     let depth = 0, mark = null;
     const on = () => (location.hash || '').startsWith('#/lists');
@@ -1147,13 +1157,15 @@
     window.addEventListener('dragenter', e => {
       if (!hasFiles(e) || !on()) return;
       e.preventDefault(); depth++;
-      if (!mark) { mark = document.createElement('div'); mark.className = 'drop-plan'; mark.innerHTML = '<div>📥 שחרר כדי לייבא את הרשימה</div>'; document.body.append(mark); }
+      if (!mark) { mark = document.createElement('div'); mark.className = 'drop-plan'; mark.innerHTML = docsTarget() ? '<div>📁 שחרר כדי להוסיף מסמכים לרשימה</div>' : '<div>📥 שחרר כדי לייבא את הרשימה</div>'; document.body.append(mark); }
     });
     window.addEventListener('dragover', e => { if (hasFiles(e) && on()) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
     window.addEventListener('dragleave', () => { if (mark && --depth <= 0) hide(); });
     window.addEventListener('drop', async e => {
       if (!hasFiles(e) || !on()) return;
       e.preventDefault(); hide();
+      const dt = docsTarget();
+      if (dt) { if (e.dataTransfer.files.length) dt.add([...e.dataTransfer.files]); return; }
       const f = [...e.dataTransfer.files].find(x => /\.(xlsx|xlsm|csv|xls)$/i.test(x.name));
       if (!f) { U().toast('אפשר לגרור קובץ אקסל (xlsx) או CSV', 3500); return; }
       await importFile(f);
