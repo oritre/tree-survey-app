@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.113.1';
+  const APP_VERSION = '1.114.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2157,6 +2157,8 @@
   // מין העץ בסקר בטיחות: כל המינים מרשימת סקר הבנייה, רק המילה הראשונה ובלי כפילויות
   // (שיטה מכחילה, שיטת המקור → שיטה; סיגלון עלה-מימוזה → סיגלון; איקליפטוס המקור → איקליפטוס)
   const GENUS_FIX = { 'איקלפטוס': 'איקליפטוס', 'אלומגן': 'אלמוגן' };
+  // מינים שאורי רוצה גם בנפרד, מעבר למילה הראשונה (פיקוס התאנה → פיקוס, וגם תאנה לבד)
+  const GENUS_EXTRA = ['תאנה'];
   const looseHe = v => v.replace(/[יו]/g, '');
   function rawGenus(n) {
     const w = String(n || '').replace(/\u00a0/g, ' ').trim().split(/\s+/);
@@ -2167,7 +2169,7 @@
   let genusData = null;
   function genusInfo() {
     if (genusData) return genusData;
-    const raw = new Set([...Construction.SPECIES.keys()].map(rawGenus).filter(w => /[\u0590-\u05ff]/.test(w)));
+    const raw = new Set([...Construction.SPECIES.keys()].map(rawGenus).filter(w => /[\u0590-\u05ff]/.test(w)).concat(GENUS_EXTRA));
     // צורת סמיכות → השם עצמו: שיטת → שיטה, אלת → אלה, בוהיניית → בוהיניה
     const abs = g => /יית$/.test(g) ? g.slice(0, -2) + 'ה' : /ת$/.test(g) && raw.has(g.slice(0, -1) + 'ה') ? g.slice(0, -1) + 'ה' : g;
     const map = new Map(), loose = new Map();
@@ -2180,7 +2182,7 @@
   function safetySpecies() { return genusInfo().list; }
   // רבים: שיטה → שיטים, סיגלון → סיגלונים, אקליפטוס → אקליפטוסים, מילה → מילות
   const PLURAL_FIX = { 'שיטה': 'שיטים', 'זית': 'זיתים', 'תות': 'תותים', 'בר-זית': 'ברי-זית', 'בן עוזרר': 'בני עוזרר', 'דק-פרי': 'דקי-פרי',
-    'כנף-זרע': 'כנפי-זרע', 'ליצ\'י': 'ליצ\'י', 'לבנה': 'לבנים', 'גלדיצייה': 'גלדיציות' };
+    'כנף-זרע': 'כנפי-זרע', 'ליצ\'י': 'ליצ\'י', 'לבנה': 'לבנים', 'תאנה': 'תאנים', 'גלדיצייה': 'גלדיציות' };
   const FINAL_TO_MID = { 'ן': 'נ', 'ם': 'מ', 'ף': 'פ', 'ך': 'כ', 'ץ': 'צ' };
   function pluralOf(g) {
     if (PLURAL_FIX[g]) return PLURAL_FIX[g];
