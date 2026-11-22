@@ -673,3 +673,9 @@ img.docv-page { object-fit: contain; }
 .docv-txbx { border: 1px dashed #bbb; padding: 4px 8px; margin: 4px 0; }
 .docv-wtable { border-collapse: collapse; width: 100%; margin: 6px 0; }
 .docv-wtable td { border: 1px solid #999; padding: 4px 6px; vertical-align: top; }
+/* רשימות עבודה (1.117): ימים, וגלילה לצדדים באצבע */
+.wl-wrap { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y; scrollbar-width: auto; }
+.wl-wrap::-webkit-scrollbar { height: 12px; width: 10px; }
+.wl-wrap::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
+.wl-table tr.wl-dayrow td { background: var(--surface-3); padding: 6px 8px; border-bottom: 2px solid var(--border-strong); }
+.wl-daylbl { position: sticky; right: 8px; font-weight: 800; font-size: 16px; }

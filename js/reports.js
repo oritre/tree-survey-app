@@ -91,7 +91,7 @@
   }
 
   // ---------- ריכוז אורנים (1.116) ----------
-  // כל אורן בשורה משלו: מיקום, גובה, קוטר צמרת, קוטרי הגזעים, נ"צ ברשת ישראל ובגוגל, וקישור שפותח את המקום בגוגל מפות
+  // כל אורן בשורה משלו: מיקום, גובה, קוטרי הגזעים, נ"צ ברשת ישראל ובגוגל, וקישור שפותח את המקום בגוגל מפות
   const num = v => v == null || v === '' || isNaN(+v) ? '' : +v;
   const gmaps = (lat, lon) => `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lon).toFixed(6)}`;
   // סמלי מוסד: "629477 406512" / "629477/406512" -> "629477, 406512"
@@ -106,8 +106,8 @@
     return Core.sortTrees((s.trees || []).filter(t => Core.hasContent(t) && !t.ref && (Core.isPine(t.species) || (t.pineList || []).length || Core.pineCount(t))));
   }
   function pineTotal(s) { return pineTrees(s).reduce((a, t) => a + (Core.pineCount(t) || 0), 0); }
-  const PINE_HEAD = ['מס\' אורן', 'מספר העץ בסקר', 'מין העץ', 'מיקום', 'גובה (מ\')', 'קוטר צמרת (מ\')', 'מספר גזעים', 'קוטרי הגזעים (ס"מ)', 'X רשת ישראל', 'Y רשת ישראל', 'קו רוחב', 'קו אורך', 'גוגל מפות'];
-  const PINE_W = [9, 12, 16, 34, 10, 12, 10, 18, 13, 13, 12, 12, 16];
+  const PINE_HEAD = ['מס\' אורן', 'מספר העץ בסקר', 'מין העץ', 'מיקום', 'גובה (מ\')', 'מספר גזעים', 'קוטרי הגזעים (ס"מ)', 'X רשת ישראל', 'Y רשת ישראל', 'קו רוחב', 'קו אורך', 'גוגל מפות'];
+  const PINE_W = [9, 12, 16, 34, 10, 10, 18, 13, 13, 12, 12, 16];
   function pineLines(s, k0) {
     const out = [];
     let k = k0 || 0;
@@ -116,7 +116,7 @@
       for (const p of list) {
         const trunks = (p.trunks || []).filter(x => x != null && x !== '' && !isNaN(+x)).map(Number);
         const lat = p.lat != null ? p.lat : null, lon = p.lon != null ? p.lon : null;
-        out.push([++k, String(t.num || '').trim() || (Core.isOk(t) ? 'תקין' : ''), (t.species || '').trim(), (p.loc || '').trim(), num(p.h), num(p.c),
+        out.push([++k, String(t.num || '').trim() || (Core.isOk(t) ? 'תקין' : ''), (t.species || '').trim(), (p.loc || '').trim(), num(p.h),
           trunks.length || '', trunks.length === 1 ? trunks[0] : trunks.join(', '),
           p.itmX != null ? Math.round(p.itmX * 10) / 10 : '', p.itmY != null ? Math.round(p.itmY * 10) / 10 : '',
           lat != null ? +(+lat).toFixed(6) : '', lon != null ? +(+lon).toFixed(6) : '',
