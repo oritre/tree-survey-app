@@ -1031,7 +1031,34 @@
     const listBox = h('div', { class: 'stack wl-route-list' });
     const outBox = h('div', { class: 'stack' });
     const mapEl = h('div', { class: 'wl-mapview' });
-    const fromMe = h('input', { type: 'checkbox' });
+    // נקודת התחלה לסידור האוטומטי ולקישור לגוגל מפות: בלי / המיקום שלי / כתובת שבוחרים (נשמר ברשימה)
+    l.start = l.start || { mode: 'none', addr: '' };
+    const startSel = h('select', { class: 'in', style: 'width:auto;min-height:40px', 'aria-label': 'נקודת התחלה', onchange: () => { l.start.mode = startSel.value; startWrap.hidden = startSel.value !== 'addr'; persist(); redraw(); if (startSel.value === 'addr') startAddr.focus(); } },
+      [['none', 'בלי נקודת התחלה (מצפון לדרום)'], ['me', 'מהמיקום שלי (GPS)'], ['addr', 'מכתובת שאני בוחר…']].map(([v, t]) => h('option', { value: v, selected: l.start.mode === v ? '' : null }, t)));
+    const startAddr = h('input', { class: 'in', style: 'min-width:200px', value: l.start.addr || '', placeholder: 'למשל: עינב, או רחוב ועיר', onchange: async () => {
+      l.start.addr = clean(startAddr.value); delete l.start.geo; persist();
+      const recent = (await DB.getKV('wlStarts', [])) || [];
+      if (l.start.addr) DB.setKV('wlStarts', [l.start.addr, ...recent.filter(x => x !== l.start.addr)].slice(0, 12));
+      redraw();
+    } });
+    const startWrap = ui.suggestCombo(startAddr, () => startRecent, { arrow: true });
+    let startRecent = (await DB.getKV('wlStarts', [])) || [];
+    startWrap.hidden = l.start.mode !== 'addr';
+    async function startPoint() {
+      if (l.start.mode === 'me') {
+        const p = me || await new Promise(res => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lon: p.coords.longitude }), () => res(null), { timeout: 8000, maximumAge: 120000 }) : res(null));
+        if (!p) ui.toast('המיקום שלך לא זמין, המסלול מסודר מצפון לדרום', 3500);
+        return p;
+      }
+      if (l.start.mode === 'addr' && l.start.addr) {
+        if (l.start.geo && l.start.geo.key === l.start.addr) return l.start.geo;
+        const g = await nominatim(l.start.addr).catch(() => null);
+        if (!g) { ui.toast(`לא מצאתי במפה את "${l.start.addr}". נסה לכתוב גם עיר`, 4000); return null; }
+        l.start.geo = { lat: g.lat, lon: g.lon, key: l.start.addr }; persist();
+        return l.start.geo;
+      }
+      return null;
+    }
     const linksBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
     let map = null, layer = null, pickAfter = null;
     const persist = () => save(l);
@@ -1052,6 +1079,16 @@
     function gmapsLinks() {
       const rs = vis().map(id => l.rows.find(r => r.id === id)).filter(Boolean);
       const stops = rs.map(stopOf);
+      // התחלה: כתובת שבחרתי = נקודת המוצא בקישור; המיקום שלי = בלי מוצא (גוגל מפות מתחיל מהמיקום הנוכחי)
+      if (l.start.mode === 'addr' && l.start.addr) stops.unshift(l.start.addr);
+      if (l.start.mode === 'me' && stops.length) {
+        const part = stops.slice(0, 10), out = ['https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + encodeURIComponent(part[part.length - 1]) + (part.length > 1 ? '&waypoints=' + encodeURIComponent(part.slice(0, -1).join('|')) : '')];
+        for (let i = 9; i < stops.length - 1; i += 9) {
+          const p2 = stops.slice(i, i + 10);
+          out.push('https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=' + encodeURIComponent(p2[0]) + '&destination=' + encodeURIComponent(p2[p2.length - 1]) + (p2.length > 2 ? '&waypoints=' + encodeURIComponent(p2.slice(1, -1).join('|')) : ''));
+        }
+        return out;
+      }
       const out = [];
       for (let i = 0; i < stops.length - 1 || (i === 0 && stops.length === 1); i += 9) {
         const part = stops.slice(i, i + 10);
@@ -1066,6 +1103,8 @@
       if (layer) layer.remove();
       layer = L.layerGroup().addTo(map);
       const ll = [];
+      if (l.start.mode === 'addr' && l.start.geo && l.start.geo.key === l.start.addr)
+        L.marker([l.start.geo.lat, l.start.geo.lon], { icon: L.divIcon({ className: 'wl-pin start', html: '🏠', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(layer).bindPopup('התחלה: ' + l.start.addr.replace(/</g, '&lt;'));
       vis().forEach(id => {
         const i = l.route.indexOf(id);
         const r = l.rows.find(x => x.id === id), g = geo.get(id);
@@ -1150,9 +1189,8 @@
       const scope = vis(), slots = scope.map(id => l.route.indexOf(id)); // יום שנבחר: מסדרים רק אותו, במקומות שלו במסלול
       const ids = scope.filter(id => geo.get(id));
       const rest = scope.filter(id => !geo.get(id));
-      let start = null;
-      if (fromMe.checked) start = await new Promise(res => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lon: p.coords.longitude }), () => res(null), { timeout: 8000, maximumAge: 120000 }) : res(null));
-      if (fromMe.checked && !start) ui.toast('המיקום שלך לא זמין, המסלול מסודר מצפון לדרום', 3500);
+      if (l.start.mode === 'addr') { l.start.addr = clean(startAddr.value); }
+      const start = await startPoint();
       const pts = ids.map(id => geo.get(id));
       let cost = null;
       if (pts.length > 1 && pts.length < 99) {
@@ -1198,7 +1236,7 @@
         h('div', { class: 'stack' },
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' },
             h('button', { class: 'btn primary', onclick: ev => { ev.currentTarget.disabled = true; auto().finally(() => { ev.target.disabled = false; }); } }, '⚡ סדר אוטומטי (הכי מהר בכבישים)'),
-            h('label', { class: 'row small', style: 'gap:6px' }, fromMe, 'להתחיל מהמיקום שלי')),
+            h('label', { class: 'row small', style: 'gap:6px;align-items:center' }, 'התחלה:', startSel), startWrap),
           dayBox, linksBox, status, listBox,
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
             h('button', { class: 'btn', onclick: async () => { await DB.setKV('wlView:' + l.id, { sort: { col: '_route', dir: 1 }, filt: {} }); ui.go(back); } }, 'מיין את הטבלה לפי המסלול'),
