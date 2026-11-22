@@ -688,3 +688,10 @@ img.docv-page { object-fit: contain; }
 .wl-pin.hl { outline: 4px solid #ffd400; box-shadow: 0 0 0 8px rgba(255,212,0,.35), 0 1px 4px rgba(0,0,0,.45); z-index: 1000 !important; }
 .wl-stop-go { cursor: pointer; }
 .wl-stop-go:hover b { text-decoration: underline; }
+.wl-pin.side { background: #7a3fc4; font-size: 14px; border-width: 1.5px; }
+.wl-pin.side.approx { background: #b26a00; }
+.wl-pin.hasnear { box-shadow: 0 0 0 3px #7a3fc4, 0 1px 4px rgba(0,0,0,.45); }
+.wl-stop.side { border-color: #c9b3ea; }
+.wl-near { background: #efe6fb; color: #4a1f8a; border-color: #c9b3ea; white-space: nowrap; }
+.wl-badge.near { background: #efe6fb; color: #4a1f8a; }
+.wl-near { margin-top: 4px; min-height: 30px; padding: 2px 10px; font-size: 13px; }
