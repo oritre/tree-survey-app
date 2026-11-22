@@ -277,6 +277,7 @@
       if (l.project) s.project = l.project;
       // שורה שכתוב בה "אורנים" (למשל בהערות): הסקר נפתח כסקר אורנים (חלון פרטי אורנים, תזכורות, אקסל ריכוז)
       if (l.type !== 'construction' && Object.values(r.cells || {}).some(v => /(^|[\s,;(])[הו]?או?רני?ם/.test(String(v || '')))) s.pinesMode = true;
+      if ((l.repl || []).length) s.nameRepl = l.repl;
       s.listRef = { list: l.id, row: r.id, name: l.name };
       s.site = U().composeSite(s);
       r.sid = s.id; r.u = Date.now();
@@ -558,6 +559,24 @@
     const back = '#/lists/' + encodeURIComponent(l.id);
     ui.app().replaceChildren(ui.bar({ title: 'הגדרות הרשימה', sub: l.name }, back), main);
     const field = (label, el) => h('div', {}, h('label', { class: 'f' }, label), el);
+    // החלפות בשם הקובץ (1.128): ראשי תיבות עם גרשיים (גנ"י, בי"ס) נכתבים בשם הקובץ כמו שבוחרים. בדוח עצמו השם נשאר כמו ברשימה
+    draft.repl = (draft.repl || []).map(x => ({ from: x.from, to: x.to }));
+    const replFound = () => {
+      const out = new Set();
+      for (const r of draft.rows) if (!r.deleted) for (const k of ['siteName', 'street']) for (const c of colsOf(draft.map[k])) for (const w of clean(r.cells[c]).split(/\s+/)) if (/[^\s"״”“'׳’]["״”“'׳’][^\s"״”“'׳’]/.test(w)) out.add(w.replace(/^[({\[]+|[)}\].,;:]+$/g, ''));
+      return [...out].filter(w => !draft.repl.some(x => x.from === w));
+    };
+    const replCard = () => h('div', { class: 'card stack' },
+      h('div', { class: 'muted small' }, 'מילה עם גרשיים או סימן שלא נוח בשם קובץ (למשל גנ"י או בי"ס) תיכתב בשם הקובץ כמו שתרשום כאן (למשל גן, בית ספר). זה משפיע רק על שמות הקבצים של הסקרים מהרשימה. כללי השמות של ירושלים וויצו נשארים כמו שהם.'),
+      ...draft.repl.map((x, i) => h('div', { class: 'row', style: 'gap:8px;align-items:center' },
+        h('input', { class: 'in', style: 'flex:1;min-width:90px', value: x.from, placeholder: 'כתוב ברשימה (גנ"י)', 'aria-label': 'מה להחליף', oninput: e => { x.from = e.target.value; } }),
+        h('span', {}, '←'),
+        h('input', { class: 'in', style: 'flex:1;min-width:90px', value: x.to, placeholder: 'בשם הקובץ (גן)', 'aria-label': 'במה להחליף', oninput: e => { x.to = e.target.value; } }),
+        h('button', { class: 'icon-btn', title: 'הסר', 'aria-label': 'הסר החלפה', onclick: () => { draft.repl.splice(i, 1); draw(); } }, '✕'))),
+      h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;align-items:center' },
+        replFound().length ? h('span', { class: 'small' }, 'נמצאו ברשימה:') : null,
+        ...replFound().slice(0, 12).map(w => h('button', { class: 'chip', onclick: () => { draft.repl.push({ from: w, to: '' }); draw(); const ins = main.querySelectorAll('input[aria-label="במה להחליף"]'); if (ins.length) ins[ins.length - 1].focus(); } }, w)),
+        h('button', { class: 'btn', onclick: () => { draft.repl.push({ from: '', to: '' }); draw(); } }, '➕ הוסף החלפה')));
     const draw = () => {
       const colOpts = sel => [h('option', { value: '', selected: !sel ? '' : null }, '— בלי עמודה —'), ...draft.cols.map(c => h('option', { value: c.id, selected: c.id === sel ? '' : null }, c.name))];
       const sample = draft.rows.find(r => !r.deleted);
@@ -604,6 +623,8 @@
         h('h2', { class: 'proj-head' }, 'איזו עמודה היא מה'),
         h('div', { class: 'muted small' }, 'הערכים נכנסים לפרטי הסקר כשפותחים סקר משורה. "טקסט קבוע לפני" נוסף לפני הערך מהעמודה, ובלי עמודה הוא הערך עצמו (למשל שם המוסד "מעון אמונה" לכל השורות, כמו בסקרים של 2025).'),
         ...fieldsOf(draft).map(mapRow),
+        h('h2', { class: 'proj-head' }, 'החלפות בשם הקובץ'),
+        replCard(),
         h('h2', { class: 'proj-head' }, `העמודות (${draft.cols.length})`),
         h('div', { class: 'card stack' },
           ...draft.cols.map((c, i) => h('div', { class: 'row', style: 'gap:8px;align-items:center' },
@@ -620,8 +641,11 @@
           h('button', { class: 'btn primary big', onclick: async () => {
             delete draft.raw; delete draft.headerRow;
             for (const r of draft.rows) for (const k of Object.keys(r.cells)) if (!draft.cols.some(c => c.id === k)) delete r.cells[k];
+            draft.repl = draft.repl.map(x => ({ from: clean(x.from), to: clean(x.to) })).filter(x => x.from);
             Object.assign(l, draft); delete l.raw; delete l.headerRow;
             if (l.project) DB.setKV('lastProject', l.project.trim());
+            // סקרים שכבר נפתחו מהרשימה מקבלים את ההחלפות המעודכנות
+            for (const sv of await DB.allSurveys()) if (sv.listRef && sv.listRef.list === l.id && JSON.stringify(sv.nameRepl || []) !== JSON.stringify(l.repl)) { if (l.repl.length) sv.nameRepl = l.repl; else delete sv.nameRepl; await DB.putSurvey(sv); }
             await save(l); ui.go(back);
           } }, 'שמור'),
           h('button', { class: 'btn', onclick: () => ui.go(back) }, 'ביטול'),
@@ -766,7 +790,10 @@
               (l.route || []).includes(r.id) ? rnumInput(l, r.id, () => { save(l); draw(); }) : null,
               h('button', { class: 'btn ' + (st.k === 'todo' ? 'primary' : ''), title: !r.sid && r.prev && !r.prev.none ? 'סקר חדש מהיום עם העצים וההערות מהסקר הקודם, והפרטים מהרשימה' : null, onclick: () => openRow(l, r) },
                 st.k !== 'todo' ? 'פתח' : r.prev && !r.prev.none ? `פתח (מ-${r.prev.year || 'קודם'})` : 'פתח סקר'),
-              r.sid ? null : r.prev && !r.prev.none ? h('div', { class: 'wl-prev small' }, '↩ ' + r.prev.name,
+              r.sid ? null : r.prev && !r.prev.none ? h('div', { class: 'wl-prev small' }, '↩ ' + (r.prev.kind === 'file' ? r.prev.f.name : r.prev.name),
+                h('div', { class: 'muted wl-ppath' }, '📁 ' + prevPath(r.prev) + (r.prev.kind === 'file' && pIdx[r.prev.f.id] ? ' · ✓ הורד' : '')),
+                r.prev.kind === 'file' ? h('button', { class: 'link-btn small', title: 'פתח את קובץ האקסל של הסקר הקודם', onclick: () => openPrevFile(r.prev, 'xlsx').then(draw) }, 'אקסל') : null,
+                r.prev.kind === 'file' ? h('button', { class: 'link-btn small', title: 'פתח PDF באותו שם שנמצא ליד האקסל', onclick: () => openPrevFile(r.prev, 'pdf') }, 'PDF') : null,
                 h('button', { class: 'link-btn small', onclick: () => openRow(l, r, true, draw) }, 'החלף'),
                 h('button', { class: 'link-btn small', onclick: () => { delete r.prev; r.u = Date.now(); save(l); draw(); } }, 'בטל'))
                 : h('button', { class: 'link-btn small wl-find', onclick: () => openRow(l, r, true, draw) }, '🔎 חפש סקר קודם'),
@@ -783,6 +810,7 @@
     q.addEventListener('input', draw);
     // "אורנים ומפות" רק ברשימת אורנים: שורה שכתוב בה אורנים, או סקר של הרשימה ש"ריכוז אורנים" דולק בו
     const pinesList = l.type !== 'construction' && (l.rows.some(r => !r.deleted && Object.values(r.cells || {}).some(v => /(^|[\s,;(])[הו]?או?רני?ם/.test(String(v || '')))) || [...local.values()].some(s => Core.pinesOn(s) && ((s.listRef && s.listRef.list === l.id) || l.rows.some(r => r.sid === s.id))));
+    const pIdx = await prevIndex();
     const exportXlsx = async () => {
       const rs = l.rows.filter(r => !r.deleted);
       // הרשימה כמו שהועלתה + בסוף (הצד השמאלי) סטטוס: בוצע / בתהליך / לא בוצע, ותאריך
@@ -802,6 +830,7 @@
           h('button', { class: 'btn', onclick: () => { l.rows.push({ id: uid(), cells: {}, u: Date.now() }); save(l); filter = 'all'; q.value = ''; draw(); const ins = table.querySelectorAll('tbody tr:last-child input'); if (ins[0]) ins[0].focus(); } }, '➕ שורה'),
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/route') }, '🗺 מסלול ומפה'),
           h('button', { class: 'btn', title: 'הרשימה שהעלית, עם עמודת סטטוס בסוף: בוצע / בתהליך / לא בוצע', onclick: exportXlsx }, '⬇ הורד לאקסל עם סטטוס'),
+          h('button', { class: 'btn', title: 'שיוך סקרים משנים קודמות לשורות, הצגת הקבצים והורדה מראש', onclick: () => prevManager(l, draw) }, '📎 סקרים קודמים'),
           h('button', { class: 'btn', onclick: ev => managersReport(l, ev.currentTarget) }, '📊 דוח מנהלים'),
           pinesList ? h('button', { class: 'btn', title: 'סיכום אורנים ומפת עצים לשיתוף מהסקרים של הרשימה (ירושלים)', onclick: () => ui.go('#/summary/' + encodeURIComponent(l.id)) }, '🌲 אורנים ומפות') : null,
           l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox, hideBox),
@@ -821,6 +850,150 @@
     syncThen(async () => { const n = await byId(l.id); if (n) { Object.assign(l, n); draw(); docs.redraw(); ListDocs.syncDocs(l, save, docs.redraw); } else ui.go('#/lists'); });
   }
 
+
+  // ---------- סקרים קודמים של הרשימה (1.128): שיוך אוטומטי רק לפי בקשה ועם אישור, הצגת הקובץ והתיקייה, הורדה מראש ----------
+  // קובץ שהורד מראש נשמר בטאבלט (KV wlPrev:<id>), ו"פתח" משתמש בו בלי להוריד שוב. wlPrevIdx: מה הורד
+  const PKEY = id => 'wlPrev:' + id;
+  let prevIdx = null;
+  async function prevIndex() { if (!prevIdx) prevIdx = (await DB.getKV('wlPrevIdx', {})) || {}; return prevIdx; }
+  async function prevBlob(f) {
+    let b = await DB.getKV(PKEY(f.id), null);
+    if (b) return b;
+    b = await OD.download(f.id);
+    if (!b) throw new Error('הקובץ לא נמצא בדרייב');
+    await DB.setKV(PKEY(f.id), b);
+    const ix = await prevIndex(); ix[f.id] = { size: b.size, t: Date.now() }; await DB.setKV('wlPrevIdx', ix);
+    return b;
+  }
+  const prevPath = p => p && p.kind === 'file' ? (p.path || []).join(' / ') : 'סקר באפליקציה';
+  // פתיחת הקובץ של הסקר הקודם: אקסל (הקובץ עצמו), או PDF באותו שם שנמצא לידו בדרייב
+  async function openPrevFile(p, mode) {
+    const ui = U();
+    if (!p || p.kind !== 'file') { ui.toast('הסקר הזה שמור באפליקציה, לא כקובץ בדרייב', 3500); return; }
+    try {
+      if (mode === 'pdf') {
+        const base = p.f.name.replace(/\.xls[xm]?$/i, ''), parent = (p.f.parents || [])[0];
+        const pf = parent ? await OD.findFile(parent, base + '.pdf').catch(() => null) : null;
+        if (!pf) { ui.toast('אין קובץ PDF באותו שם ליד האקסל בדרייב', 7000, 'הצג את האקסל בדרייב', () => window.open('https://drive.google.com/file/d/' + encodeURIComponent(p.f.id) + '/view', '_blank', 'noopener')); return; }
+        ui.toast('מוריד את ה-PDF…', 2000);
+        const b = await OD.download(pf.id);
+        if (b) ui.downloadFile(b, base + '.pdf');
+        return;
+      }
+      ui.toast('פותח את האקסל…', 2000);
+      ui.downloadFile(await prevBlob(p.f), p.f.name);
+    } catch (e) { ui.toast('נכשל: ' + e.message, 4500); }
+  }
+  // הצעת סקר קודם לשורה: קודם לפי סמל המוסד (גם בתוך הקובץ), ואם אין, לפי רחוב ומספר. sure: התאמה חד-משמעית
+  async function proposePrev(l, r) {
+    const v = valuesOf(l, r), words = rowWords(l, r, v);
+    const score = xs => xs.map(x => Object.assign(x, scoreAll(v, words, x.f.name.replace(/\.xls[xm]$/i, '') + ' ' + x.path.slice(-2).join(' '), '')))
+      .sort((a, b) => b.sc - a.sc || (b.year || '').localeCompare(a.year || '') || (b.f.lastModifiedDateTime || '').localeCompare(a.f.lastModifiedDateTime || ''));
+    const codes = String(v.code || '').split(/[^\d]+/).filter(x => x.length >= 4);
+    if (codes.length) {
+      const xs = score(await archiveFiles(codes, l.folder || null));
+      if (xs.length === 1) return Object.assign(xs[0], { sure: true, byCode: true, why: 'לפי סמל המוסד' });
+      if (xs.length) { xs[0].byCode = true; const t = xs[0]; return Object.assign(t, { sure: !!(t.stHit || t.hits >= 2) && t.sc > (xs[1].sc || 0) - 1e-9 && (t.sc > xs[1].sc || (t.year || '') > (xs[1].year || '')), why: `לפי סמל המוסד (${xs.length} קבצים, נבחר המתאים ביותר)` }); }
+    }
+    const { word, num } = streetKey(v.street);
+    if (!word || word.length < 2 || !num) return null;
+    // קובץ שבשם שלו יש סמל של מוסד אחר (כמה גנים באותה כתובת) לא מוצע
+    const other = x => (x.f.name.match(/\d{5,7}/g) || []).some(n => !codes.includes(n));
+    const xs = score(await archiveFiles([word], l.folder || null)).filter(x => x.stHit && x.numHit && (!clean(v.city) || x.cityHit || l.folder) && !other(x));
+    if (!xs.length) return null;
+    return Object.assign(xs[0], { sure: xs.length === 1 || xs[0].sc > xs[1].sc, why: 'לפי רחוב ומספר' });
+  }
+  async function prevManager(l, redrawTable) {
+    const ui = U(), { h } = ui;
+    const nameCol = l.cols.find(c => /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר)/.test(c.name)) || null;
+    const nm = r => { const v = valuesOf(l, r); return { name: (nameCol && clean(r.cells[nameCol.id])) || v.siteName || 'שורה', sub: [v.code ? 'סמל ' + v.code : null, geoStreet(v.street), v.city].filter(Boolean).join(' · ') }; };
+    const rows = () => l.rows.filter(r => !r.deleted && !r.sid);
+    const ix = await prevIndex();
+    const prop = new Map(), sel = new Set(), ok = new Set();
+    const status = h('div', { class: 'muted small', role: 'status' });
+    const box = h('div', { class: 'stack' });
+    const close = () => { ov.remove(); if (redrawTable) redrawTable(); };
+    const linked = () => rows().filter(r => r.prev && !r.prev.none);
+    const filesOf = () => linked().filter(r => sel.has(r.id) && r.prev.kind === 'file');
+    const btnAuto = h('button', { class: 'btn primary', onclick: () => run(btnAuto, auto) }, '🔗 שיוך אוטומטי לשורות בלי סקר');
+    const btnOk = h('button', { class: 'btn primary', hidden: true, onclick: () => run(btnOk, confirmProps) }, 'אשר את ההצעות המסומנות');
+    const btnGet = h('button', { class: 'btn', onclick: () => run(btnGet, preload) }, '⬇ הורד מראש לטאבלט');
+    const btnZip = h('button', { class: 'btn', onclick: () => run(btnZip, zip) }, '💾 שמור כקבצים (ZIP)');
+    const allBox = h('input', { type: 'checkbox', onchange: () => { linked().forEach(r => allBox.checked ? sel.add(r.id) : sel.delete(r.id)); draw(); } });
+    async function run(btn, fn) { const all = [btnAuto, btnOk, btnGet, btnZip]; all.forEach(b => { b.disabled = true; }); try { await fn(); } catch (e) { status.textContent = 'נכשל: ' + e.message; } finally { all.forEach(b => { b.disabled = false; }); draw(); } }
+    async function auto() {
+      if (navigator.onLine === false || !(await OD.connected())) { status.textContent = 'צריך חיבור לגוגל דרייב כדי לחפש סקרים קודמים.'; return; }
+      const todo = rows().filter(r => !(r.prev && !r.prev.none));
+      prop.clear(); ok.clear();
+      let i = 0, found = 0;
+      const next = async () => { while (todo.length) { const r = todo.shift(); const x = await proposePrev(l, r).catch(() => null); i++; if (x) { prop.set(r.id, x); found++; if (x.sure) ok.add(r.id); } status.textContent = `מחפש… ${i} שורות נבדקו, ${found} הצעות`; if (i % 4 === 0) draw(); } };
+      await Promise.all([next(), next(), next()]);
+      // אותו קובץ הוצע לכמה שורות: לא מסומן, כדי שתבדוק
+      const cnt = new Map(); for (const x of prop.values()) cnt.set(x.f.id, (cnt.get(x.f.id) || 0) + 1);
+      const byCode = new Set([...prop.values()].filter(x => x.byCode).map(x => x.f.id));
+      for (const [id, x] of [...prop]) if (cnt.get(x.f.id) > 1) {
+        if (x.byCode) continue;
+        if (byCode.has(x.f.id)) { prop.delete(id); found--; continue; } // הקובץ שייך לשורה אחרת לפי הסמל
+        x.sure = false; x.why += ' · אותו קובץ הוצע לכמה שורות'; ok.delete(id);
+      }
+      status.textContent = found ? `נמצאו ${found} הצעות (${ok.size} מסומנות). עבור עליהן, סמן או בטל, ולחץ "אשר את ההצעות המסומנות". שום דבר לא נשמר עד שתאשר.` : 'לא נמצאו הצעות. אפשר לחפש לכל שורה בנפרד עם "חפש".';
+    }
+    async function confirmProps() {
+      let n = 0;
+      for (const [id, x] of prop) if (ok.has(id)) { const r = l.rows.find(q => q.id === id); if (!r) continue; r.prev = Object.assign(prevOf(x), { manual: true }); r.u = Date.now(); sel.add(id); n++; }
+      prop.clear(); ok.clear();
+      await save(l);
+      status.textContent = `${n} שורות שויכו. עכשיו אפשר להוריד אותן מראש.`;
+    }
+    async function preload() {
+      const fs = filesOf();
+      if (!fs.length) { status.textContent = 'סמן שורות עם קובץ משויך.'; return; }
+      let i = 0, bad = 0;
+      for (const r of fs) { status.textContent = `מוריד… ${++i} מתוך ${fs.length}`; try { await prevBlob(r.prev.f); } catch (e) { bad++; } draw(); }
+      status.textContent = `הורדו ${fs.length - bad} קבצים לטאבלט. "פתח" בשורות האלה יעבוד מהר, גם בלי קליטה.` + (bad ? ` ${bad} נכשלו.` : '');
+    }
+    async function zip() {
+      const fs = filesOf();
+      if (!fs.length) { status.textContent = 'סמן שורות עם קובץ משויך.'; return; }
+      const z = new JSZip(), used = new Set();
+      let i = 0;
+      for (const r of fs) { status.textContent = `מכין… ${++i} מתוך ${fs.length}`; let n = r.prev.f.name; for (let k = 2; used.has(n); k++) n = r.prev.f.name.replace(/(\.[^.]+)?$/, ` (${k})$1`); used.add(n); z.file(n, await (await prevBlob(r.prev.f)).arrayBuffer()); }
+      ui.downloadFile(new Blob([await z.generateAsync({ type: 'uint8array' })], { type: 'application/zip' }), ui.safeName((l.name || 'רשימה') + ' - סקרים קודמים') + '.zip');
+      status.textContent = `${fs.length} קבצים נשמרו בקובץ ZIP.`;
+    }
+    function draw() {
+      btnOk.hidden = !prop.size;
+      btnOk.textContent = `אשר את ההצעות המסומנות (${ok.size})`;
+      const ls = linked();
+      allBox.checked = ls.length > 0 && ls.every(r => sel.has(r.id));
+      const fileLine = (p, extra) => h('div', { class: 'small wl-pfile' }, h('span', { class: 'muted' }, '📁 ' + prevPath(p) + (p.kind === 'file' ? ' / ' : '')), p.kind === 'file' ? h('b', {}, p.f.name) : h('b', {}, ' ' + p.name), extra || null);
+      box.replaceChildren(...rows().map(r => {
+        const n = nm(r), p = r.prev && !r.prev.none ? r.prev : null, x = prop.get(r.id);
+        return h('div', { class: 'wl-stop wl-prow' + (x ? ' prop' : '') },
+          p ? h('input', { type: 'checkbox', 'aria-label': 'בחר', checked: sel.has(r.id), onchange: e => { e.target.checked ? sel.add(r.id) : sel.delete(r.id); draw(); } })
+            : x ? h('input', { type: 'checkbox', 'aria-label': 'אשר הצעה', checked: ok.has(r.id), onchange: e => { e.target.checked ? ok.add(r.id) : ok.delete(r.id); draw(); } }) : h('span', { style: 'width:20px' }),
+          h('div', { style: 'flex:1;min-width:0' }, h('b', {}, n.name), h('div', { class: 'muted small' }, n.sub),
+            p ? fileLine(p, p.kind === 'file' && ix[p.f.id] ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הורד') : null)
+              : x ? h('div', {}, fileLine(prevOf(x)), h('div', { class: 'small', style: 'color:#8a5200' }, (x.sure ? 'הצעה: ' : 'הצעה לבדיקה: ') + x.why + (x.year ? ' · ' + x.year : '')))
+              : h('div', { class: 'muted small' }, 'אין סקר קודם משויך')),
+          p && p.kind === 'file' ? h('button', { class: 'btn', onclick: () => openPrevFile(p, 'xlsx').then(draw) }, 'אקסל') : null,
+          p && p.kind === 'file' ? h('button', { class: 'btn', onclick: () => openPrevFile(p, 'pdf') }, 'PDF') : null,
+          x && !p ? h('a', { class: 'btn', href: 'https://drive.google.com/file/d/' + encodeURIComponent(x.f.id) + '/view', target: '_blank', rel: 'noopener' }, 'הצג') : null,
+          h('button', { class: 'btn', onclick: () => { ov.remove(); openRow(l, r, true, () => prevManager(l, redrawTable)); } }, p ? 'החלף' : 'חפש'),
+          p ? h('button', { class: 'icon-btn', title: 'בטל שיוך', 'aria-label': 'בטל שיוך', onclick: () => { delete r.prev; r.u = Date.now(); sel.delete(r.id); save(l); draw(); } }, '✕') : null);
+      }));
+    }
+    const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
+      h('div', { class: 'card stack', style: 'max-width:860px;width:96%' },
+        h('h2', { style: 'margin:0;font-size:21px' }, '📎 סקרים קודמים של הרשימה'),
+        h('div', { class: 'muted small' }, 'החיפוש ב: ' + (l.folder ? 'התיקייה "' + l.folder.name + '"' : 'הארכיון הרגיל') + '. שיוך אוטומטי רק מציע: שום סקר לא נפתח ושום דבר לא נשמר עד שתאשר. שורות שכבר נפתח להן סקר לא מופיעות כאן.'),
+        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, btnAuto, btnOk),
+        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' }, h('label', { class: 'row small', style: 'gap:6px;align-items:center' }, allBox, 'בחר את כל המשויכים'), btnGet, btnZip),
+        status, box,
+        h('button', { class: 'btn', onclick: close }, 'סגור')));
+    document.body.append(ov);
+    draw();
+  }
 
   // ---------- דוח מנהלים (1.98.0): כמו "דו"ח מנהלים, סקר יציבות עצים" של ori: שורה לכל עץ שדורש טיפול בכל מוסד ברשימה ----------
   const xesc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
