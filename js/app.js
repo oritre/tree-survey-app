@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.140.0';
+  const APP_VERSION = '1.141.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -3444,8 +3444,26 @@
       add('tree', 'עץ אחד בלי מין:', '# עצים בלי מין:', plain(trees.filter(t => !String(t.species || '').trim())));
       add('info', 'עץ אחד בלי דחיפות:', '# עצים בלי דחיפות:', plain(notOk.filter(t => !String(t.urgency || '').trim())));
       add('file', 'עץ אחד בלי טיפול או הערה:', '# עצים בלי טיפול או הערה:', plain(notOk.filter(t => !String(t.notes || '').trim())));
+      // סקר אורנים: אורן שלא מולאו לו פרטי אורנים (או שחסר בהם מיקום / גובה / קוטר גזע)
+      add('tree', '🌲 אורן אחד בלי פרטי אורנים מלאים:', '🌲 # שורות אורנים בלי פרטי אורנים מלאים:', pineGaps(s));
     }
     return groups;
+  }
+  // אורנים בלי פרטים (רק בסקר שהודלק בו ריכוז אורנים): { t, label } לכל עץ, עם מה שחסר
+  function pineGaps(s) {
+    if (!Core.pinesOn(s)) return [];
+    return Core.sortTrees(s.trees.filter(t => Core.hasContent(t) && !t.ref && Core.isPine(t.species))).map(t => {
+      const list = t.pineList || [];
+      if (!list.length) return { t, label: treeLabel(t) + ' · אין פרטים' };
+      const bad = list.map((p, i) => Core.pineMissing(p).length ? i + 1 : 0).filter(Boolean);
+      return bad.length ? { t, label: treeLabel(t) + (list.length > 1 ? ` · אורן ${bad.join(', ')}` : '') + ' · חסר ' + [...new Set(bad.flatMap(i => Core.pineMissing(list[i - 1])))].join(', ') } : null;
+    }).filter(Boolean);
+  }
+  // אחרי "לסיים בכל זאת?": עוד חלון שמזכיר במפורש אורנים בלי פרטים
+  function confirmPineGaps(s) {
+    const g = pineGaps(s);
+    if (!g.length) return true;
+    return confirm(`🌲 שים לב: ב-${g.length === 1 ? 'שורת אורנים אחת' : g.length + ' שורות אורנים'} חסרים פרטי אורנים:\n\n${g.slice(0, 12).map(x => '• עץ ' + x.label).join('\n')}${g.length > 12 ? `\n…ועוד ${g.length - 12}` : ''}\n\nבלי הפרטים האלה ריכוז האורנים לא יהיה שלם. לסיים בכל זאת?`);
   }
   function noPhotoBox(s) {
     const groups = completenessGroups(s);
@@ -3532,6 +3550,7 @@
             const btn = e.currentTarget;
             if (!odOn) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
             if ((warns.length || completenessGroups(cur).length) && !confirm('יש פרטים חסרים (ראה בתיבה האדומה וב"בדיקה לפני הפקה" למטה). לסיים בכל זאת?')) return;
+            if (!confirmPineGaps(cur)) return;
             cur.finishPending = true; cur.finished = false;
             const sid = cur.id; Sync.preparing.add(sid);
             await saveNow(); Sync.now(); drawSync();
