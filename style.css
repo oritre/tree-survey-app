@@ -719,3 +719,20 @@ img.docv-page { object-fit: contain; }
 .wl-verdict .btn { min-height: 34px; padding: 4px 10px; font-size: 13px; white-space: nowrap; background: #fff; color: #1f1a0a; border-color: #c9b36a; }
 .wl-verdict .btn.yes { background: #2e6b33; color: #fff; border-color: #2e6b33; }
 .wl-verdict .btn.no { background: #b3261e; color: #fff; border-color: #b3261e; }
+/* (1.142) מפת המסלול: חיפוש חופשי וחניות חינם (js/mapextras.js) */
+.mx-box { display: flex; flex-direction: column; gap: 4px; width: min(340px, calc(100vw - 90px)); }
+.mx-search .in { flex: 1; min-width: 0; min-height: 40px; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+.mx-search .btn { min-height: 40px; padding: 0 12px; }
+.mx-res { background: var(--surface); border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.3); max-height: 40vh; overflow: auto; margin-top: 4px; }
+.mx-item { display: block; width: 100%; text-align: start; padding: 10px 12px; border: 0; border-bottom: 1px solid rgba(0,0,0,.08); background: none; color: inherit; font: inherit; font-size: 14px; cursor: pointer; }
+.mx-item:hover { background: rgba(46,107,51,.08); }
+.mx-pbtn { min-height: 36px; padding: 0 10px; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+.mx-maybe { background: var(--surface); border-radius: 8px; padding: 6px 8px; font-size: 13px; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+.mx-stat { align-self: flex-start; background: var(--surface); border-radius: 8px; padding: 4px 8px; font-size: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.3); cursor: pointer; }
+.mx-box [hidden] { display: none !important; }
+.mx-park { display: flex !important; align-items: center; justify-content: center; border-radius: 6px; font-weight: 800; font-size: 14px; color: #fff; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45); }
+.mx-park.free { background: #1e88e5; }
+.mx-park.maybe { background: #8d99a6; opacity: .9; }
+.mx-park.mine { background: #6a1b9a; border-color: #ffd54f; }
+.mx-park.mine.k-paid, .mx-park.mine.k-cheap { background: #ad5a00; }
+.mx-found { font-size: 26px; line-height: 30px; text-align: center; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
