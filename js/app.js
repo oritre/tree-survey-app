@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.141.0';
+  const APP_VERSION = '1.141.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -3029,7 +3029,7 @@
       let sub = null;
       if (Core.splitActive(t)) {
         const nums = Core.expandNum(t.num);
-        sub = nums.find(n => !t.photos.some(x => x.sub === n)) || nums[0];
+        sub = nums.find(n => !t.photos.some(x => Core.photoSub(t, x) === n)) || nums[0];
       }
       const np = { id: p.id, w: p.w, h: p.h, sub, inReport: false, note: '', taken: Date.now() };
       // הראשונה בקבוצה נכנסת לדוח, השאר לא (אפשר לשנות)
@@ -3366,7 +3366,7 @@
           p.inReport = !t.photos.some(x => x !== p && x.inReport && Core.groupKey(t, x) === p.sub);
           Core.ensureReportPhoto(t, old);
           saveSoon(); renderPhotos(); Sync.kick();
-        } }, nums.map(n => h('option', { value: n, selected: p.sub === n ? 'selected' : null }, 'עץ ' + n))) : null,
+        } }, nums.map(n => h('option', { value: n, selected: Core.photoSub(t, p) === n ? 'selected' : null }, 'עץ ' + n))) : null,
         noteIn,
         cur.trees.length > 1 ? h('select', { class: 'in move-sel', 'aria-label': 'העבר את התמונה לעץ אחר', onchange: e => { const to = treeById(e.target.value); if (to) movePhoto(t, p, to); } },
           h('option', { value: '' }, '↔ העבר לעץ אחר…'),
@@ -3386,7 +3386,7 @@
     p.sub = null;
     if (Core.splitActive(to)) {
       const nums = Core.expandNum(to.num);
-      p.sub = nums.find(n => !to.photos.some(x => x.sub === n)) || nums[0];
+      p.sub = nums.find(n => !to.photos.some(x => Core.photoSub(to, x) === n)) || nums[0];
     }
     // נכנסת לדוח רק אם לעץ החדש עוד אין תמונה בדוח (למספר הזה)
     p.inReport = !to.photos.some(x => x.inReport && Core.groupKey(to, x) === Core.groupKey(to, p));
@@ -3410,7 +3410,7 @@
       const label = [name, (t.species || '').trim()].filter(Boolean).join(' · ') || 'עץ בלי מספר';
       if (!ph.length) { if (!(build && covered.has(Core.firstNum(t.num)))) out.push({ t, label }); continue; }
       if (!build && Core.splitActive(t)) {
-        const miss = Core.expandNum(t.num).filter(n => !ph.some(p => p.sub === n));
+        const miss = Core.expandNum(t.num).filter(n => !ph.some(p => Core.photoSub(t, p) === n));
         if (miss.length) out.push({ t, label: `${miss.join(', ')} (מתוך ${t.num})` });
       }
     }
@@ -4223,7 +4223,7 @@
         for (const p of t.photos || []) {
           if (used.has(p.id)) continue;
           const b = await photoBlob(cur, p.id);
-          if (b) zip.file(`extra/tree_${String(t.num || 'x').replace(/[^0-9,-]+/g, '') || 'x'}${p.sub ? '_' + p.sub : ''}_${k++}.jpg`, b);
+          if (b) zip.file(`extra/tree_${String(t.num || 'x').replace(/[^0-9,-]+/g, '') || 'x'}${Core.photoSub(t, p) ? '_' + Core.photoSub(t, p) : ''}_${k++}.jpg`, b);
         }
       }
       const blob = await zip.generateAsync({ type: 'blob' });
