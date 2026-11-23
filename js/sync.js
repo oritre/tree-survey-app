@@ -661,6 +661,7 @@
       await OD.upload(r, SETTINGS, new Blob([JSON.stringify(Object.assign(cloud, { geminiKey: gk, geminiUpdated: at }))], { type: 'application/json' }), true);
     }
     await syncLists(r, cloud);
+    await syncParking(r, cloud);
     await Sig.sync(r).catch(() => {}); // החתימה והחותמת, שלא נמצאות באתר הציבורי
     settingsSynced = true; settingsAt = Date.now();
   }
@@ -695,6 +696,17 @@
       cloud.lists = up; cloud.listsUpdated = at;
       await OD.upload(r, SETTINGS, new Blob([JSON.stringify(cloud)], { type: 'application/json' }), true);
     }
+  }
+
+  // (1.142) החניות שלך במפת המסלול (js/mapextras.js): מיזוג לפי חנייה, מה שעודכן אחרון מנצח (גם מחיקה)
+  async function syncParking(r, cloud) {
+    const X = root.MapExtras;
+    if (!X) return;
+    const local = (await DB.getKV('myParking', [])) || [], cp = cloud.parking || [];
+    if (!local.length && !cp.length) return;
+    const merged = X.merge(local, cp), key = a => JSON.stringify([...a].sort((x, y) => x.id < y.id ? -1 : 1));
+    if (key(merged) !== key(local)) { await DB.setKV('myParking', merged); log('info', 'החניות במפה עודכנו ממכשיר אחר'); }
+    if (key(merged) !== key(cp)) { cloud.parking = merged; await OD.upload(r, SETTINGS, new Blob([JSON.stringify(cloud)], { type: 'application/json' }), true); }
   }
 
   // סקר מלא לפי רשומה באינדקס: מהטאבלט אם הוא שם, אחרת מגוגל דרייב
@@ -1181,6 +1193,7 @@
     geminiChanged() { settingsSynced = false; DB.setKV('geminiUpdated', Date.now()).then(() => schedule(0)); },
     // רשימות הבחירה נשמרו בהגדרות: עולות לענן עכשיו
     listsChanged() { settingsSynced = false; DB.setKV('listsUpdated', Date.now()).then(() => schedule(0)); },
+    parkingChanged() { settingsSynced = false; schedule(5000); },
     settingsChanged() { settingsSynced = false; DB.setKV('tgUpdated', Date.now()).then(() => schedule(0)); },
     pendingOf(s, tgOn, odOn) {
       const ph = s.trees.flatMap(t => t.photos || []);

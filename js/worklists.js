@@ -1287,16 +1287,17 @@
     geoQueue = p.catch(() => {});
     return p;
   }
-  async function arcgis(q) {
-    const res = await fetch(ARC + encodeURIComponent(q));
+  // c: מרכז המפה, כדי שחיפוש חופשי יעדיף תוצאות קרובות
+  async function arcgis(q, c) {
+    const res = await fetch(ARC + encodeURIComponent(q) + (c ? `&location=${c.lng},${c.lat}` : ''));
     if (!res.ok) throw new Error('ArcGIS ' + res.status);
     const j = await res.json();
     if (j.error) throw new Error('ArcGIS ' + (j.error.message || j.error.code));
     return (j.candidates || []).filter(c => c.score >= 75).map(c => { const t = (c.attributes && c.attributes.Addr_type) || '';
       return { lat: +c.location.y, lon: +c.location.x, label: c.address || '', kind: /^(PointAddress|StreetAddress|StreetAddressExt|StreetInt|StreetName|StreetMidBlock|Subaddress|POI|DistanceMarker)$/.test(t) ? 'street' : 'place' }; });
   }
-  async function photon(q) {
-    const res = await fetch(PHOTON + encodeURIComponent(q));
+  async function photon(q, c) {
+    const res = await fetch(PHOTON + encodeURIComponent(q) + (c ? `&lat=${c.lat}&lon=${c.lng}` : ''));
     if (!res.ok) throw new Error('Photon ' + res.status);
     const j = await res.json();
     return (j.features || []).map(f => { const pp = f.properties || {}, t = pp.type || '';
@@ -1324,6 +1325,17 @@
     }
     if (!fb && (!tried || (errs.length && errs.length === tried))) throw new Error('שירותי המפה לא זמינים' + (errs.length ? ' (' + errs.join(', ') + ')' : ''));
     return fb;
+  }
+  // (1.142) חיפוש חופשי במפת המסלול: כמה תוצאות מכמה שירותים, קרובות למרכז המפה קודם
+  async function searchAll(q, c) {
+    const out = [], errs = [];
+    for (const [, fn] of GEOS) {
+      if (out.length >= 3) break;
+      try { for (const g of (await fn(q, c)) || []) if (isFinite(g.lat) && isFinite(g.lon) && !out.some(o => km(o, g) < 0.03)) out.push({ lat: g.lat, lon: g.lon, label: g.label || q }); }
+      catch (e) { errs.push(e.message); }
+    }
+    if (!out.length && errs.length === GEOS.length) throw new Error('שירותי המפה לא זמינים (' + errs.join(', ') + ')');
+    return out.slice(0, 8);
   }
   // אותה כתובת בכמה שורות (כמה גנים באותו מבנה): מחפשים פעם אחת
   const geoMem = new Map();
@@ -1632,7 +1644,7 @@
       return null;
     }
     const linksBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
-    let map = null, layer = null, pickAfter = null, userMoved = false;
+    let map = null, layer = null, pickAfter = null, userMoved = false, extras = null;
     const persist = () => save(l);
     // יום עבודה שנבחר (עמודת "יום"): במפה, ברשימה ובקישורים רק התחנות שלו. המספרים נשארים לפי המסלול כולו
     const dc = dayCol(l), days = daysOf(l);
@@ -1961,6 +1973,8 @@
       map.on('click', e => { if (!pickLoc) return; const f = pickLoc; pickLoc = null; mapEl.classList.remove('picking'); userMoved = true; f(e.latlng); }); mapEl.addEventListener('wheel', () => { userMoved = true; }, { passive: true });
       const g = ui.mapLayers()['גוגל – מפה'];
       L.tileLayer(g[0], g[1]).addTo(map);
+      // (1.142) חיפוש חופשי + חניות חינם (js/mapextras.js)
+      if (root.MapExtras) extras = root.MapExtras.attach(map, { ui, search: searchAll, onMoved: () => { userMoved = true; } });
       showMe();
     } catch (e) { mapEl.replaceChildren(h('div', { class: 'muted small', style: 'padding:16px' }, 'המפה לא נטענה: ' + e.message)); }
     if (navigator.onLine === false) { status.textContent = 'אין קליטה: אי אפשר לאתר כתובות במפה'; for (const id of l.route) { const r = l.rows.find(x => x.id === id); if (r && r.geo) geo.set(id, r.geo); } redraw(); return; }
@@ -1975,7 +1989,7 @@
       sj.subs.add(onS);
       redraw();
     }
-    locateAll().then(() => { showStatus(); redraw(); if (job && job.err) status.textContent += ' · שגיאה באיתור: ' + job.err; });
+    locateAll().then(() => { showStatus(); redraw(); if (job && job.err) status.textContent += ' · שגיאה באיתור: ' + job.err; if (extras) extras.prefetch([...geo.values()]); });
   }
 
   // גרירת קובץ רשימה (אקסל / CSV) למסכי הרשימות: ייבוא כרשימה חדשה. בתוך רשימה: הוספת מסמכים לרשימה
@@ -2004,5 +2018,5 @@
     });
   })();
 
-  root.WorkLists = { render, sync, _t: { geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
+  root.WorkLists = { render, sync, _t: { searchAll, geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
 })(window);
