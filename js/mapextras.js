@@ -8,7 +8,7 @@
   const CELL = 0.1; // משבצת של כ-10 ק"מ: נטענת פעם אחת ונשמרת
   const MAX_AGE = 30 * 864e5; // משבצת ישנה מ-30 יום נטענת שוב כשיש קליטה
   const MIN_ZOOM = 12;
-  const KINDS = { free: 'חינם', hours: 'חינם בשעות / ימים מסוימים', cheap: 'בתשלום זול', paid: 'בתשלום' };
+  const KINDS = { free: 'חינם', open: 'שטח פתוח / חנייה לא רשמית', temp: 'חניון זמני (עירייה)', hours: 'חינם בשעות / ימים מסוימים', cheap: 'בתשלום זול', paid: 'בתשלום' };
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const cellKey = (la, lo) => Math.floor(la / CELL) + '_' + Math.floor(lo / CELL);
@@ -28,6 +28,8 @@
     const fee = String(t.fee || '').trim().toLowerCase(), acc = String(t.access || '').trim().toLowerCase();
     if (/^(private|no|permit|delivery|employees|residents)$/.test(acc)) return null;
     if (fee === 'no' || fee === 'free') return acc === 'customers' ? 'maybe' : 'free';
+    // (1.143, ori) רחבות / שטחי עפר / חניה לא רשמית / חניון זמני: כמעט תמיד בלי תשלום, מוצגים כ"שטח פתוח"
+    if (!fee && acc !== 'customers' && (t.informal === 'yes' || (t.temporary && t.temporary !== 'no') || /^(unpaved|dirt|gravel|fine_gravel|ground|compacted|earth|sand|grass|pebblestone|mud)$/.test(String(t.surface || '').toLowerCase()))) return 'open';
     if (!fee) return 'maybe';
     return null; // fee=yes / מחיר
   }
@@ -39,6 +41,9 @@
     const o = { id: e.type[0] + e.id, lat: +lat.toFixed(6), lon: +lon.toFixed(6), c };
     for (const [k, v] of [['n', t['name:he'] || t.name], ['cap', t.capacity], ['p', t.parking], ['ms', t.maxstay], ['fc', t['fee:conditional']], ['oh', t.opening_hours], ['acc', t.access]]) if (v) o[k] = v;
     if (t.amenity === 'motorcycle_parking') o.moto = 1;
+    if (t.informal === 'yes') o.inf = 1;
+    if (t.temporary && t.temporary !== 'no') o.tmp = 1;
+    if (t.surface) o.sf = t.surface;
     return o;
   }
   async function overpass(box) {
@@ -79,7 +84,7 @@
   // ---------- משבצות OSM שמורות במכשיר ----------
   const mem = new Map();
   async function cell(k) {
-    if (!mem.has(k)) mem.set(k, await DB.getKV('park:' + k, null));
+    if (!mem.has(k)) mem.set(k, await DB.getKV('park2:' + k, null));
     return mem.get(k);
   }
   let loading = null;
@@ -92,7 +97,7 @@
     for (const k of need.slice(0, 12)) {
       const items = await overpass(cellBox(k));
       const v = { t: Date.now(), items };
-      mem.set(k, v); await DB.setKV('park:' + k, v); n++;
+      mem.set(k, v); await DB.setKV('park2:' + k, v); n++;
     }
     return n;
   }
@@ -157,7 +162,7 @@
     const icon = (cls, txt) => L.divIcon({ className: 'mx-park ' + cls, html: txt, iconSize: [24, 24], iconAnchor: [12, 12] });
     function osmPopup(o, rec) {
       const lines = [];
-      lines.push(o.c === 'free' ? '<b style="color:#1e7d32">חינם</b> (לפי OpenStreetMap)' : '<b style="color:#8a6d00">לא ידוע אם בתשלום</b>' + (o.acc === 'customers' ? ' · ללקוחות' : ''));
+      lines.push(o.c === 'free' ? '<b style="color:#1e7d32">חינם</b> (לפי OpenStreetMap)' : o.c === 'open' ? '<b style="color:#1e7d32">' + (o.tmp ? 'חניון זמני' : o.inf ? 'חנייה לא רשמית' : 'שטח פתוח / עפר') + '</b>, כנראה בלי תשלום' : '<b style="color:#8a6d00">לא ידוע אם בתשלום</b>' + (o.acc === 'customers' ? ' · ללקוחות' : ''));
       if (o.cap) lines.push('מקומות: ' + esc(o.cap));
       if (o.p) lines.push({ surface: 'חניון פתוח', underground: 'חניון תת-קרקעי', 'multi-storey': 'חניון קומות', street_side: 'בצד הרחוב', lane: 'לאורך הרחוב', rooftop: 'על הגג' }[o.p] || esc(o.p));
       if (o.ms) lines.push('זמן מרבי: ' + esc(o.ms));
@@ -167,7 +172,7 @@
       const d = h('div', { class: 'wl-popup', dir: 'rtl' }, h('b', {}, o.n || (o.moto ? 'חניית אופנועים' : 'חניון')));
       const info = h('div', { class: 'small' }); info.innerHTML = lines.join('<br>'); d.append(info, navLinks(o.lat, o.lon),
         h('div', { class: 'row', style: 'gap:6px;margin-top:6px;flex-wrap:wrap' },
-          h('button', { class: 'btn', onclick: () => { map.closePopup(); editSpot({ lat: o.lat, lon: o.lon, name: o.n || '', kind: o.c === 'free' ? 'free' : 'hours', from: o.id }); } }, '⭐ שמור כשלי'),
+          h('button', { class: 'btn', onclick: () => { map.closePopup(); editSpot({ lat: o.lat, lon: o.lon, name: o.n || '', kind: o.c === 'free' ? 'free' : o.c === 'open' ? (o.tmp ? 'temp' : 'open') : 'hours', from: o.id }); } }, '⭐ שמור כשלי'),
           h('button', { class: 'btn', title: 'לא חינם / לא מתאים: לא יוצג יותר', onclick: async () => { map.closePopup(); await upsert({ id: 'osm:' + o.id, hide: true }); draw(); ui.toast('החניון הוסתר. אפשר להחזיר מ"חניות שהסתרת" ברשימת החניות', 3500); } }, '🚫 הסתר')));
       if (rec) d.append(h('div', { class: 'muted small' }, 'נתונים מ-OpenStreetMap, ייתכן שלא מעודכנים'));
       return d;
@@ -209,10 +214,10 @@
           if (o.c === 'maybe' && !showMaybe) continue;
           if (o.c === 'maybe' && z < 14) continue;
           L.marker([o.lat, o.lon], { icon: icon(o.c, o.moto ? '🛵' : 'P') }).addTo(layer).bindPopup(() => osmPopup(o, true));
-          o.c === 'free' ? nf++ : nm++;
+          o.c === 'maybe' ? nm++ : nf++;
         }
       }
-      stat(`${nf} חינם` + (showMaybe ? ` · ${nm} לא ידוע` : '') + (missing ? (navigator.onLine === false ? ' · אזור שלא נשמר (אין קליטה)' : ' · טוען…') : ''));
+      stat(`${nf} חינם / שטח פתוח` + (showMaybe ? ` · ${nm} לא ידוע` : '') + (missing ? (navigator.onLine === false ? ' · אזור שלא נשמר (אין קליטה)' : ' · טוען…') : ''));
     }
     const stat = t => { pStat.textContent = t; pStat.hidden = !on || !t; };
     async function refresh(force) {
@@ -276,7 +281,8 @@
             h('button', { class: 'btn', onclick: () => { close(); if (opts.onMoved) opts.onMoved(); map.setView([x.lat, x.lon], 17); setTimeout(() => { const mk = mineMk.get(x.id); if (mk) mk.openPopup(); }, 400); } }, 'במפה'))),
           my.some(x => x.hide) ? h('div', { class: 'muted small' }, `חניונים שהסתרת: ${my.filter(x => x.hide).length}`) : null,
           my.some(x => x.hide) ? h('button', { class: 'btn', onclick: async () => { const arr = await mine(); arr.forEach(x => { if (x.hide && !x.del) { x.del = true; x.u = Date.now(); } }); await saveMine(arr); close(); draw(); } }, 'החזר את כל החניונים שהסתרת') : null,
-          h('div', { class: 'muted small' }, 'חניונים ירוקים ואפורים מגיעים מ-OpenStreetMap ונשמרים במכשיר. ' + (navigator.onLine === false ? '' : 'כדי לעבוד בלי קליטה, הם נשמרים אוטומטית סביב התחנות במסלול ובכל מקום שפתחת במפה.')),
+          h('div', { class: 'small' }, 'מקרא: P כחול = חניון רשום כחינם · P ירוק = שטח פתוח / עפר / חנייה לא רשמית / חניון זמני · P אפור = לא ידוע אם בתשלום · P סגול = שלך'),
+          h('div', { class: 'muted small' }, 'החניונים הכחולים, הירוקים והאפורים מגיעים מ-OpenStreetMap ונשמרים במכשיר. ' + (navigator.onLine === false ? '' : 'כדי לעבוד בלי קליטה, הם נשמרים אוטומטית סביב התחנות במסלול ובכל מקום שפתחת במפה.')),
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
             h('button', { class: 'btn', onclick: async e => { const b = map.getBounds(); e.target.disabled = true; e.target.textContent = 'טוען…'; try { const n = await fetchCells(cellsIn(b.getSouth(), b.getWest(), b.getNorth(), b.getEast()), true); ui.toast(n ? 'החניונים באזור עודכנו' : 'אין קליטה', 2500); draw(); } catch (err) { ui.toast(err.message, 4000); } close(); } }, '⟳ רענן חניונים באזור המפה'),
             h('button', { class: 'btn', onclick: close }, 'סגור'))));

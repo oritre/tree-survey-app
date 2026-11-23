@@ -732,7 +732,9 @@ img.docv-page { object-fit: contain; }
 .mx-box [hidden] { display: none !important; }
 .mx-park { display: flex !important; align-items: center; justify-content: center; border-radius: 6px; font-weight: 800; font-size: 14px; color: #fff; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45); }
 .mx-park.free { background: #1e88e5; }
+.mx-park.open { background: #2e7d32; }
 .mx-park.maybe { background: #8d99a6; opacity: .9; }
 .mx-park.mine { background: #6a1b9a; border-color: #ffd54f; }
+.mx-park.mine.k-open, .mx-park.mine.k-temp { background: #2e7d32; }
 .mx-park.mine.k-paid, .mx-park.mine.k-cheap { background: #ad5a00; }
 .mx-found { font-size: 26px; line-height: 30px; text-align: center; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
