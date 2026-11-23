@@ -200,7 +200,7 @@
     for (const t of Core.sortTrees(trees).filter(Core.hasContent).slice(0, MAX_TREES)) {
       const photos = (t.photos || []).filter(p => p.inReport);
       if (Core.splitActive(t)) {
-        for (const n of Core.expandNum(t.num)) for (const p of photos.filter(x => x.sub === n)) slots.push({ tree: t, sub: n, label: String(n), photo: p });
+        for (const n of Core.expandNum(t.num)) for (const p of photos.filter(x => Core.photoSub(t, x) === n)) slots.push({ tree: t, sub: n, label: String(n), photo: p });
       } else {
         // תמונה אחת לכמה עצים: "עצים בתמונה" (למשל 7-9) היא התווית בנספח
         for (const p of photos) slots.push({ tree: t, sub: null, label: photoName(t, p) || String(t.species || ''), photo: p });

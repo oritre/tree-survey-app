@@ -128,7 +128,15 @@
   }
 
   // קבוצת התמונות: בעץ מפוצל כל תת-מספר הוא קבוצה, אחרת כל העץ
-  function groupKey(tree, p) { return splitActive(tree) ? p.sub : null; }
+  // תת-המספר של תמונה בעץ מפוצל. תמונה בלי תת-מספר תקין (למשל צולמה לפני שהעץ הפך לטווח) שייכת למספר הראשון,
+  // כמו שהיא מוצגת ברשימה "עץ N" (1.141.1: אחרת "אין תמונה למספר הזה" למרות שיש)
+  function photoSub(tree, p) {
+    if (!splitActive(tree)) return null;
+    const nums = expandNum(tree.num) || [];
+    const s = p.sub == null || p.sub === '' ? NaN : +p.sub;
+    return nums.includes(s) ? s : (nums[0] ?? null);
+  }
+  function groupKey(tree, p) { return photoSub(tree, p); }
 
   // ברירת מחדל: התמונה הראשונה בכל קבוצה נכנסת לדוח (גם לנתונים ישנים עם כוכב)
   function normalizePhotos(tree) {
@@ -154,7 +162,7 @@
   // התמונה הראשונה לדוח עבור משבצת (מצב התבנית: משבצת אחת לכל עץ / תת-מספר)
   function photoForSlot(slot) {
     const photos = slot.tree.photos || [];
-    const mine = slot.sub == null ? photos : photos.filter(p => p.sub === slot.sub);
+    const mine = slot.sub == null ? photos : photos.filter(p => photoSub(slot.tree, p) === slot.sub);
     return mine.find(p => p.inReport) || null;
   }
 
@@ -164,7 +172,7 @@
     for (const t of sortTrees(trees).filter(hasContent).slice(0, MAX_TREES)) {
       const photos = (t.photos || []).filter(p => p.inReport);
       if (splitActive(t)) {
-        for (const n of expandNum(t.num)) for (const p of photos.filter(x => x.sub === n)) slots.push({ tree: t, sub: n, label: String(n), photo: p });
+        for (const n of expandNum(t.num)) for (const p of photos.filter(x => photoSub(t, x) === n)) slots.push({ tree: t, sub: n, label: String(n), photo: p });
       } else {
         for (const p of photos) slots.push({ tree: t, sub: null, label: String(t.num || t.species || ''), photo: p });
       }
@@ -174,7 +182,7 @@
 
   // התווית של תמונה (מספר העץ, או תת-המספר בעץ מפוצל)
   function photoLabel(tree, p) {
-    return splitActive(tree) && p.sub != null ? String(p.sub) : String(tree.num || tree.species || '').trim();
+    return splitActive(tree) && photoSub(tree, p) != null ? String(photoSub(tree, p)) : String(tree.num || tree.species || '').trim();
   }
 
   // המספר הבא לעץ חדש
@@ -253,7 +261,7 @@
     }
     for (const t of trees) {
       if (!splitActive(t)) continue;
-      for (const n of expandNum(t.num)) if (!(t.photos || []).some(p => p.sub === n)) w.push(`עץ ${n} (מתוך ${t.num}): אין תמונה למספר הזה.`);
+      for (const n of expandNum(t.num)) if (!(t.photos || []).some(p => photoSub(t, p) === n)) w.push(`עץ ${n} (מתוך ${t.num}): אין תמונה למספר הזה.`);
     }
     if (pinesOn(survey) && !trees.some(t => isPine(t.species) || (t.pineList || []).length)) w.push('סקר אורנים: עוד לא הוזן אף אורן (אם אין אורנים באתר, אפשר לכבות "ריכוז אורנים" בפרטי הסקר).');
     const rs = reportSlots(survey.trees);
@@ -284,7 +292,7 @@
   }
 
   const api = { placeOf, codesOf, pinesOn, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, pinePlural, pineCount, pineMissing, jValue, hasContent,
-    sortTrees, splitActive, slotsOf, photoForSlot, groupKey, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
+    sortTrees, splitActive, slotsOf, photoForSlot, groupKey, photoSub, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
     nextNum, warnings, OK, DEFAULT_URGENCY, isOk, urgencyCell, notesCell, setUrgency };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
 })(typeof self !== 'undefined' ? self : this);
