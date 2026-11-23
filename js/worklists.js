@@ -1547,8 +1547,20 @@
     const nearTxt = n => n === 1 ? '➕ מוסד קרוב אחד' : `➕ ${n} מוסדות קרובים`;
     const sideSel = h('select', { class: 'in', style: 'width:auto;min-height:40px;max-width:260px', 'aria-label': 'רשימה משנית', onchange: async () => { if (sideSel.value) l.side = sideSel.value; else delete l.side; await persist(); renderRoute(l); } },
       [h('option', { value: '' }, 'בלי רשימה משנית'), ...(await all()).filter(x => !x.deleted && x.id !== l.id).map(x => h('option', { value: x.id, selected: l.side === x.id ? '' : null }, x.name || 'רשימה'))]);
-    const sideDist = h('select', { class: 'in', style: 'width:auto;min-height:40px', 'aria-label': 'מרחק שנחשב קרוב', onchange: () => { l.sideM = +sideDist.value; persist(); redraw(); } },
-      [50, 150, 300].map(m => h('option', { value: m, selected: sideM() === m ? '' : null }, `קרוב = עד ${m} מ'`)));
+    // (1.144, ori) מעבר ל-50/150/300: "מרחק אחר…" = כל מספר מטרים
+    const PRESET_M = [50, 150, 300];
+    const sideNum = h('input', { class: 'in', type: 'number', inputmode: 'numeric', min: 1, max: 5000, step: 1, style: 'width:90px;min-height:40px', 'aria-label': 'מרחק במטרים', placeholder: 'מטר',
+      value: PRESET_M.includes(sideM()) ? '' : sideM(), hidden: PRESET_M.includes(sideM()) ? true : null,
+      onkeydown: e => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); },
+      onchange: () => { const m = Math.round(+sideNum.value); if (!(m >= 1 && m <= 5000)) { sideNum.value = sideM(); ui.toast('מרחק בין 1 ל-5000 מטר', 3000); return; } l.sideM = m; persist(); redraw(); } });
+    const sideSelM = h('select', { class: 'in', style: 'width:auto;min-height:40px', 'aria-label': 'מרחק שנחשב קרוב', onchange: () => {
+        if (sideSelM.value === 'x') { sideNum.hidden = false; sideNum.value = PRESET_M.includes(sideM()) ? '' : sideM(); sideNum.focus(); return; }
+        sideNum.hidden = true; l.sideM = +sideSelM.value; persist(); redraw(); } },
+      PRESET_M.map(m => h('option', { value: m, selected: sideM() === m ? '' : null }, `קרוב = עד ${m} מ'`)),
+      h('option', { value: 'x', selected: PRESET_M.includes(sideM()) ? null : '' }, 'מרחק אחר…'));
+    const sideMu = h('span', { class: 'small', hidden: sideNum.hidden ? true : null }, "מ'");
+    new MutationObserver(() => { sideMu.hidden = sideNum.hidden; }).observe(sideNum, { attributes: true, attributeFilter: ['hidden'] });
+    const sideDist = h('span', { class: 'row', style: 'gap:6px;align-items:center' }, sideSelM, sideNum, sideMu);
     const sideBox = h('div', { class: 'stack' });
     function showNear(id) {
       const r0 = l.rows.find(x => x.id === id), ns = nearOf(id);
@@ -1577,7 +1589,8 @@
       const open = sideBox.querySelector('details[open]') ? true : null;
       sideBox.replaceChildren(
         h('b', {}, `רשימה משנית: ${side.name} (${rs.length} מוסדות, ${nearIds.size} קרובים לתחנות במסלול)`),
-        bad.length ? h('div', { class: 'small', style: 'color:#8a5200' }, `${bad.length} מוסדות לא אותרו או במיקום משוער. תקן אותם עם 📍:`) : null,
+        // (1.144) replaceChildren כותב null כטקסט: רק כשיש מה להציג
+        ...(bad.length ? [h('div', { class: 'small', style: 'color:#8a5200' }, `${bad.length} מוסדות לא אותרו או במיקום משוער. תקן אותם עם 📍:`)] : []),
         ...bad.map(row),
         h('details', { open }, h('summary', { class: 'small', style: 'cursor:pointer' }, 'כל המוסדות ברשימה המשנית'), h('div', { class: 'stack', style: 'margin-top:8px' }, ...rs.filter(r => !bad.includes(r)).map(row))));
     }
