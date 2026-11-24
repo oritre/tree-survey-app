@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.150.0';
+  const APP_VERSION = '1.151.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -784,35 +784,12 @@
     const Bing = L.TileLayer.extend({ getTileUrl: c => `https://ecn.t${(c.x + c.y) % 4}.tiles.virtualearth.net/tiles/a${quad(c.x, c.y, c.z)}.jpeg?g=1` });
     return new Bing('', o);
   }
+  // (1.151) כמו באורנים: סמן אדום שגוררים אל העץ (או נוגעים במפה), עם המיקום והכיוון שלי
   async function refineOnMap(t) {
-    if (!navigator.onLine) { toast('אין קליטה: המפה צריכה אינטרנט', 3000); return; }
-    try { await loadLeaflet(); } catch (e) { toast(e.message, 3000); return; }
     const others = cur.trees.filter(x => x !== t && x.lat != null);
-    let start = t.lat != null ? [t.lat, t.lon] : others.length ? [others[0].lat, others[0].lon] : null;
-    if (!start) start = await new Promise(r => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => r([p.coords.latitude, p.coords.longitude]), () => r([31.7683, 35.2137]), { timeout: 5000, maximumAge: 60000 }) : r([31.7683, 35.2137]));
-    const mapEl = h('div', { class: 'map-box' });
-    const info = h('div', { class: 'small' }, 'הזז את המפה כך שהעץ יהיה מתחת לצלב, ולחץ "שמור מיקום".');
-    const ov = h('div', { class: 'annot map-ov' },
-      h('div', { class: 'annot-bar' },
-        h('span', { class: 'sp', style: 'font-weight:600' }, `נ"צ לעץ ${t.num || ''}`),
-        h('button', { class: 'txt', onclick: () => close() }, 'ביטול'),
-        h('button', { class: 'txt save', onclick: () => { const c = map.getCenter(); close([c.lat, c.lng]); } }, 'שמור מיקום')),
-      h('div', { class: 'annot-stage', style: 'position:relative;padding:0' }, mapEl, h('div', { class: 'crosshair' })),
-      h('div', { class: 'map-info' }, info));
-    document.body.append(ov);
-    const map = window.L.map(mapEl, { zoomControl: true, attributionControl: true, maxZoom: 22 }).setView(start, t.lat != null ? 20 : 18);
-    const base = {};
-    for (const [name, [url, o]] of Object.entries(LAYERS)) base[name] = tileLayer(url, o);
-    const pref = await DB.getKV('mapLayer', 'גוגל – לוויין');
-    (base[pref] || base['גוגל – לוויין']).addTo(map);
-    window.L.control.layers(base, null, { position: 'topleft', collapsed: false }).addTo(map);
-    map.on('baselayerchange', e => DB.setKV('mapLayer', e.name));
-    for (const o of others) window.L.circleMarker([o.lat, o.lon], { radius: 7, color: '#fff', weight: 2, fillColor: '#2e7d32', fillOpacity: 1 }).bindTooltip('עץ ' + (o.num || ''), { permanent: true, direction: 'top', offset: [0, -6] }).addTo(map);
-    if (t.lat != null) window.L.circleMarker([t.lat, t.lon], { radius: 6, color: '#ffd400', weight: 3, fillOpacity: 0 }).bindTooltip('המיקום הנוכחי').addTo(map);
-    setTimeout(() => map.invalidateSize(), 50);
-    let close;
-    const res = await new Promise(r => { close = r; });
-    map.remove(); ov.remove();
+    const start = t.lat != null ? [t.lat, t.lon] : others.length ? [others[0].lat, others[0].lon] : null;
+    const res = await pickOnMap({ start, title: `נ"צ לעץ ${t.num || ''}`,
+      others: others.map(o => ({ lat: o.lat, lon: o.lon, label: 'עץ ' + (o.num || '') })) });
     if (!res) return;
     t.lat = res[0]; t.lon = res[1]; t.acc = null; t.gpsSrc = 'map'; t.gpsTime = Date.now();
     saveSoon(); refreshRow(t); renderGps(t);
@@ -2786,12 +2763,83 @@
       : r(null));
   }
 
+  // (1.151) המיקום שלי במפת סימון: נקודה כחולה + עיגול דיוק + אלומה לכיוון שאני מסתכל (מצפן, ובלי מצפן כיוון ההליכה),
+  // וכפתור ◎ למרכז את המפה אליי. המצפן מתחיל מיד (באייפון צריך אישור בתוך הלחיצה), המפה מתחברת אחר כך עם attach
+  function liveMe() {
+    let map = null, dot = null, acc = null, pos = null, compass = null, wid = null, onOrient = null, raf = 0;
+    const st = { follow: false };
+    const hd = () => compass != null ? compass : pos && pos.hd != null && pos.spd > 0.6 ? pos.hd : null;
+    const html = () => '<div class="me-rot"><svg viewBox="-60 -60 120 120" width="120" height="120">'
+      + (hd() != null ? '<defs><radialGradient id="meG" r="1" cx="0" cy="0" gradientUnits="userSpaceOnUse" gradientTransform="scale(58)"><stop offset="0" stop-color="#1a73e8" stop-opacity=".65"/><stop offset="1" stop-color="#1a73e8" stop-opacity=".05"/></radialGradient></defs><path d="M0 0 L-28 -49 A56 56 0 0 1 28 -49 Z" fill="url(#meG)"/>' : '')
+      + '<circle r="9" fill="#1a73e8" stroke="#fff" stroke-width="3"/></svg></div>';
+    const draw = () => {
+      if (!map || !pos) return;
+      const ll = [pos.lat, pos.lon];
+      if (!dot) {
+        acc = L.circle(ll, { radius: pos.acc || 0, color: '#1a73e8', weight: 1, fillOpacity: .1, interactive: false }).addTo(map);
+        dot = L.marker(ll, { interactive: false, keyboard: false, zIndexOffset: 500,
+          icon: L.divIcon({ className: 'me-pin', iconSize: [120, 120], iconAnchor: [60, 60], html: html() }) }).addTo(map);
+      } else { dot.setLatLng(ll); acc.setLatLng(ll).setRadius(pos.acc || 0); }
+      const el = dot.getElement(), r = el && el.querySelector('.me-rot');
+      if (r) {
+        const cone = hd() != null;
+        if (cone !== !!r.querySelector('path')) r.outerHTML = html();
+        const r2 = el.querySelector('.me-rot'); if (r2) r2.style.transform = `rotate(${hd() || 0}deg)`;
+      }
+    };
+    const redraw = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); };
+    onOrient = e => {
+      let h0 = null;
+      if (e.webkitCompassHeading != null) h0 = e.webkitCompassHeading;
+      else if (e.absolute && e.alpha != null) h0 = 360 - e.alpha;
+      if (h0 == null) return;
+      const so = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+      h0 = (h0 + so + 360) % 360;
+      if (compass != null && Math.abs(((h0 - compass + 540) % 360) - 180) < 2) return;
+      compass = h0; redraw();
+    };
+    const add = () => {
+      if (!onOrient) return;
+      if ('ondeviceorientationabsolute' in window) window.addEventListener('deviceorientationabsolute', onOrient);
+      else window.addEventListener('deviceorientation', onOrient);
+    };
+    const D = window.DeviceOrientationEvent;
+    try { if (D && typeof D.requestPermission === 'function') D.requestPermission().catch(() => null).then(add); else add(); } catch (_) { add(); }
+    if (navigator.geolocation) wid = navigator.geolocation.watchPosition(p => {
+      const c = p.coords;
+      pos = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, hd: c.heading, spd: c.speed };
+      if (st.follow && map) { st.follow = false; map.setView([pos.lat, pos.lon], Math.max(map.getZoom(), 19)); }
+      redraw();
+    }, () => {}, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+    return {
+      get pos() { return pos; },
+      attach(m) {
+        map = m;
+        const Btn = L.Control.extend({ options: { position: 'topleft' }, onAdd: () => {
+          const b = L.DomUtil.create('button', 'wl-mebtn');
+          b.type = 'button'; b.title = 'המיקום שלי'; b.setAttribute('aria-label', 'המיקום שלי'); b.textContent = '◎';
+          L.DomEvent.disableClickPropagation(b);
+          b.onclick = () => { if (pos) map.setView([pos.lat, pos.lon], Math.max(map.getZoom(), 19)); else { st.follow = true; toast('מחפש את המיקום שלך…', 2000); } };
+          return b;
+        } });
+        new Btn().addTo(map);
+        draw();
+      },
+      stop() {
+        if (wid != null) navigator.geolocation.clearWatch(wid); wid = null;
+        if (onOrient) { window.removeEventListener('deviceorientationabsolute', onOrient); window.removeEventListener('deviceorientation', onOrient); onOrient = null; }
+        if (raf) cancelAnimationFrame(raf); map = null;
+      },
+    };
+  }
+
   // מפה עם סמן שגוררים בדיוק אל העץ (גם כשעומדים קצת רחוק). נגיעה במפה מעבירה את הסמן לשם. מחזיר [lat, lon] או null
   async function pickOnMap({ start, title, others }) {
     if (!navigator.onLine) { toast('אין קליטה: המפה צריכה אינטרנט', 3000); return null; }
-    try { await loadLeaflet(); } catch (e) { toast(e.message, 3000); return null; }
+    const me = liveMe(); // מתחיל כבר עכשיו, בתוך הלחיצה (אישור מצפן באייפון)
+    try { await loadLeaflet(); } catch (e) { me.stop(); toast(e.message, 3000); return null; }
     let at = start;
-    if (!at) { const p = await myPos(); at = p ? [p.coords.latitude, p.coords.longitude] : [31.7683, 35.2137]; }
+    if (!at) { const p = me.pos ? { coords: { latitude: me.pos.lat, longitude: me.pos.lon } } : await myPos(); at = p ? [p.coords.latitude, p.coords.longitude] : [31.7683, 35.2137]; }
     const L = window.L;
     const mapEl = h('div', { class: 'map-box' });
     const info = h('div', { class: 'small' });
@@ -2801,7 +2849,7 @@
         h('span', { class: 'sp', style: 'font-weight:600' }, title),
         h('button', { class: 'txt', onclick: () => close() }, 'ביטול'),
         h('button', { class: 'txt', onclick: async () => {
-          const p = await myPos();
+          const p = me.pos && me.pos.acc < 30 ? { coords: { latitude: me.pos.lat, longitude: me.pos.lon } } : await myPos();
           if (!p) return toast('לא התקבל מיקום מה-GPS', 2500);
           const ll = [p.coords.latitude, p.coords.longitude];
           mk.setLatLng(ll); map.setView(ll, Math.max(map.getZoom(), 19)); upd();
@@ -2824,15 +2872,16 @@
     const mk = L.marker(at, { draggable: true, icon: pin, autoPan: true, zIndexOffset: 1000 }).addTo(map);
     const upd = () => {
       const c = mk.getLatLng(), i = toItm(c.lat, c.lng);
-      info.textContent = 'גרור את הסמן האדום בדיוק אל העץ (או גע במפה במקום העץ). '
+      info.textContent = 'גרור את הסמן האדום בדיוק אל העץ (או גע במפה במקום העץ). הנקודה הכחולה = אתה, האלומה = לאן אתה מסתכל. '
         + (i ? `רשת ישראל: ${Math.round(i.x)} / ${Math.round(i.y)} · ` : '') + `${c.lat.toFixed(6)}, ${c.lng.toFixed(6)}`;
     };
     mk.on('drag dragend', upd);
     map.on('click', e => { mk.setLatLng(e.latlng); upd(); });
+    me.attach(map);
     upd();
     setTimeout(() => map.invalidateSize(), 50);
     const res = await new Promise(r => { close = r; });
-    map.remove(); ov.remove();
+    me.stop(); map.remove(); ov.remove();
     return res || null;
   }
 
