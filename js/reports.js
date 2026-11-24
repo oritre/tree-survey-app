@@ -102,8 +102,8 @@
     return Core.sortTrees((s.trees || []).filter(t => Core.hasContent(t) && !Core.pineRef(t) && (Core.isPine(t.species) || (t.pineList || []).length || Core.pineCount(t))));
   }
   function pineTotal(s) { return pineTrees(s).reduce((a, t) => a + (Core.pineCount(t) || 0), 0); }
-  const PINE_HEAD = ['מס\' אורן', 'מספר העץ בסקר', 'מין העץ', 'מיקום', 'גובה (מ\')', 'מספר גזעים', 'קוטרי הגזעים (ס"מ)', 'X רשת ישראל', 'Y רשת ישראל', 'קו רוחב', 'קו אורך', 'גוגל מפות'];
-  const PINE_W = [9, 12, 16, 34, 10, 10, 18, 13, 13, 12, 12, 16];
+  const PINE_HEAD = ['מס\' אורן', 'מספר העץ בסקר', 'מין העץ', 'מיקום', 'גובה (מ\')', 'מספר גזעים', 'קוטרי הגזעים (ס"מ)', 'קוטר העץ (סכום הגזעים)', 'X רשת ישראל', 'Y רשת ישראל', 'קו רוחב', 'קו אורך', 'גוגל מפות'];
+  const PINE_W = [9, 12, 16, 34, 10, 10, 18, 14, 13, 13, 12, 12, 16];
   function pineLines(s, k0) {
     const out = [];
     let k = k0 || 0;
@@ -113,7 +113,7 @@
         const trunks = (p.trunks || []).filter(x => x != null && x !== '' && !isNaN(+x)).map(Number);
         const lat = p.lat != null ? p.lat : null, lon = p.lon != null ? p.lon : null;
         out.push([++k, String(t.num || '').trim() || (Core.isOk(t) ? 'תקין' : ''), (t.species || '').trim(), (p.loc || '').trim(), num(p.h),
-          trunks.length || '', trunks.length === 1 ? trunks[0] : trunks.join(', '),
+          trunks.length || '', trunks.length === 1 ? trunks[0] : trunks.join(', '), trunks.length ? Math.round(trunks.reduce((x, y) => x + y, 0) * 10) / 10 : '',
           p.itmX != null ? Math.round(p.itmX * 10) / 10 : '', p.itmY != null ? Math.round(p.itmY * 10) / 10 : '',
           lat != null ? +(+lat).toFixed(6) : '', lon != null ? +(+lon).toFixed(6) : '',
           lat != null ? { v: 'פתח בגוגל מפות', link: gmaps(lat, lon) } : '']);
@@ -145,30 +145,33 @@
   const codeCols = surveys => Math.max(1, ...surveys.map(s => codesOf(s.code).length));
   const codeHead = n => Array.from({ length: n }, (_, i) => i ? 'סמל מוסד ' + (i + 1) : 'סמל מוסד');
   const codeCells = (s, n) => Array.from({ length: n }, (_, i) => { const c = codesOf(s.code)[i] || ''; return /^\d+$/.test(c) ? +c : c; });
+  // לכל מוסד (1.162): מספר אורנים, גובה ממוצע וקוטר ממוצע (עץ עם כמה גזעים = סכום הגזעים, 40+40=80), ופירוט כל אורן בתא אחד
+  const avg = v => { const x = v.filter(n => n !== '' && n != null); return x.length ? Math.round(x.reduce((a, b) => a + b, 0) / x.length * 10) / 10 : ''; };
+  const sortPlaces = surveys => surveys.slice().sort((a, b) => Core.placeOf(a).name.localeCompare(Core.placeOf(b).name, 'he'));
   function pineRows(surveys) {
     const nc = codeCols(surveys);
-    const head = ['פרויקט', ...codeHead(nc), 'שם המוסד', 'כתובת', 'מנהל/ת', 'תאריך הסקר', 'מספר אורנים', 'אורנים בלי פרטים', 'עצים בסקר'];
-    const rows = surveys.map(s => {
+    const head = [...codeHead(nc), 'שם המוסד', 'כתובת', 'מנהל/ת', 'תאריך הסקר', 'מספר אורנים', "גובה ממוצע (מ')", 'קוטר ממוצע (ס"מ)', 'פירוט: גובה / קוטר לכל אורן', 'סה"כ עצים בסקר (כל המינים)'];
+    const allH = [], allD = [];
+    const rows = sortPlaces(surveys).map(s => {
       const p = Core.placeOf(s);
       const trees = (s.trees || []).filter(Core.hasContent);
       const lines = pineLines(s);
-      const missing = pineTrees(s).flatMap(t => t.pineList || []).filter(x => Core.pineMissing(x).length).length
-        + pineTrees(s).filter(t => !(t.pineList || []).length).reduce((a, t) => a + (Core.pineCount(t) || 1), 0);
-      return [s.project || '', ...codeCells(s, nc), p.name, p.address, (s.manager || '').trim(), fmtDate(s.date), lines.length, missing || '', trees.length];
-    }).sort((a, b) => a[0].localeCompare(b[0], 'he') || String(a[nc + 1]).localeCompare(String(b[nc + 1]), 'he'));
-    const o = nc - 1; // עמודות נוספות של סמלים מזיזות את הסיכומים
-    const sum = i => rows.reduce((a, r) => a + (+r[i + o] || 0), 0);
-    return [head, ...rows, ['סה"כ', ...Array(nc).fill(''), `${rows.length} מוסדות`, '', '', '', sum(6), sum(7) || '', sum(8)]];
+      const hs = lines.map(l => l[4]), ds = lines.map(l => l[7]);
+      allH.push(...hs); allD.push(...ds);
+      const detail = lines.map(l => `אורן ${l[0]}: ${l[4] !== '' ? l[4] + " מ'" : '?'} / ${l[7] !== '' ? l[7] + ' ס"מ' : '?'}`).join('\n');
+      return [...codeCells(s, nc), p.name, p.address, (s.manager || '').trim(), fmtDate(s.date), lines.length, avg(hs), avg(ds), detail, trees.length];
+    });
+    const sum = i => rows.reduce((a, r) => a + (+r[i + nc] || 0), 0);
+    return [head, ...rows, ['סה"כ', ...Array(nc - 1).fill(''), `${rows.length} מוסדות`, '', '', sum(4), avg(allH), avg(allD), '', sum(8)]];
   }
   async function pinesXlsx(surveys) {
     const inst = pineRows(surveys), nc = codeCols(surveys);
-    const head = ['פרויקט', ...codeHead(nc), 'שם המוסד', 'כתובת', ...PINE_HEAD];
-    const sorted = surveys.slice().sort((a, b) => (a.project || '').localeCompare(b.project || '', 'he') || Core.placeOf(a).name.localeCompare(Core.placeOf(b).name, 'he'));
+    const head = [...codeHead(nc), 'שם המוסד', 'כתובת', ...PINE_HEAD];
     let k = 0;
-    const all = sorted.flatMap(s => { const p = Core.placeOf(s); return pineLines(s).map(l => [s.project || '', ...codeCells(s, nc), p.name, p.address, ++k, ...l.slice(1)]); });
+    const all = sortPlaces(surveys).flatMap(s => { const p = Core.placeOf(s); return pineLines(s).map(l => [...codeCells(s, nc), p.name, p.address, ++k, ...l.slice(1)]); });
     return book([
-      { name: 'מוסדות', rows: inst, widths: [14, ...Array(nc).fill(12), 30, 30, 18, 12, 12, 15, 11], boldLast: true, table: inst.length - 2 },
-      { name: 'כל האורנים', rows: [head, ...all], widths: [14, ...Array(nc).fill(12), 26, 26, ...PINE_W], table: all.length }]);
+      { name: 'מוסדות', rows: inst, widths: [...Array(nc).fill(12), 30, 30, 18, 12, 11, 12, 12, 30, 14], boldLast: true, table: inst.length - 2 },
+      { name: 'כל האורנים', rows: [head, ...all], widths: [...Array(nc).fill(12), 26, 26, ...PINE_W], table: all.length }]);
   }
 
   // ---------- מפה לשיתוף ----------
