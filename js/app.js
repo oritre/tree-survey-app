@@ -1888,7 +1888,7 @@
   function refWhere(t, pre, post) {
     if (!isPineTree(t)) return '';
     const k = refScope(t);
-    return k === 'survey' ? pre + 'רק בסקר' + post : k === 'pines' ? pre + 'רק באורנים' + post : '';
+    return k === 'survey' ? pre + 'לא בדוח הסקר' + post : k === 'pines' ? pre + 'לא בדוח אורנים' + post : '';
   }
   function treeRow(t) {
     const pineMissing = Core.pinesOn(cur) && Core.isPine(t.species) && !Core.pineRef(t)
@@ -2447,7 +2447,7 @@
     const pineBtn = h('button', { class: 'btn', type: 'button', onclick: () => openPines(t, () => { markPine(); changed(); }) }, '🌲 פרטי אורנים');
     const pineWrap = h('div', { class: 'row pine-box', style: 'gap:10px;align-items:center;flex-wrap:wrap' }, pineBtn, pineInfo);
     // "לא להתייחסות" בעץ אורן: בסקר / בפרטי אורנים / בשניהם
-    const REF_OPTS = [['survey', 'רק בסקר'], ['pines', 'רק בפרטי אורנים'], ['both', 'בשניהם']];
+    const REF_OPTS = [['survey', 'לא מופיע בדוח הסקר'], ['pines', 'לא מופיע בדוח אורנים'], ['both', 'לא מופיע בשניהם']];
     const refChk = h('input', { type: 'checkbox', style: 'width:24px;height:24px' });
     const refBox = h('div', { class: 'chips ref-scope', style: 'margin-top:6px', role: 'group', 'aria-label': 'לא להתייחסות איפה' });
     const updRef = () => {
