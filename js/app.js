@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.154.0';
+  const APP_VERSION = '1.155.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1694,8 +1694,14 @@
     body.append(h('div', { class: 'card stack', style: 'max-width:720px;margin:0 auto' },
       field('סוג הסקר', h('select', { class: 'in', onchange: e => { cur.type = e.target.value; cur.site = composeSite(cur); saveSoon(); renderSurvey(); } },
         Object.entries(Construction.TYPES).map(([k, v]) => h('option', { value: k, selected: Construction.typeOf(cur) === k ? '' : null }, v)))),
-      cur.listRef ? h('div', { class: 'small' }, '📋 נפתח מהרשימה ', h('a', { href: '#/lists/' + encodeURIComponent(cur.listRef.list) }, cur.listRef.name || 'רשימה')) : null,
+      cur.listRef ? h('div', { class: 'small' }, '📋 נפתח מהרשימה ', h('a', { href: '#/lists/' + encodeURIComponent(cur.listRef.list) }, cur.listRef.name || 'רשימה'),
+        (cur.extraProjects || []).length ? ' · עותק גם בתיקייה ' + cur.extraProjects.join(', ') : '') : null,
       field('פרויקט (למשל: ירושלים)', sugg('project', { placeholder: 'לניהול וסינון הסקרים, לא מופיע בדוח' })),
+      // (1.155, ori) שכונה = תיקייה בתוך תיקיית הפרויקט בדרייב. שיוך לרשימות וסטטוס המוסד (לא קיים / לבדיקה)
+      build ? null : field('שכונה (תיקייה בדרייב בתוך הפרויקט, לא מופיע בדוח)', inp('hood', { placeholder: 'למשל: גונן, עיר דוד', oninput: e => { cur.hood = e.target.value; cur.hoodManual = true; saveSoon(); } })),
+      build || !window.WorkLists ? null : h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+        h('button', { class: 'btn', title: 'לאיזו רשימה הסקר שייך (אפשר כמה), שכונה ותיקייה בדרייב. קבצים שכבר עלו עוברים לתיקייה החדשה', onclick: async () => { await DB.putSurvey(cur); WorkLists.assign(cur, () => renderSurvey()); } }, '📁 שיוך לרשימות ותיקייה'),
+        cur.listRef ? h('button', { class: 'btn', title: 'סימון המוסד ברשימה: לא קיים / לבדיקה', onclick: () => WorkLists.flagRow(cur.listRef.list, cur.listRef.row, () => renderSurvey()) }, '⚑ לא קיים / לבדיקה') : null),
       build ? null : field('שם המוסד / האתר', inp('siteName', { placeholder: 'למשל: גן חצב' })),
       h('div', { class: 'row', style: 'align-items:stretch' },
         h('div', { style: 'flex:2;min-width:200px' }, field('רחוב ומספר', sugg('street', { placeholder: 'למשל: הנרקיס 5' }))),
