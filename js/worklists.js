@@ -16,6 +16,8 @@
     { key: 'city', label: 'עיר', re: /^עיר|ישוב|יישוב|רשות|^מקום$/ },
     { key: 'code', label: 'סמל מוסד', re: /סמל/, safetyOnly: true },
     { key: 'manager', label: 'מנהל/ת', re: /מנהל|אחראי|איש\s*קשר|גננ/, safetyOnly: true },
+    // (1.155, ori) שכונה: תיקייה בתוך תיקיית הפרויקט בדרייב (סקרי עצים / ירושלים / גונן)
+    { key: 'hood', label: 'שכונה (תיקייה בדרייב)', re: /שכונ/, safetyOnly: true },
     { key: 'gush', label: 'גוש', re: /^גוש/, buildOnly: true },
     { key: 'helka', label: 'חלקה', re: /^חלק/, buildOnly: true },
   ];
@@ -279,11 +281,14 @@
     return s => {
       for (const f of fieldsOf(l)) {
         if (!v[f.key]) continue;
+        if (f.key === 'hood' && !hoodOn(l)) continue;
         if (fromPrev && (l.map[f.key] || {}).prev && clean(s[f.key])) continue;
         // שני סמלי מוסד בתא אחד: שניהם נכנסים לדוח, מופרדים בפסיק
         s[f.key] = f.key === 'code' && root.Reports ? root.Reports.codeText(v[f.key]) : v[f.key];
       }
       if (l.project) s.project = l.project;
+      // (1.155) שכונה: מהעמודה, ואם אין ברשימה הזו מהרשימות האחרות (לפי סמל או כתובת)
+      if (!clean(s.hood) && cache && hoodOn(l)) { const ix0 = hoodIx; if (ix0) { const hh = hoodLookup(l, r, ix0); if (hh) s.hood = hh; } }
       // שורה שכתוב בה "אורנים" (למשל בהערות): הסקר נפתח כסקר אורנים (חלון פרטי אורנים, תזכורות, אקסל ריכוז)
       if (l.type !== 'construction' && Object.values(r.cells || {}).some(v => /(^|[\s,;(])[הו]?או?רני?ם/.test(String(v || '')))) s.pinesMode = true;
       if ((l.repl || []).length) s.nameRepl = l.repl;
@@ -370,6 +375,276 @@
   }
   // שם המוסד בשורה, לחלון השאלה
   function labelOf(L, x) { const v = valuesOf(L, x); return [v.siteName, v.street].filter(Boolean).join(', ') || 'שורה'; }
+
+  // ---------- שכונה (1.155, ori) ----------
+  // ברשימה הכללית יש עמודת שכונה. ברשימה בלי שכונה (למשל האורנים) נוספת עמודה "שכונה" שמתמלאת מהרשימות האחרות
+  // לפי סמל מוסד, ואם אין סמל תואם לפי אותה כתובת. מה שנכתב ביד בתא לא נדרס
+  const addrKey = (L, r) => { const v = valuesOf(L, r), st = norm(v.street).split(' ').filter(Boolean).sort().join(' '); return st && /\d/.test(st) ? st + '|' + norm(v.city) : ''; };
+  async function hoodIndex(l) {
+    const code = new Map(), addr = new Map();
+    for (const L of await live()) {
+      if (L.id === l.id || L.type === 'construction') continue;
+      // עמודת השכונה של הרשימה: משויכת, או בשם "שכונה" (גם לפני שהרשימה נפתחה בגרסה הזו)
+      const hc = colsOf((L.map || {}).hood).length ? null : (L.cols || []).find(c => /שכונ/.test(c.name));
+      if (!hc && !colsOf((L.map || {}).hood).length) continue;
+      // עמודה מקורית קודם, ואחריה עמודות שהאפליקציה מילאה
+      const pri = !hc && L.hoodAuto && L.hoodAuto === L.map.hood.col ? 1 : 0;
+      for (const r of L.rows) {
+        if (r.deleted) continue;
+        const h = clean(hc ? r.cells[hc.id] : valuesOf(L, r).hood); if (!h) continue;
+        for (const c of codeKeys(L, r)) if (!code.has(c) || code.get(c).pri > pri) code.set(c, { h, pri });
+        const a = addrKey(L, r); if (a && (!addr.has(a) || addr.get(a).pri > pri)) addr.set(a, { h, pri });
+      }
+    }
+    return { code, addr, size: code.size + addr.size };
+  }
+  function hoodLookup(l, r, ix) {
+    for (const c of codeKeys(l, r)) if (ix.code.has(c)) return ix.code.get(c).h;
+    const a = addrKey(l, r);
+    return (a && ix.addr.has(a) && ix.addr.get(a).h) || '';
+  }
+  // (1.155.1, ori) תיקייה לפי שכונה דולקת לכל רשימה בנפרד (l.hoodOn). בלי בחירה: דולקת ברשימות של ירושלים
+  const hoodOn = l => !!l && l.type !== 'construction' && (l.hoodOn != null ? !!l.hoodOn : /ירושל/.test(clean(l.project) + ' ' + clean(l.name)));
+  async function ensureHood(l) {
+    if (!hoodOn(l)) return false;
+    l.map = l.map || {};
+    let changed = false;
+    if (!colsOf(l.map.hood).length) {
+      const c = l.cols.find(c => /שכונ/.test(c.name) && !Object.values(l.map).some(m => colsOf(m).includes(c.id)));
+      if (c) { l.map.hood = { col: c.id, pre: '', prev: false }; changed = true; }
+    }
+    if (!colsOf(l.map.hood).length && !l.hoodOff) {
+      const ix = await hoodIndex(l);
+      if (ix.size) {
+        const id = 'hood' + uid(); let found = 0;
+        for (const r of l.rows) { if (r.deleted) continue; const h = hoodLookup(l, r, ix); r.cells[id] = h; if (h) { found++; r.u = Date.now(); } }
+        if (found) { l.cols.push({ id, name: 'שכונה' }); l.map.hood = { col: id, pre: '', prev: false }; l.hoodAuto = id; changed = true; }
+        else for (const r of l.rows) delete r.cells[id];
+      }
+    } else if (l.hoodAuto && l.map.hood && l.map.hood.col === l.hoodAuto && l.cols.some(c => c.id === l.hoodAuto)) {
+      // עמודה שהאפליקציה הוסיפה: שורות חדשות / ריקות מתמלאות
+      const empty = l.rows.filter(r => !r.deleted && !clean(r.cells[l.hoodAuto]));
+      if (empty.length) { const ix = await hoodIndex(l); for (const r of empty) { const h = hoodLookup(l, r, ix); if (h) { r.cells[l.hoodAuto] = h; r.u = Date.now(); changed = true; } } }
+    }
+    if (changed) await save(l);
+    return changed;
+  }
+  // שכונה של שורה: מהעמודה, ואם ריקה מהרשימות האחרות
+  async function hoodOfRow(l, r) { return clean(valuesOf(l, r).hood) || hoodLookup(l, r, await hoodIndex(l)); }
+  const allHoods = async () => [...new Set((await live()).flatMap(L => L.rows.filter(r => !r.deleted).map(r => clean(valuesOf(L, r).hood)).filter(Boolean)))].sort((a, b) => a.localeCompare(b, 'he'));
+  // סקרים קיימים (גם שנעשו לפני 1.155): מקבלים את השכונה מהשורה, והקבצים בדרייב עוברים לתיקיית השכונה
+  async function hoodToSurveys(l, local) {
+    if (!hoodOn(l)) return;
+    for (const r of l.rows) {
+      if (r.deleted || !r.sid) continue;
+      const s = local.get(r.sid);
+      if (!s || s.deleted || s.hoodManual) continue;
+      const own = !s.listRef || s.listRef.list === l.id;
+      if (clean(s.hood) && !own) continue;
+      const h = await hoodOfRow(l, r);
+      if (!h || clean(s.hood) === h) continue;
+      s.hood = h; await DB.putSurvey(s);
+      Sync.relocate(s).then(n => { if (n) U().toast(`${n} קבצים של ${s.siteName || 'הסקר'} הועברו לתיקייה ${h}`, 3000); }).catch(() => {});
+    }
+  }
+
+  // (1.155.1) בכל הפעלה (ואחרי סנכרון הרשימות): שכונה לסקרים שכבר נעשו מרשימות שהשכונה דולקת בהן, והעברת הקבצים
+  async function autoHoods() {
+    if (!root.DB || !root.Sync) return;
+    const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
+    for (const L of await live()) if (hoodOn(L)) { await ensureHood(L).catch(() => {}); await hoodToSurveys(L, local).catch(() => {}); }
+  }
+  setTimeout(() => { sync(false).catch(() => {}).then(autoHoods).catch(() => {}); }, 6000);
+
+  // ---------- סטטוס מוסד: "לא קיים" / "לבדיקה" (1.155, ori) ----------
+  // r.flag = 'gone' (יורד מהמפה ומהמסלול) או 'check' (נשאר במפה בצהוב, דורש התייחסות), r.flagNote = מה לבדוק.
+  // חל גם על אותו מוסד ברשימות האחרות (אותו סמל מוסד או אותו סקר)
+  const FLAGS = { gone: 'לא קיים', check: 'לבדיקה' };
+  const flagOf = r => r && FLAGS[r.flag] ? r.flag : null;
+  async function sameInst(l, r) {
+    const out = [{ L: l, r }], keys = new Set(codeKeys(l, r));
+    for (const L of await live()) for (const x of L.rows) {
+      if (x.deleted || x === r) continue;
+      if ((r.sid && x.sid === r.sid) || codeKeys(L, x).some(c => keys.has(c))) out.push({ L, r: x });
+    }
+    return out;
+  }
+  async function setFlag(l, r, flag, note) {
+    const all = await sameInst(l, r), lists = new Set();
+    for (const { L, r: x } of all) {
+      if (flag) { x.flag = flag; x.flagAt = Date.now(); if (note != null) { if (clean(note)) x.flagNote = clean(note); else delete x.flagNote; } }
+      else { delete x.flag; delete x.flagNote; delete x.flagAt; }
+      // לא קיים: יורד מהמסלול. חזר לרגיל: חוזר לסוף המסלול (אם יש מסלול)
+      if (flag === 'gone' && Array.isArray(L.route)) L.route = L.route.filter(id => id !== x.id);
+      if (!flag && Array.isArray(L.route) && L.route.length && !L.route.includes(x.id)) L.route.push(x.id);
+      x.u = Date.now(); lists.add(L);
+    }
+    for (const L of lists) await save(L);
+    return all.length;
+  }
+  function flagDialog(l, r, after) {
+    const ui = U(), { h } = ui, v = valuesOf(l, r), cur = flagOf(r);
+    const note = h('input', { class: 'in', value: r.flagNote || '', placeholder: 'מה לבדוק? (לא חובה)', style: 'flex:1;min-width:180px' });
+    const close = () => ov.remove();
+    const pick = async f => {
+      close();
+      const n = await setFlag(l, r, f, f === 'check' ? note.value : f ? '' : null);
+      ui.toast((f ? `סומן "${FLAGS[f]}"` : 'הסימון הוסר') + (n > 1 ? ` (גם ב-${n - 1} שורות של אותו מוסד ברשימות האחרות)` : '') + (f === 'gone' ? '. ירד מהמפה ומהמסלול' : ''), 3500);
+      if (after) after(f);
+    };
+    const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
+      h('div', { class: 'card stack', style: 'max-width:520px;width:96%' },
+        h('h2', { style: 'margin:0;font-size:20px' }, 'סטטוס: ' + ([v.siteName, v.street].filter(Boolean).join(', ') || 'שורה')),
+        h('div', { class: 'muted small' }, 'חל גם על אותו מוסד (אותו סמל) ברשימות האחרות.'),
+        h('div', { class: 'stack wl-flag-opt check' + (cur === 'check' ? ' on' : '') },
+          h('b', {}, '🟡 לבדיקה'), h('div', { class: 'small' }, 'נשאר במפה ובמסלול בצהוב, כדי שתדע שזה דורש התייחסות.'),
+          h('div', { class: 'row', style: 'gap:8px' }, note, h('button', { class: 'btn primary', onclick: () => pick('check') }, cur === 'check' ? 'עדכן' : 'סמן לבדיקה'))),
+        h('div', { class: 'stack wl-flag-opt gone' + (cur === 'gone' ? ' on' : '') },
+          h('b', {}, '⛔ לא קיים'), h('div', { class: 'small' }, 'יורד מהמפה ומהמסלול (נשאר בטבלה באפור, ואפשר להחזיר).'),
+          h('div', { class: 'row' }, h('button', { class: 'btn danger', disabled: cur === 'gone' ? true : null, onclick: () => pick('gone') }, 'סמן לא קיים'))),
+        cur ? h('button', { class: 'btn', onclick: () => pick(null) }, '↩ החזר לרגיל (בלי סימון)') : null,
+        h('button', { class: 'btn', onclick: close }, 'ביטול')));
+    document.body.append(ov);
+  }
+  const flagBadge = (r, h) => flagOf(r) ? h('span', { class: 'wl-badge flag-' + r.flag, title: r.flagNote || null }, (r.flag === 'gone' ? '⛔ ' : '🟡 ') + FLAGS[r.flag] + (r.flagNote ? ': ' + r.flagNote : '')) : null;
+
+  // ---------- שיוך סקר לרשימות, לפרויקט ולשכונה (1.155, ori) ----------
+  // סקר אחד יכול להיות משויך לשורות בכמה רשימות (אותו מוסד). הרשימה הראשית קובעת את הפרויקט (התיקייה הראשית),
+  // והפרויקטים של שאר הרשימות מקבלים עותק (s.extraProjects). בתוך כל תיקיית פרויקט: תיקיית השכונה.
+  // שמירה מעבירה את הקבצים שכבר עלו לדרייב (Sync.relocate)
+  async function linkedRows(sid) {
+    const out = [];
+    for (const L of await live()) for (const x of L.rows) if (!x.deleted && x.sid === sid) out.push({ L, r: x });
+    return out;
+  }
+  async function surveyFor(sid) {
+    const s = await DB.getSurvey(sid);
+    if (s && !s.deleted) return s;
+    return null;
+  }
+  async function assignBySid(sid, after) {
+    const s = await surveyFor(sid);
+    const ui = U();
+    if (!s) {
+      ui.toast('הסקר לא נמצא במכשיר הזה. פותח אותו, ואז לחץ "📁 שיוך לרשימות ותיקייה" בפרטי הסקר', 5000);
+      const idx = navigator.onLine !== false && await OD.connected() ? await Sync.cloudIndex().catch(() => []) : [];
+      const e = idx.find(x => x.id === sid && !x.deleted);
+      if (e) await ui.lists.fromCloud(e, false, ui.h('button'));
+      return;
+    }
+    return assignDialog(s, after);
+  }
+  async function assignDialog(s, after) {
+    const ui = U(), { h } = ui;
+    const linked = await linkedRows(s.id);
+    // השורות שמסומנות להיות משויכות לסקר (Set של "רשימה|שורה"), והראשית
+    const K = (L, r) => L.id + '|' + r.id;
+    const sel = new Map(linked.map(x => [K(x.L, x.r), x]));
+    let main = linked.find(x => s.listRef && x.L.id === s.listRef.list && x.r.id === s.listRef.row) || linked.find(x => clean(x.L.project) === clean(s.project)) || linked[0] || null;
+    // מועמדים: אותו סמל מוסד ברשימות אחרות
+    const codes = new Set(Core.codesOf(s.code || '').map(c => c.replace(/\D+/g, '')).filter(c => c.length >= 3));
+    for (const x of linked) codeKeys(x.L, x.r).forEach(c => codes.add(c));
+    const cands = [];
+    for (const L of await live()) for (const x of L.rows) if (!x.deleted && !sel.has(K(L, x)) && codeKeys(L, x).some(c => codes.has(c))) cands.push({ L, r: x });
+    const extra = new Map(); // שורות שנוספו מחיפוש
+    const hoods = await allHoods();
+    const rowHood = async () => { for (const x of [main, ...sel.values()].filter(Boolean)) { const hh = await hoodOfRow(x.L, x.r); if (hh) return hh; } return ''; };
+    const hoodIn = h('input', { class: 'in', value: clean(s.hood), placeholder: 'למשל: גונן, עיר דוד', style: 'flex:1;min-width:160px' });
+    const hoodWrap = ui.suggestCombo(hoodIn, () => hoods, { arrow: true });
+    const fromRow = h('button', { class: 'btn', onclick: async () => { hoodIn.value = await rowHood(); drawPaths(); } }, 'מהרשימה');
+    hoodIn.addEventListener('input', () => drawPaths());
+    hoodIn.addEventListener('change', () => drawPaths());
+    const rowsBox = h('div', { class: 'stack', style: 'gap:6px' });
+    const paths = h('div', { class: 'small wl-paths' });
+    const root0 = (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים';
+    const projOf = x => clean(x.L.project) || clean(s.project) || 'ללא פרויקט';
+    function drawPaths() {
+      const hood = clean(hoodIn.value);
+      const mp = main ? projOf(main) : clean(s.project) || 'ללא פרויקט';
+      const ps = [mp, ...new Set([...sel.values()].filter(x => x !== main).map(projOf).filter(p => p !== mp))];
+      paths.replaceChildren(h('b', {}, 'הקבצים יהיו ב:'), ...ps.map((p, i) => h('div', {}, `📁 ${[root0, p, hood].filter(Boolean).join(' / ')}` + (i ? ' (עותק)' : ' (ראשי)'))));
+    }
+    const rowLine = (x, on) => {
+      const v = valuesOf(x.L, x.r), k = K(x.L, x.r), other = x.r.sid && x.r.sid !== s.id;
+      return h('div', { class: 'wl-stop' + (on ? '' : ' out') },
+        h('div', { style: 'flex:1;min-width:0' }, h('b', {}, x.L.name || 'רשימה'), clean(x.L.project) ? h('span', { class: 'muted small' }, ' · פרויקט ' + clean(x.L.project)) : null,
+          h('div', { class: 'small' }, [v.code ? 'סמל ' + v.code : '', v.siteName, v.street].filter(Boolean).join(' · ')),
+          other ? h('div', { class: 'small', style: 'color:#8a5200' }, 'לשורה הזו כבר משויך סקר אחר. שיוך כאן יחליף אותו (הסקר האחר לא נמחק)') : null),
+        on ? h('label', { class: 'row small', style: 'gap:4px;align-items:center;white-space:nowrap' }, h('input', { type: 'radio', name: 'wlmain', checked: main === x, onchange: () => { main = x; drawPaths(); } }), 'תיקייה ראשית') : null,
+        on ? h('button', { class: 'btn', onclick: () => { sel.delete(k); if (main === x) main = [...sel.values()][0] || null; drawRows(); } }, '✕ הסר')
+          : h('button', { class: 'btn primary', onclick: () => { sel.set(k, x); if (!main) main = x; drawRows(); } }, '➕ שייך'));
+    };
+    function drawRows() {
+      const out = [...cands, ...extra.values()].filter(x => !sel.has(K(x.L, x.r)));
+      rowsBox.replaceChildren(h('b', {}, `משויך לרשימות (${sel.size}):`),
+        ...(sel.size ? [...sel.values()].map(x => rowLine(x, true)) : [h('div', { class: 'muted small' }, 'לא משויך לאף שורה ברשימה')]),
+        ...(out.length ? [h('b', { style: 'margin-top:6px' }, 'אפשר לשייך גם ל:'), ...out.map(x => rowLine(x, false))] : []));
+      drawPaths();
+    }
+    // חיפוש שורה בכל הרשימות (כשאין סמל תואם)
+    const q = h('input', { class: 'in', type: 'search', placeholder: 'חפש שורה בכל הרשימות: שם, רחוב או סמל', style: 'flex:1;min-width:180px' });
+    const found = h('div', { class: 'stack', style: 'gap:6px' });
+    const search = async () => {
+      const words = norm(q.value).split(' ').filter(Boolean);
+      if (!words.length) { found.replaceChildren(); return; }
+      const res = [];
+      for (const L of await live()) for (const x of L.rows) {
+        if (x.deleted || sel.has(K(L, x))) continue;
+        const hay = norm(Object.values(x.cells || {}).join(' ') + ' ' + (L.name || ''));
+        if (words.every(w => hay.includes(w))) res.push({ L, r: x });
+      }
+      found.replaceChildren(...(res.length ? res.slice(0, 12).map(x => { const ln = rowLine(x, false); ln.querySelector('.btn').onclick = () => { sel.set(K(x.L, x.r), x); if (!main) main = x; found.replaceChildren(); q.value = ''; drawRows(); }; return ln; })
+        : [h('div', { class: 'muted small' }, 'לא נמצאה שורה')]));
+    };
+    q.addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
+    const close = () => ov.remove();
+    const saveBtn = h('button', { class: 'btn primary big', onclick: async () => {
+      const others = [...sel.values()].filter(x => x.r.sid && x.r.sid !== s.id);
+      if (others.length && !confirm(`ל-${others.length} מהשורות כבר משויך סקר אחר. לשייך אותן לסקר הזה במקום? (הסקר האחר לא נמחק)`)) return;
+      saveBtn.disabled = true;
+      const changedL = new Set();
+      // שורות שהוסרו
+      for (const x of linked) if (!sel.has(K(x.L, x.r))) { delete x.r.sid; delete x.r.twins; x.r.u = Date.now(); changedL.add(x.L); }
+      const rows = [...sel.values()];
+      for (const x of rows) {
+        x.r.sid = s.id; x.r.twinsAsked = true;
+        const tw = rows.filter(y => y !== x).map(y => ({ list: y.L.id, row: y.r.id }));
+        if (tw.length) x.r.twins = tw; else delete x.r.twins;
+        x.r.u = Date.now(); changedL.add(x.L);
+      }
+      for (const L of changedL) await save(L);
+      if (main) {
+        s.listRef = { list: main.L.id, row: main.r.id, name: main.L.name };
+        if (clean(main.L.project)) s.project = clean(main.L.project);
+      } else delete s.listRef;
+      const projs = [...new Set(rows.filter(x => x !== main).map(x => clean(x.L.project)).filter(p => p && p !== clean(s.project)))];
+      if (projs.length) s.extraProjects = projs; else delete s.extraProjects;
+      if (rows.some(x => x.L.type !== 'construction' && Object.values(x.r.cells || {}).some(v => PINES_RE.test(String(v || ''))))) s.pinesMode = true;
+      const hood = clean(hoodIn.value), rh = await rowHood();
+      if (hood) s.hood = hood; else delete s.hood;
+      if (hood !== rh) s.hoodManual = true; else delete s.hoodManual;
+      s.site = ui.composeSite(s);
+      await DB.putSurvey(s);
+      close();
+      ui.toast('השיוך נשמר' + (s.odReportDir ? '. מעביר את הקבצים בדרייב…' : ''), 3000);
+      if (after) after(s);
+      Sync.relocate(s).then(n => ui.toast(n ? `${n} קבצים הועברו לתיקייה ${[s.project, s.hood].filter(Boolean).join(' / ')}` : 'הקבצים בדרייב כבר במקום הנכון (הבאים יישמרו לפי השיוך)', 3500))
+        .catch(e => ui.toast('העברת הקבצים בדרייב נכשלה: ' + e.message + '. ינסה שוב בהעלאה הבאה', 5000));
+    } }, 'שמור שיוך');
+    const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
+      h('div', { class: 'card stack', style: 'max-width:640px;width:96%' },
+        h('h2', { style: 'margin:0;font-size:20px' }, '📁 שיוך: ' + (s.siteName || s.site || 'סקר')),
+        h('div', { class: 'muted small' }, 'לאיזו רשימה הסקר שייך ובאיזו תיקייה הקבצים. לסקר אחד לכמה רשימות: הקבצים בתיקייה הראשית ועותק בתיקיית הפרויקט של כל רשימה נוספת.'),
+        rowsBox,
+        h('div', { class: 'row', style: 'gap:8px' }, q, h('button', { class: 'btn', onclick: search }, '🔎')), found,
+        h('label', { class: 'small', style: 'font-weight:700' }, 'שכונה (תיקייה בתוך תיקיית הפרויקט):'),
+        h('div', { class: 'row', style: 'gap:8px;align-items:center' }, hoodWrap, fromRow),
+        paths,
+        h('div', { class: 'row', style: 'gap:8px' }, saveBtn, h('button', { class: 'btn', onclick: close }, 'ביטול'))));
+    document.body.append(ov);
+    drawRows();
+  }
+
   // ---------- קישור שורות לסקרים משנים קודמות (1.109) ----------
   // סקר קודם שבחרת לשורה (בחיפוש): "פתח" ממשיך ממנו ישר
   function prevOf(x) {
@@ -396,7 +671,9 @@
       else await ui.lists.fromApp(p.e, b, applier(l, r, v, true));
     } catch (e) { ui.toast('הפתיחה מהסקר הקודם נכשלה: ' + e.message + '. בחר סקר אחר.', 5000); openRow(l, r, true); }
   }
+  let hoodIx = null;
   async function openRow(l, r, choose, onLinked) {
+    if (l.type !== 'construction') hoodIx = await hoodIndex(l).catch(() => null);
     const joined = await askTwins(l, r);
     if (joined) { U().go('#/s/' + joined.id); return; }
     if (!choose && !r.sid && r.prev && !r.prev.none) return openFromPrev(l, r);
@@ -750,11 +1027,17 @@
   async function renderList(l) {
     const ui = U(), { h } = ui;
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
+    // (1.155) עמודת שכונה (גם מהרשימות האחרות), והשכונה לסקרים שכבר נפתחו מהרשימה
+    await ensureHood(l).catch(() => {});
+    hoodToSurveys(l, local).catch(() => {});
     // סקר שנפתח מהשורה במכשיר אחר, לפני שהרשימה סונכרנה: לפי listRef
     for (const s of local.values()) if (s.listRef && s.listRef.list === l.id && !s.deleted) { const r = l.rows.find(x => x.id === s.listRef.row); if (r && !r.sid) { r.sid = s.id; r.u = Date.now(); save(l); } }
     let idx = new Map();
     // סקר שהסתיים ("סיום סקר"): לפי הטאבלט או לפי האינדקס בענן (סקר שהסתיים במכשיר אחר)
     const stateOf = r => {
+      // (1.155) סימון ידני: לא קיים / לבדיקה
+      if (r.flag === 'gone') return { k: 'gone', t: '⛔ לא קיים', d: r.flagNote || '' };
+      if (r.flag === 'check') return { k: 'check', t: '🟡 לבדיקה', d: r.flagNote || '' };
       if (!r.sid) return { k: 'todo', t: 'טרם' };
       const a = local.get(r.sid), c = idx.get(r.sid), s = a || c;
       if (!s || s.deleted) return { k: 'todo', t: 'הסקר נמחק' };
@@ -877,9 +1160,9 @@
     const saveSoon = ui.debounce(() => save(l), 600);
     const draw = () => {
       const rs = l.rows.filter(r => !r.deleted);
-      const n = { all: rs.length, todo: 0, open: 0, done: 0 };
+      const n = { all: rs.length, todo: 0, open: 0, done: 0, check: 0, gone: 0 };
       for (const r of rs) n[stateOf(r).k]++;
-      chipsBox.replaceChildren(...[['all', 'הכל'], ['todo', 'טרם נפתחו'], ['open', 'בעבודה'], ['done', 'הסתיימו']].map(([k, t]) =>
+      chipsBox.replaceChildren(...[['all', 'הכל'], ['todo', 'טרם נפתחו'], ['open', 'בעבודה'], ['done', 'הסתיימו'], ['check', '🟡 לבדיקה'], ['gone', '⛔ לא קיים']].filter(([k]) => !['check', 'gone'].includes(k) || n[k] || filter === k).map(([k, t]) =>
         h('button', { class: 'chip' + (filter === k ? ' on' : ''), onclick: () => { filter = k; draw(); } }, `${t} (${n[k]})`)));
       const words = norm(q.value).split(' ').filter(Boolean);
       const hay = r => norm([...Object.values(r.cells), stateOf(r).t, valOf(r, '_route')].join(' '));
@@ -930,7 +1213,10 @@
                 h('button', { class: 'link-btn small', onclick: () => { delete r.prev; r.u = Date.now(); save(l); draw(); } }, 'בטל שיוך'))
                 : h('button', { class: 'link-btn small wl-find', onclick: () => openRow(l, r, true, draw) }, '🔎 חפש סקר קודם'),
               h('div', { class: 'wl-badge ' + st.k }, st.t), st.d ? h('div', { class: 'wl-st small' }, st.d) : null,
-              r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null),
+              h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+                h('button', { class: 'link-btn small', title: 'לא קיים / לבדיקה', onclick: () => flagDialog(l, r, () => draw()) }, flagOf(r) ? 'סטטוס ▾' : '⚑ סמן'),
+                r.sid ? h('button', { class: 'link-btn small', title: 'לאיזו רשימה הסקר שייך, שכונה ותיקייה בדרייב', onclick: () => assignBySid(r.sid, () => renderList(l)) }, '📁 שיוך') : null,
+                r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null)),
             ...cols.map(c => h('td', { 'data-c': c.id }, h('input', { class: 'wl-cell' + (hit(r.cells[c.id] || '') ? ' wl-hit' : ''), value: r.cells[c.id] || '', 'aria-label': c.name, style: `width:var(--w-${c.id}, ${width.get(c.id)}ch)`, title: (r.cells[c.id] || '').length > 20 ? r.cells[c.id] : null,
               oninput: e => { r.cells[c.id] = e.target.value; r.u = Date.now(); saveSoon(); } }))),
             h('td', {}, h('button', { class: 'icon-btn', title: 'מחק שורה', 'aria-label': 'מחק שורה', onclick: () => {
@@ -946,7 +1232,7 @@
     const exportXlsx = async () => {
       const rs = l.rows.filter(r => !r.deleted);
       // הרשימה כמו שהועלתה + בסוף (הצד השמאלי) סטטוס: בוצע / בתהליך / לא בוצע, ותאריך
-      const st = r => { const x = stateOf(r); return x.k === 'done' ? ['בוצע', x.d || ''] : x.k === 'open' ? ['בתהליך', x.d ? 'נפתח ' + x.d : ''] : ['לא בוצע', x.t === 'הסקר נמחק' ? 'הסקר נמחק' : '']; };
+      const st = r => { const x = stateOf(r); if (x.k === 'gone' || x.k === 'check') return [FLAGS[r.flag], r.flagNote || '']; return x.k === 'done' ? ['בוצע', x.d || ''] : x.k === 'open' ? ['בתהליך', x.d ? 'נפתח ' + x.d : ''] : ['לא בוצע', x.t === 'הסקר נמחק' ? 'הסקר נמחק' : '']; };
       const rows = [[...l.cols.map(c => c.name), 'סטטוס סקר', 'תאריך / הערה'], ...rs.map(r => [...l.cols.map(c => { const v = r.cells[c.id] || ''; return /^\d{1,9}$/.test(v) ? +v : v; }), ...st(r)])];
       const blob = await Reports.xlsx(rows, { sheet: 'רשימה', widths: [...l.cols.map(() => 20), 20, 18] });
       ui.downloadFile(blob, ui.safeName(l.name || 'רשימה') + '.xlsx');
@@ -973,6 +1259,14 @@
           h('span', {}, '📁 תיקייה בדרייב לחיפוש סקרים קודמים: ', h('b', {}, l.folder ? l.folder.name : 'הארכיון הרגיל')),
           h('button', { class: 'btn', onclick: () => pickListFolder(l, () => renderList(l)) }, l.folder ? 'החלף' : 'בחר תיקייה'),
           l.folder ? h('button', { class: 'btn', onclick: async () => { delete l.folder; await save(l); renderList(l); } }, 'הארכיון הרגיל') : null),
+        // (1.155.1) תיקייה לפי שכונה: דולק/כבוי לרשימה הזו
+        l.type === 'construction' ? null : h('label', { class: 'row small', style: 'gap:8px;align-items:center' },
+          h('input', { type: 'checkbox', checked: hoodOn(l), onchange: async e => {
+            l.hoodOn = e.target.checked; await save(l);
+            U().toast(l.hoodOn ? 'מעכשיו כל סקר מהרשימה נשמר בתיקייה של השכונה שלו (גם סקרים שכבר נעשו)' : 'סקרים חדשים מהרשימה יישמרו ישר בתיקיית הפרויקט (סקרים קיימים נשארים במקומם)', 4000);
+            renderList(l);
+          } }),
+          '📁 תיקייה לפי שכונה בתוך תיקיית הפרויקט' + (hoodOn(l) && colsOf((l.map || {}).hood).length ? ` (עמודה: ${(l.cols.find(c => c.id === l.map.hood.col) || {}).name || 'שכונה'})` : hoodOn(l) ? ' (לא נמצאה עמודת שכונה, ולא נמצאו שכונות לפי סמל ברשימות האחרות)' : '')),
         missing.length ? h('div', { class: 'card small', style: 'background:#fff2cc;color:#5a4300' }, `⚠ עוד לא נבחרה עמודה ל: ${missing.join(', ')}. לחץ על החץ ▾ בכותרת של העמודה ובחר "העמודה הזו היא", או ב"שיוך עמודות".`) : null,
         dayBox, chipsBox,
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' }, q, qInfo, widthBox),
@@ -1652,8 +1946,15 @@
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
     const live = () => l.rows.filter(r => !r.deleted);
     const done = r => { const s = r.sid && local.get(r.sid); return !!(s && (s.finished || s.finishPending)); };
-    if (!Array.isArray(l.route) || !l.route.length) l.route = live().filter(r => !done(r)).map(r => r.id);
-    l.route = l.route.filter(id => live().some(r => r.id === id));
+    // (1.155) "לא קיים" לא במפה ולא במסלול. "לבדיקה" נשאר, בצהוב
+    const gone = r => !!(r && r.flag === 'gone');
+    const isCheck = r => !!(r && r.flag === 'check');
+    if (!Array.isArray(l.route) || !l.route.length) l.route = live().filter(r => !done(r) && !gone(r)).map(r => r.id);
+    l.route = l.route.filter(id => live().some(r => r.id === id && !gone(r)));
+    // סימון מכל מקום במסך: אחרי שינוי מציירים מחדש, ומה שחזר למסלול מאותר במפה
+    const flagIt = (L, r) => flagDialog(L, r, () => { redraw(); locateAll().then(redraw).catch(() => {}); });
+    const flagBtn = (L, r, after) => h('button', { class: 'btn', title: 'לא קיים / לבדיקה', onclick: e => { e.stopPropagation(); if (after) after(); flagIt(L, r); } }, flagOf(r) ? 'סטטוס ▾' : '⚑ סמן');
+    const assignBtn = (r, after) => r.sid ? h('button', { class: 'btn', title: 'לאיזו רשימה הסקר שייך, שכונה ותיקייה בדרייב', onclick: e => { e.stopPropagation(); if (after) after(); assignBySid(r.sid); } }, '📁 שיוך') : null;
     // עבודה שהסתיימה יורדת מהמסלול והמספור מתעדכן (אפשר להחזיר אותה מ"לא במסלול")
     const doneOut = l.route.filter(id => done(l.rows.find(r => r.id === id)));
     if (doneOut.length) { l.route = l.route.filter(id => !doneOut.includes(id)); save(l); setTimeout(() => ui.toast(doneOut.length === 1 ? 'עבודה אחת שהסתיימה ירדה מהמסלול' : `${doneOut.length} עבודות שהסתיימו ירדו מהמסלול`, 3500), 300); }
@@ -1663,7 +1964,7 @@
     // (1.148, ori) סמל מוסד ושם המנהל/ת (גננת) ליד שם המוסד
     // (1.148, ori) תגית בצבע הרשימה: מאיזו רשימה המוסד
     const srcTag = (name, css) => h('span', { class: 'wl-badge wl-src', style: css }, name);
-    // (1.155, ori) גם סוג המוסד (גן / בית ספר / תיכון…) מעמודה "סוג מוסד" / "סוג"
+    // (1.156, ori) גם סוג המוסד (גן / בית ספר / תיכון…) מעמודה "סוג מוסד" / "סוג"
     const typeCol = L => (L.cols || []).find(c => /^סוג(\s*(ה?מוסד|מסגרת))?$/.test(String(c.name || '').trim())) || null;
     const metaIn = (L, r) => { const v = valuesOf(L, r), tc = typeCol(L), t = tc ? clean(r.cells[tc.id]) : ''; return [t, v.code ? 'סמל ' + v.code : '', v.manager || ''].filter(Boolean).join(' · '); };
     const geo = new Map();
@@ -1683,7 +1984,7 @@
     const mOf = S => +S.c.m || 150;
     const colOf = S => okC(S.c.color) || SIDE_COLORS[0];
     const sideDone = r => { const s = r.sid && local.get(r.sid); return !!(s && (s.finished || s.finishPending)); };
-    const rowsOf = S => S.L.rows.filter(r => !r.deleted && !sideDone(r));
+    const rowsOf = S => S.L.rows.filter(r => !r.deleted && !sideDone(r) && !gone(r));
     // מוסדות מכל רשימה משנית שקרובים לתחנה (אותה כתובת או עד המרחק של אותה רשימה): [{ S, rs }]
     const nearIn = (S, id) => { const g = geo.get(id); return g ? rowsOf(S).filter(r => { const x = S.geo.get(r.id); return x && km(g, x) * 1000 <= mOf(S); }) : []; };
     const nearOf = id => SIDES.map(S => ({ S, rs: nearIn(S, id) })).filter(x => x.rs.length);
@@ -1737,13 +2038,15 @@
           h('div', { class: 'stack', style: 'gap:6px;border-inline-start:6px solid var(--accent);padding-inline-start:8px' },
             h('div', { class: 'muted small' }, here.length > 1 ? `ברשימה "${l.name || 'הראשית'}", ${here.length} מוסדות בנקודה הזו במפה` : `ברשימה "${l.name || 'הראשית'}"`),
             ...here.map(r => { const lb = label(r), mt = metaIn(l, r), n = l.route.indexOf(r.id) + 1; return h('div', { class: 'wl-stop' },
-              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, (n ? n + '. ' : '') + lb.name + (done(r) ? ' ✓' : '')), srcTag(l.name || 'ראשית', 'background:var(--accent);color:var(--accent-ink)'), mt ? h('div', { class: 'small' }, mt) : null, h('div', { class: 'muted small' }, lb.addr)),
+              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, (n ? n + '. ' : '') + lb.name + (done(r) ? ' ✓' : '')), srcTag(l.name || 'ראשית', 'background:var(--accent);color:var(--accent-ink)'), flagBadge(r, h), mt ? h('div', { class: 'small' }, mt) : null, h('div', { class: 'muted small' }, lb.addr)),
+              flagBtn(l, r, close),
               h('button', { class: 'btn', onclick: () => { close(); jumpTo(r.id); } }, 'במפה'),
               h('button', { class: 'btn primary', onclick: () => { close(); openRow(l, r); } }, 'פתח סקר')); })),
           ...groups.map(({ S, rs }) => h('div', { class: 'stack', style: `gap:6px;border-inline-start:6px solid ${colOf(S)};padding-inline-start:8px` },
             h('div', { class: 'muted small' }, `מהרשימה "${S.L.name}", עד ${mOf(S)} מ' מהתחנה`),
             ...rs.map(r => { const lb = labelIn(S.L, r), d = Math.round(km(geo.get(id), S.geo.get(r.id)) * 1000); return h('div', { class: 'wl-stop side', style: `border-color:${colOf(S)}` },
-              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, lb.name), srcTag(S.L.name || 'רשימה', chipCss(S)), metaIn(S.L, r) ? h('div', { class: 'small' }, metaIn(S.L, r)) : null, h('div', { class: 'muted small' }, lb.addr + (d < 15 ? ' · באותו מקום' : ` · ${d} מ'`))),
+              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, lb.name), srcTag(S.L.name || 'רשימה', chipCss(S)), flagBadge(r, h), metaIn(S.L, r) ? h('div', { class: 'small' }, metaIn(S.L, r)) : null, h('div', { class: 'muted small' }, lb.addr + (d < 15 ? ' · באותו מקום' : ` · ${d} מ'`))),
+              flagBtn(S.L, r, close),
               h('button', { class: 'btn', onclick: () => { close(); jumpSide(S, r.id); } }, 'במפה'),
               h('button', { class: 'btn primary', onclick: () => { close(); openRow(S.L, r, true); } }, 'פתח סקר')); }))),
           only && nearOf(id).length > 1 ? h('button', { class: 'btn', onclick: () => { close(); showNear(id); } }, 'הצג קרובים מכל הרשימות') : null,
@@ -1759,9 +2062,10 @@
         const rs = rowsOf(S), C = colOf(S), near = nearIds.get(S);
         const bad = rs.filter(r => !S.geo.get(r.id) || S.geo.get(r.id).approx);
         const row = r => { const lb = labelIn(S.L, r), g = S.geo.get(r.id); return h('div', { class: 'wl-stop side', style: `border-color:${C}` },
-          h('div', { class: 'wl-stop-go', style: 'flex:1;min-width:0', role: 'button', tabindex: '0', title: 'הצג במפה', onclick: () => jumpSide(S, r.id) }, h('b', {}, lb.name), near.has(r.id) ? h('span', { class: 'wl-badge near', style: `margin-inline-start:6px;${chipCss(S)}` }, 'קרוב לתחנה') : null,
+          h('div', { class: 'wl-stop-go', style: 'flex:1;min-width:0', role: 'button', tabindex: '0', title: 'הצג במפה', onclick: () => jumpSide(S, r.id) }, h('b', {}, lb.name), flagBadge(r, h), near.has(r.id) ? h('span', { class: 'wl-badge near', style: `margin-inline-start:6px;${chipCss(S)}` }, 'קרוב לתחנה') : null,
             h('div', { class: 'muted small' }, lb.addr + (g ? (g.manual ? ' · מיקום שתיקנת' : g.approx ? ' · ' + approxTxt(g) : '') : S.geo.has(r.id) ? ' · לא נמצא במפה, לחץ 📍' : ' · מאתר…'))),
           h('button', { class: 'icon-btn', title: 'תקן מיקום במפה', 'aria-label': 'תקן מיקום', onclick: () => fixLoc(r, S) }, '📍'),
+          flagBtn(S.L, r),
           h('button', { class: 'btn', onclick: () => openRow(S.L, r, true) }, 'פתח סקר')); };
         return h('div', { class: 'stack', style: `border-inline-start:6px solid ${C};padding-inline-start:10px` },
           h('b', {}, `רשימה משנית: ${S.L.name} (${rs.length} מוסדות, ${near.size} קרובים לתחנות במסלול, עד ${mOf(S)} מ')`),
@@ -1785,11 +2089,13 @@
           const g = S.geo.get(r.id); if (!g) continue;
           const lb = labelIn(S.L, r);
           // מיקום משוער: מסגרת מקווקוות וסימן שאלה (הצבע נשאר של הרשימה)
-          const mk = L.marker([g.lat, g.lon], { draggable: g.src !== 'gps', zIndexOffset: -500, icon: L.divIcon({ className: 'wl-pin side' + (g.approx ? ' approx' : ''), html: `<span class="wl-sp" style="background:${C};color:${textOn(C)}">${g.approx ? '?' : '+'}</span>`, iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(layer);
+          const ck = isCheck(r);
+          const mk = L.marker([g.lat, g.lon], { draggable: g.src !== 'gps', zIndexOffset: ck ? 200 : -500, icon: L.divIcon({ className: 'wl-pin side' + (g.approx ? ' approx' : '') + (ck ? ' check' : ''), html: ck ? `<span class="wl-sp" style="border-color:${C}">!</span>` : `<span class="wl-sp" style="background:${C};color:${textOn(C)}">${g.approx ? '?' : '+'}</span>`, iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(layer);
           mk.bindPopup(() => h('div', { class: 'wl-popup', dir: 'rtl' },
-            h('b', {}, lb.name), h('div', {}, lb.addr), h('div', { class: 'small', style: `color:${C};font-weight:700` }, 'רשימה משנית: ' + S.L.name), g.approx ? h('i', {}, approxTxt(g)) : null,
+            h('b', {}, lb.name), h('div', {}, lb.addr), h('div', { class: 'small', style: `color:${C};font-weight:700` }, 'רשימה משנית: ' + S.L.name), flagBadge(r, h), g.approx ? h('i', {}, approxTxt(g)) : null,
             h('div', { class: 'row', style: 'gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap' },
               h('button', { class: 'btn primary', onclick: () => { map.closePopup(); openRow(S.L, r, true); } }, 'פתח סקר'),
+              flagBtn(S.L, r, () => map.closePopup()), assignBtn(r, () => map.closePopup()),
               h('button', { class: 'btn', onclick: () => { map.closePopup(); fixLoc(r, S); } }, '📍 תקן מיקום'),
               h('a', { href: g.src === 'gps' || g.manual ? `https://waze.com/ul?ll=${g.lat},${g.lon}&navigate=yes` : 'https://waze.com/ul?q=' + encodeURIComponent(lb.addr) + '&navigate=yes', target: '_blank', rel: 'noopener' }, 'וייז')),
             h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם לגרור את הנקודה')), { minWidth: 220 })
@@ -1987,7 +2293,7 @@
         const { id, r, g, i } = m, lb = label(r);
         const mv = pos => { if (moveInRoute(l, id, pos)) { persist(); map.closePopup(); redraw(); } };
         return h('div', { class: 'wl-popup', dir: 'rtl' },
-          h('b', {}, `${i + 1}. ${lb.name}`), metaIn(l, r) ? h('div', { class: 'small' }, metaIn(l, r)) : null, h('div', {}, lb.addr), g.approx ? h('i', {}, approxTxt(g)) : null,
+          h('b', {}, `${i + 1}. ${lb.name}`), flagBadge(r, h), metaIn(l, r) ? h('div', { class: 'small' }, metaIn(l, r)) : null, h('div', {}, lb.addr), g.approx ? h('i', {}, approxTxt(g)) : null,
           h('div', { class: 'row', style: 'gap:6px;align-items:center;margin-top:6px' }, 'מקום בסדר:',
             rnumInput(l, id, () => { persist(); map.closePopup(); redraw(); }),
             h('button', { class: 'btn', title: 'מוקדם יותר', disabled: i === 0 ? true : null, onclick: () => mv(i) }, '↑'),
@@ -1997,6 +2303,7 @@
             // (1.146, ori) פתיחת הסקר ישר מהנקודה במפה, כמו "פתח סקר" בטבלה
             h('button', { class: 'btn primary', onclick: () => { map.closePopup(); openRow(l, r); } }, done(r) ? 'פתח סקר ✓' : 'פתח סקר'),
             h('button', { class: 'btn', onclick: () => { map.closePopup(); fixLoc(r); } }, '📍 תקן מיקום'),
+            flagBtn(l, r, () => map.closePopup()), assignBtn(r, () => map.closePopup()),
             h('a', { href: navUrl(r), target: '_blank', rel: 'noopener' }, 'נווט בוויז')),
           h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם לגרור את הנקודה'),
           ...nearChips(id, 'btn wl-near-btn', () => map.closePopup()),
@@ -2007,7 +2314,7 @@
         const g = ms[0].g, nums = ms.map(m => m.i + 1);
         const consec = nums.every((n, k) => !k || n === nums[k - 1] + 1);
         const full = ms.length === 1 ? String(nums[0]) : consec ? nums[0] + '-' + nums[nums.length - 1] : nums.join(',');
-        const cls = 'wl-pin' + (ms.every(m => done(m.r)) ? ' done' : '') + (g.approx ? ' approx' : '') + (ms.length > 1 ? ' multi' : '') + (ms.some(m => nearOf(m.id).length) ? ' hasnear' : '');
+        const cls = 'wl-pin' + (ms.every(m => done(m.r)) ? ' done' : '') + (g.approx ? ' approx' : '') + (ms.length > 1 ? ' multi' : '') + (ms.some(m => nearOf(m.id).length) ? ' hasnear' : '') + (ms.some(m => isCheck(m.r)) ? ' check' : '');
         // טבעת בצבע של כל רשימה משנית שיש בה מוסד קרוב (כמה רשימות = כמה טבעות)
         const rings = [...new Set(ms.flatMap(m => nearOf(m.id).map(x => colOf(x.S))))];
         const ringHtml = rings.length ? `<b class="wl-ring" style="box-shadow:${rings.map((c, k) => `0 0 0 ${3 * (k + 1)}px ${c}`).join(',')}"></b>` : '';
@@ -2024,10 +2331,11 @@
           // (1.154, ori) כמו בחלון "קרובים": לכל מוסד שם, תגית הרשימה, סמל, גננת/מנהל וכתובת, ופתח סקר ישר מכאן
           ...ms.map(m => { const lb = label(m.r), mt = metaIn(l, m.r), one = e => { e.stopPropagation(); setTimeout(() => { mk._one = m; mk.setPopupContent(mk._pop()); }, 0); };
             return h('div', { class: 'wl-stop wl-pop-item', style: 'margin-top:6px' },
-              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, `${m.i + 1}. ${lb.name}` + (done(m.r) ? ' ✓' : '')), srcTag(l.name || 'ראשית', 'background:var(--accent);color:var(--accent-ink)'),
+              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, `${m.i + 1}. ${lb.name}` + (done(m.r) ? ' ✓' : '')), srcTag(l.name || 'ראשית', 'background:var(--accent);color:var(--accent-ink)'), flagBadge(m.r, h),
                 mt ? h('div', { class: 'small' }, mt) : null, h('div', { class: 'muted small' }, lb.addr)),
               h('div', { class: 'stack', style: 'gap:4px' },
                 h('button', { class: 'btn primary', onclick: e => { e.stopPropagation(); map.closePopup(); openRow(l, m.r); } }, 'פתח סקר'),
+                flagBtn(l, m.r, () => map.closePopup()),
                 h('button', { class: 'btn', title: 'מקום בסדר, תיקון מיקום, ניווט וקרובים', onclick: one }, 'עוד…'))); }),
           ...[...new Set(ms.flatMap(m => nearOf(m.id).map(x => x.S)))].map(S => { const m = ms.find(x => nearOf(x.id).some(y => y.S === S)); return nearChips(m.id, 'btn wl-near-btn', () => map.closePopup()).find((_, k) => nearOf(m.id)[k].S === S); }),
           h('div', { class: 'muted small', style: 'margin-top:6px' }, 'גרירת הנקודה מזיזה את כולם יחד'));
@@ -2064,21 +2372,27 @@
         const lb = label(r), g = geo.get(id);
         // למעלה / למטה: מחליף עם התחנה הסמוכה ברשימה המוצגת (באותו יום)
         const move = dlt => { const o = vs[k + dlt]; if (!o) return; const j = l.route.indexOf(o); [l.route[i], l.route[j]] = [l.route[j], l.route[i]]; persist(); redraw(); };
-        return h('div', { class: 'wl-stop' + (done(r) ? ' done' : '') },
+        return h('div', { class: 'wl-stop' + (done(r) ? ' done' : '') + (isCheck(r) ? ' check' : '') },
           rnumInput(l, id, () => { persist(); redraw(); }),
-          h('div', { class: 'wl-stop-go', style: 'flex:1;min-width:0', role: 'button', tabindex: '0', title: 'הצג במפה', onclick: () => jumpTo(id), onkeydown: e => { if (e.key === 'Enter') jumpTo(id); } }, h('b', {}, lb.name), done(r) ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הסתיים') : null,
+          h('div', { class: 'wl-stop-go', style: 'flex:1;min-width:0', role: 'button', tabindex: '0', title: 'הצג במפה', onclick: () => jumpTo(id), onkeydown: e => { if (e.key === 'Enter') jumpTo(id); } }, h('b', {}, lb.name), done(r) ? h('span', { class: 'wl-badge done', style: 'margin-inline-start:6px' }, '✓ הסתיים') : null, flagBadge(r, h),
             h('div', { class: 'muted small' }, lb.addr + (g ? (g.manual ? ' · מיקום שתיקנת' : g.approx ? ' · ' + approxTxt(g) : '') : geo.has(id) ? ' · לא נמצא במפה, לחץ 📍' : '')),
             nearOf(id).length ? h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap' }, ...nearChips(id, 'chip wl-near')) : null),
           h('button', { class: 'icon-btn', title: 'למעלה', 'aria-label': 'הזז למעלה', disabled: k === 0 ? true : null, onclick: () => move(-1) }, '↑'),
           h('button', { class: 'icon-btn', title: 'למטה', 'aria-label': 'הזז למטה', disabled: k === vs.length - 1 ? true : null, onclick: () => move(1) }, '↓'),
           h('button', { class: 'icon-btn', title: 'תקן מיקום במפה', 'aria-label': 'תקן מיקום', onclick: () => fixLoc(r) }, '📍'),
           h('a', { class: 'btn', href: navUrl(r), target: '_blank', rel: 'noopener' }, 'וייז'),
+          h('button', { class: 'icon-btn', title: 'לא קיים / לבדיקה', 'aria-label': 'סמן לא קיים או לבדיקה', onclick: () => flagIt(l, r) }, '⚑'),
           h('button', { class: 'icon-btn', title: 'הוצא מהמסלול', 'aria-label': 'הוצא מהמסלול', onclick: () => { l.route.splice(i, 1); persist(); redraw(); } }, '✕'));
       }));
-      const out = live().filter(r => !idx.has(r.id));
-      outBox.replaceChildren(...(out.length ? [h('b', {}, `לא במסלול (${out.length})`), ...out.map(r => h('div', { class: 'wl-stop out' },
-        h('div', { style: 'flex:1;min-width:0' }, label(r).name, done(r) ? ' ✓' : '', h('div', { class: 'muted small' }, label(r).addr)),
-        h('button', { class: 'btn', onclick: async () => { l.route.push(r.id); persist(); await locateAll(); redraw(); } }, '➕ הוסף')))] : []));
+      const out = live().filter(r => !idx.has(r.id) && !gone(r)), gn = live().filter(gone);
+      outBox.replaceChildren(...(out.length ? [h('b', {}, `לא במסלול (${out.length})`), ...out.map(r => h('div', { class: 'wl-stop out' + (isCheck(r) ? ' check' : '') },
+        h('div', { style: 'flex:1;min-width:0' }, label(r).name, done(r) ? ' ✓' : '', flagBadge(r, h), h('div', { class: 'muted small' }, label(r).addr)),
+        h('button', { class: 'btn', onclick: async () => { l.route.push(r.id); persist(); await locateAll(); redraw(); } }, '➕ הוסף')))] : []),
+        // (1.155) "לא קיים": לא במפה, אפשר להחזיר מכאן
+        ...(gn.length ? [h('details', {}, h('summary', { class: 'small', style: 'cursor:pointer' }, `⛔ לא קיימים (${gn.length}), לא מוצגים במפה`),
+          h('div', { class: 'stack', style: 'margin-top:8px' }, ...gn.map(r => h('div', { class: 'wl-stop out' },
+            h('div', { style: 'flex:1;min-width:0' }, label(r).name, h('div', { class: 'muted small' }, label(r).addr)),
+            h('button', { class: 'btn', onclick: () => flagIt(l, r) }, 'סטטוס ▾')))))] : []));
       const links = gmapsLinks();
       linksBox.replaceChildren(
         links.length > 1 ? h('div', { class: 'muted small', style: 'flex-basis:100%' }, `גוגל מפות מקבל עד 10 תחנות בקישור, ולכן המסלול מחולק ל-${links.length} קישורים לפי הסדר (כל חלק מתחיל איפה שהקודם נגמר):`) : '',
@@ -2180,7 +2494,7 @@
           dayBox, linksBox, status, listBox,
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
             h('button', { class: 'btn', onclick: async () => { await DB.setKV('wlView:' + l.id, { sort: { col: '_route', dir: 1 }, filt: {} }); ui.go(back); } }, 'מיין את הטבלה לפי המסלול'),
-            h('button', { class: 'btn', onclick: async () => { l.route = live().filter(r => !done(r)).map(r => r.id); persist(); await locateAll(); redraw(); } }, 'כל מה שלא הסתיים')),
+            h('button', { class: 'btn', onclick: async () => { l.route = live().filter(r => !done(r) && !gone(r)).map(r => r.id); persist(); await locateAll(); redraw(); } }, 'כל מה שלא הסתיים')),
           outBox, sideBox)));
     drawDays();
     drawSideCtl();
@@ -2239,5 +2553,28 @@
     });
   })();
 
-  root.WorkLists = { render, sync, _t: { searchAll, geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
+  root.WorkLists = { render, sync,
+    // (1.155) מתוך מסך הסקר: שיוך לרשימות/תיקייה, וסימון המוסד ברשימה
+    assign: (s, after) => assignDialog(s, after),
+    // (1.155.1) הצעת שכונה לסקר: מהשורה ברשימה, ואם אין לפי סמל המוסד או הכתובת ברשימות שהשכונה דולקת בהן
+    suggestHood: async s => {
+      if (!s || Construction.isConstruction(s)) return null;
+      const lists = await live();
+      const rows = lists.flatMap(L => L.rows.filter(r => !r.deleted && r.sid === s.id).map(r => ({ L, r })));
+      if (s.listRef) { const L = lists.find(x => x.id === s.listRef.list), r = L && L.rows.find(x => x.id === s.listRef.row); if (r) rows.unshift({ L, r }); }
+      for (const { L, r } of rows) if (hoodOn(L)) { const hh = await hoodOfRow(L, r); if (hh) return { hood: hh, list: L.name, auto: true }; }
+      const codes = Core.codesOf(s.code || '').map(c => c.replace(/\D+/g, '')).filter(c => c.length >= 3);
+      const ak = norm(s.street).split(' ').filter(Boolean).sort().join(' ') + '|' + norm(s.city);
+      for (const L of lists) {
+        if (!hoodOn(L)) continue;
+        for (const r of L.rows) {
+          if (r.deleted) continue;
+          const hh = clean(valuesOf(L, r).hood); if (!hh) continue;
+          if (codeKeys(L, r).some(c => codes.includes(c)) || (/\d/.test(ak) && addrKey(L, r) === ak)) return { hood: hh, list: L.name, auto: false };
+        }
+      }
+      return null;
+    },
+    flagRow: async (lid, rid, after) => { const L = await byId(lid), r = L && L.rows.find(x => x.id === rid && !x.deleted); if (!r) { U().toast('השורה לא נמצאה ברשימה', 3000); return; } flagDialog(L, r, after); },
+    _t: { ensureHood, hoodIndex, hoodLookup, setFlag, searchAll, geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
 })(window);

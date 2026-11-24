@@ -154,6 +154,8 @@
       const j = await OD.api('GET', `/files/${s.odReportDir}?fields=id,trashed&supportsAllDrives=true`).catch(() => null);
       if (j && !j.trashed) OD._verified.add(s.odReportDir); else s.odReportDir = null;
     }
+    // (1.155, ori) סקר בטיחות: תיקיית פרויקט / שכונה. השתנו הפרויקט, השכונה או הרשימות: הקבצים שכבר עלו עוברים לתיקיות החדשות
+    if (!isBuild(s) && !s.odReportOwn && s.odReportDir && s.odReportPlace !== placeKey(s.project, s.hood)) await relocate(s);
     // ori (1.108.2): הקבצים של הסקר הועברו בדרייב לתיקייה אחרת: מעלים מעכשיו לשם, ולא שוב ל"סקרי עצים"
     // גם כשאין עדיין תיקייה בסקר (במכשיר הזה, או אחרי שינוי שם): קודם בודקים לאן הועבר האקסל הראשי, ולא יוצרים תיקייה ריקה (1.112.2)
     if (isBuild(s) && (s.odReportDir || s.xlMain) && !followChecked.has(s.id)) {
@@ -179,7 +181,11 @@
         const name = buildDirName(s);
         s.odReportDir = await OD.folder(proj, name);
         s.odReportDirName = name;
-      } else s.odReportDir = proj;
+      } else {
+        s.odReportDir = hoodOf(s) ? await OD.folder(proj, hoodOf(s)) : proj;
+        s.odReportPlace = placeKey(s.project, s.hood);
+        s.odPlaces = Object.assign(s.odPlaces || {}, { [s.odReportPlace]: s.odReportDir });
+      }
       await DB.putSurvey(s, false);
     }
     return s.odReportDir;
@@ -205,22 +211,92 @@
     }
     return null;
   }
-  // הנתיב לתצוגה: סקרי עצים / פרויקט [/ שם הסקר]
+  // ---------- תיקייה לפי שכונה (1.155, ori) ----------
+  // סקר בטיחות: סקרי עצים / פרויקט / שכונה (s.hood, מהרשימה). אותו דבר בתיקייה של כל פרויקט נוסף (s.extraProjects).
+  // s.odPlaces = { "פרויקט / שכונה": מזהה תיקייה } = איפה כבר יש קבצים של הסקר; s.odRepNames = שמות הקבצים שהועלו
+  const tidy = v => String(v || '').replace(/\s+/g, ' ').trim();
+  const hoodOf = s => isBuild(s) ? '' : tidy(s.hood);
+  const placeKey = (proj, hood) => tidy(proj || 'ללא פרויקט') + ' / ' + tidy(hood);
+  const projOfKey = k => k.split(' / ')[0];
+  async function placeFolder(proj, hood) {
+    const f = await OD.folder(await reportRoot(), tidy(proj) || 'ללא פרויקט');
+    return tidy(hood) ? OD.folder(f, tidy(hood)) : f;
+  }
+  const noteName = (s, name) => { const n = OD.clean(name); if (!(s.odRepNames || []).includes(n)) s.odRepNames = [...(s.odRepNames || []), n].slice(-30); };
+  // הקבצים של הסקר בתיקייה: לפי השמות שהועלו, ובסקר ישן לפי שם הקובץ של הסקר
+  function mineIn(s, items) {
+    const names = new Set(s.odRepNames || []);
+    const base = root.App && root.App.fileBase ? OD.clean(root.App.fileBase(s)) : '';
+    return items.filter(it => it.file && (names.has(it.name) || (base && /\.(xlsm|xlsx|pdf)$/i.test(it.name) &&
+      [base, OD.clean('ריכוז אורנים - ' + base)].some(b => it.name.slice(0, it.name.lastIndexOf('.')) === b))));
+  }
+  async function moveFile(id, from, to) {
+    return OD.api('PATCH', `/files/${id}?addParents=${encodeURIComponent(to)}&removeParents=${encodeURIComponent(from)}&fields=id&supportsAllDrives=true`, {});
+  }
+  // מעביר את הקבצים מכל מקום שכבר לא רלוונטי למקום החדש של אותו פרויקט (או לתיקייה הראשית של הסקר)
+  async function relocate(s) {
+    if (isBuild(s) || s.odReportOwn) return;
+    const want = [s.project, ...extraProjects(s)].map(p => ({ p: tidy(p) || 'ללא פרויקט', k: placeKey(p, s.hood) }));
+    const have = Object.assign({}, s.odPlaces || {});
+    // סקר מלפני 1.155: הקבצים בתיקיית הפרויקט (בלי שכונה), גם בפרויקטים הנוספים
+    if (!s.odReportPlace && s.odReportDir) {
+      have[placeKey(s.project, '')] = s.odReportDir;
+      for (const p of extraProjects(s)) if (!have[placeKey(p, '')]) have[placeKey(p, '')] = await OD.folder(await reportRoot(), p);
+    }
+    const wantKeys = new Set(want.map(w => w.k));
+    let moved = 0;
+    for (const [k, fid] of Object.entries(have)) {
+      if (wantKeys.has(k) || !fid) continue;
+      const to = want.find(w => w.p === projOfKey(k)) || want[0];
+      const dest = await placeFolder(to.p, s.hood);
+      if (dest !== fid) {
+        const items = await OD.children(fid).catch(() => []);
+        const there = new Set((await OD.children(dest).catch(() => [])).map(x => x.name));
+        for (const it of mineIn(s, items)) {
+          try {
+            // באותו שם כבר יש שם קובץ של הסקר (עותק): הישן עובר לפח, כדי שלא יהיו שני קבצים באותו שם
+            if (there.has(it.name)) await OD.api('PATCH', `/files/${it.id}?supportsAllDrives=true`, { trashed: true });
+            else { await moveFile(it.id, fid, dest); there.add(it.name); }
+            moved++;
+          } catch (e) { log('error', `העברת "${it.name}" לתיקייה ${to.p}${hoodOf(s) ? ' / ' + hoodOf(s) : ''} נכשלה: ${e.message}`, s); }
+        }
+      }
+      delete have[k];
+      have[to.k] = dest;
+    }
+    const main = want[0];
+    s.odReportDir = have[main.k] || await placeFolder(main.p, s.hood);
+    have[main.k] = s.odReportDir;
+    s.odPlaces = have; s.odReportPlace = main.k;
+    await DB.putSurvey(s, false);
+    if (moved) log('ok', `${moved} קבצים של הסקר הועברו לתיקייה ${[main.p, hoodOf(s)].filter(Boolean).join(' / ')}`, s);
+    return moved;
+  }
+
+  // הנתיב לתצוגה: סקרי עצים / פרויקט [/ שכונה] [/ שם הסקר]
   async function reportPath(s) {
     if (s.odReportOwn && s.odReportDir && OD.folderPath) { const p = await OD.folderPath(s.odReportDir, 4).catch(() => null); if (p && p.length) return [].concat(p).join(' / '); }
-    return [(await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים', s.project || 'ללא פרויקט'].concat(isBuild(s) ? [s.odReportDirName || buildDirName(s)] : []).join(' / ');
+    return [(await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים', s.project || 'ללא פרויקט'].concat(isBuild(s) ? [s.odReportDirName || buildDirName(s)] : hoodOf(s) ? [hoodOf(s)] : []).join(' / ');
   }
 
   // (1.150, ori) מוסד שנמצא בשתי רשימות עבודה (אותו סמל מוסד) וסקר אחד לשתיהן: הדוחות נשמרים גם בתיקיית הפרויקט של הרשימה השנייה
   const extraProjects = s => isBuild(s) ? [] : [...new Set((s.extraProjects || []).map(p => String(p || '').trim()))].filter(p => p && p !== String(s.project || '').trim());
   async function putExtra(s, name, blob) {
     for (const p of extraProjects(s)) {
-      try { if (!await OD.upload(await OD.folder(await reportRoot(), p), name, blob, true)) throw new Error('ההעלאה נכשלה'); }
+      try {
+        const k = placeKey(p, s.hood);
+        const dir = (s.odPlaces || {})[k] || await placeFolder(p, s.hood);
+        if (!await OD.upload(dir, name, blob, true)) { if (s.odPlaces) delete s.odPlaces[k]; throw new Error('ההעלאה נכשלה'); }
+        s.odPlaces = Object.assign(s.odPlaces || {}, { [k]: dir }); noteName(s, name);
+      }
       catch (e) { log('error', `"${name}" לא נשמר בתיקיית הפרויקט ${p}: ${e.message}`, s); }
     }
   }
   // קובץ דוח: נשמר בתיקיית הגיבוי, ועותק שלו (העתקה בתוך גוגל דרייב, בלי גלישה נוספת) בתיקיית הדוחות
   async function putReportFile(s, name, blob) {
+    // פרויקט נוסף שנוסף/הוסר או שכונה שהשתנתה: קודם מעבירים את הקבצים הקיימים
+    if (!isBuild(s) && s.odReportDir && !s.odReportOwn && (s.odReportPlace !== placeKey(s.project, s.hood) || extraProjects(s).some(p => !(s.odPlaces || {})[placeKey(p, s.hood)]) || Object.keys(s.odPlaces || {}).some(k => ![s.project, ...extraProjects(s)].some(p => placeKey(p, s.hood) === k)))) await relocate(s).catch(e => log('error', 'העברת הקבצים לתיקייה החדשה נכשלה: ' + e.message, s));
+    noteName(s, name);
     await putReportFile0(s, name, blob);
     await putExtra(s, name, blob);
   }
@@ -1190,6 +1266,8 @@
       return { folderId, path: await reportPath(s) };
     },
     reportPath,
+    // (1.155) אחרי שינוי שכונה / רשימה / פרויקט: מעבירים עכשיו את הקבצים שכבר עלו (בלי להעלות מחדש)
+    async relocate(s) { if (!navigator.onLine || !(await OD.connected()) || isBuild(s) || !s.odReportDir) return 0; return relocate(s); },
     cloudIndex, allInCloud, freeLocal, log, hashSurvey, loadSurvey, mergeSurvey,
     // לפני פתיחת סקר: מושכים את הגרסה האחרונה מהענן (עד כמה שניות), על אותו עותק שהגיבוי מחזיק
     async refresh(id) {
