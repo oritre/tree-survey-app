@@ -271,10 +271,10 @@
     if (trees.length > MAX_TREES) w.push(`יש ${trees.length} עצים, ובתבנית יש מקום ל-${MAX_TREES} בלבד.`);
     for (const t of sortTrees(trees)) {
       const name = 'עץ ' + (t.num || t.species);
-      if (pinesOn(survey) && isPine(t.species) && !(t.pineList || []).length) w.push(`${name}: אורן בלי פרטי אורנים.`);
+      if (pinesOn(survey) && !pineRef(t) && isPine(t.species) && !(t.pineList || []).length) w.push(`${name}: אורן בלי פרטי אורנים.`);
       // תזכורת: אורן שנכתב בהערות ולא במין העץ לא נכנס לריכוז האורנים
-      if (pinesOn(survey) && !isPine(t.species) && isPine(t.notes)) w.push(`${name}: בהערות כתוב אורן, אבל מין העץ לא אורן, ולכן הוא לא ייכנס לריכוז האורנים.`);
-      (t.pineList || []).forEach((p, i) => { const m = pineMissing(p); if (m.length) w.push(`${name}: באורן ${i + 1} חסר ${m.join(', ')}.`); });
+      if (pinesOn(survey) && !pineRef(t) && !isPine(t.species) && isPine(t.notes)) w.push(`${name}: בהערות כתוב אורן, אבל מין העץ לא אורן, ולכן הוא לא ייכנס לריכוז האורנים.`);
+      if (!pineRef(t)) (t.pineList || []).forEach((p, i) => { const m = pineMissing(p); if (m.length) w.push(`${name}: באורן ${i + 1} חסר ${m.join(', ')}.`); });
       if (t.split && !splitActive(t)) w.push(`${name}: סומן פצל אבל מספר העץ לא תקין לפיצול.`);
       if (!(t.photos || []).length) w.push(`${name}: אין תמונה.`);
       if (survey.warnGps && t.lat == null) w.push(`${name}: אין נ"צ.`);
@@ -304,6 +304,8 @@
   }
 
   // ריכוז אורנים (1.122): רק בסקר שהודלק בו (s.pinesMode), למשל משורה ברשימה שכתוב בה "אורנים". בשאר הסקרים אין חלון ואין תזכורות
+  // "לא להתייחסות" בעץ אורן (v1.153.0): t.ref = לא בסקר, t.refPines = לא בפרטי האורנים (true/false). בלי refPines - כמו t.ref (שניהם)
+  function pineRef(t) { return !!(t && (t.refPines != null ? t.refPines : t.ref)); }
   function pinesOn(s) { return !!(s && s.pinesMode && s.type !== 'construction'); }
 
   // עבודה בירושלים: העיר, הרחוב, שם המוסד או הפרויקט כוללים "ירושלים" (גם "ירושליים"). רק בהן קופץ חלון פרטי האורנים
@@ -311,7 +313,7 @@
     return [s.project, s.city, s.street, s.siteName, s.site].some(x => /ירושלי?ים|jerusalem/i.test(x || ''));
   }
 
-  const api = { placeOf, codesOf, pinesOn, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, pinePlural, pineCount, pineMissing, jValue, hasContent,
+  const api = { placeOf, codesOf, pinesOn, pineRef, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, pinePlural, pineCount, pineMissing, jValue, hasContent,
     sortTrees, sortByNum, manualOrder, splitActive, slotsOf, photoForSlot, groupKey, photoSub, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
     nextNum, warnings, OK, DEFAULT_URGENCY, isOk, urgencyCell, notesCell, setUrgency };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;

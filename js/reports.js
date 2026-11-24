@@ -99,7 +99,7 @@
   const codeText = code => codesOf(code).join(', ');
   // העצים עם אורנים בסקר, לפי סדר העצים
   function pineTrees(s) {
-    return Core.sortTrees((s.trees || []).filter(t => Core.hasContent(t) && !t.ref && (Core.isPine(t.species) || (t.pineList || []).length || Core.pineCount(t))));
+    return Core.sortTrees((s.trees || []).filter(t => Core.hasContent(t) && !Core.pineRef(t) && (Core.isPine(t.species) || (t.pineList || []).length || Core.pineCount(t))));
   }
   function pineTotal(s) { return pineTrees(s).reduce((a, t) => a + (Core.pineCount(t) || 0), 0); }
   const PINE_HEAD = ['מס\' אורן', 'מספר העץ בסקר', 'מין העץ', 'מיקום', 'גובה (מ\')', 'מספר גזעים', 'קוטרי הגזעים (ס"מ)', 'X רשת ישראל', 'Y רשת ישראל', 'קו רוחב', 'קו אורך', 'גוגל מפות'];
