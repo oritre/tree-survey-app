@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.152.0';
+  const APP_VERSION = '1.153.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1877,8 +1877,21 @@
     return h('button', { type: 'button', class: 'btn small cad-go', title: 'הצג את העץ ב-BricsCAD (גם: לחיצה כפולה על העץ ברשימה)', onclick: () => cadGo(t) }, icon('target'), 'הצג ב-BricsCAD');
   }
 
+  // עץ אורן בסקר בטיחות: "לא להתייחסות" יכול להיות רק בסקר, רק בפרטי האורנים, או בשניהם (v1.153.0)
+  function isPineTree(t) { return !Construction.isConstruction(cur) && (Core.isPine(t.species) || (t.pineList || []).length > 0); }
+  function refScope(t) { const a = !!t.ref, b = Core.pineRef(t); return a && b ? 'both' : a ? 'survey' : b ? 'pines' : ''; }
+  function setRefScope(t, k) {
+    t.ref = k === 'both' || k === 'survey' || undefined;
+    t.refPines = k === 'survey' ? false : k === 'pines' ? true : undefined;
+    if (t.refPines === undefined) delete t.refPines;
+  }
+  function refWhere(t, pre, post) {
+    if (!isPineTree(t)) return '';
+    const k = refScope(t);
+    return k === 'survey' ? pre + 'רק בסקר' + post : k === 'pines' ? pre + 'רק באורנים' + post : '';
+  }
   function treeRow(t) {
-    const pineMissing = Core.pinesOn(cur) && Core.isPine(t.species)
+    const pineMissing = Core.pinesOn(cur) && Core.isPine(t.species) && !Core.pineRef(t)
       && (!(t.pineList || []).length || t.pineList.some(p => Core.pineMissing(p).length));
     const pineN = !Construction.isConstruction(cur) && (t.pineList || []).length;
     const urgCls = v => v === Core.OK ? 'ok' : v;
@@ -1894,7 +1907,7 @@
       h('span', { class: 'badges' },
         Construction.isConstruction(cur) ? constructionBadge(t)
           : t.urgency ? h('span', { class: 'badge u-' + urgCls(t.urgency) }, t.urgency) : null,
-        t.ref ? h('span', { class: 'badge soft', title: 'לא להתייחסות: נשמר בסקר בלבד, לא נכנס לקבצים' }, 'לא להתייחסות') : null,
+        t.ref || (isPineTree(t) && Core.pineRef(t)) ? h('span', { class: 'badge soft', title: 'לא להתייחסות: נשמר בסקר בלבד, לא נכנס לקבצים' + refWhere(t, ' (', ')') }, 'לא להתייחסות' + refWhere(t, ' · ', '')) : null,
         pineMissing ? h('span', { class: 'badge alert', title: 'חסרים פרטי אורנים' }, pineN ? `🌲${pineN}?` : 'אורנים?')
           : pineN ? h('span', { class: 'badge soft', title: 'אורנים עם פרטים' }, '🌲' + pineN) : null,
         (t.photos || []).length ? h('span', { class: 'badge soft', title: 'תמונות' }, icon('camera'), (t.photos || []).length) : null,
@@ -2433,7 +2446,30 @@
     const pineInfo = h('span', { class: 'small' });
     const pineBtn = h('button', { class: 'btn', type: 'button', onclick: () => openPines(t, () => { markPine(); changed(); }) }, '🌲 פרטי אורנים');
     const pineWrap = h('div', { class: 'row pine-box', style: 'gap:10px;align-items:center;flex-wrap:wrap' }, pineBtn, pineInfo);
+    // "לא להתייחסות" בעץ אורן: בסקר / בפרטי אורנים / בשניהם
+    const REF_OPTS = [['survey', 'רק בסקר'], ['pines', 'רק בפרטי אורנים'], ['both', 'בשניהם']];
+    const refChk = h('input', { type: 'checkbox', style: 'width:24px;height:24px' });
+    const refBox = h('div', { class: 'chips ref-scope', style: 'margin-top:6px', role: 'group', 'aria-label': 'לא להתייחסות איפה' });
+    const updRef = () => {
+      const pine = isPineTree(t);
+      if (!pine && !t.ref && t.refPines != null) delete t.refPines;
+      refChk.checked = pine ? !!refScope(t) : !!t.ref;
+      refBox.classList.toggle('hidden', !(pine && refChk.checked));
+      const k = refScope(t);
+      for (const b of refBox.children) b.classList.toggle('on', b.dataset.k === k);
+    };
+    refBox.append(...REF_OPTS.map(([k, label]) => h('button', { class: 'chip', type: 'button', 'data-k': k,
+      title: k === 'survey' ? 'לא בדוח הסקר, אבל כן בטבלת ריכוז האורנים' : k === 'pines' ? 'כן בדוח הסקר, אבל לא בטבלת ריכוז האורנים' : 'לא בדוח הסקר ולא בריכוז האורנים',
+      onclick: () => { setRefScope(t, k); updRef(); changed(); } }, label)));
+    refChk.onchange = e => {
+      if (isPineTree(t)) setRefScope(t, e.target.checked ? 'both' : '');
+      else { t.ref = e.target.checked || undefined; delete t.refPines; }
+      const pl = t.polyId && (cur.planPolys || []).find(p => p.id === t.polyId); if (pl) pl.ref = t.ref;
+      updRef(); changed();
+    };
+    updRef();
     const markPine = () => {
+      updRef();
       const pine = Core.isPine(t.species) && Core.pinesOn(cur);
       const has = (t.pineList || []).length > 0;
       pineWrap.classList.toggle('hidden', !pine && !has);
@@ -2560,8 +2596,8 @@
         h('div', { class: 'grid2' },
           h('div', {}, field('מספר העץ', numIn), dupHint, splitWrap,
             h('label', { class: 'row', style: 'margin-top:6px;cursor:pointer', title: 'נשמר בסקר לגיבוי. בהפקת דוח שואלים אם לכלול אותו' },
-              h('input', { type: 'checkbox', checked: !!t.ref, style: 'width:24px;height:24px', onchange: e => { t.ref = e.target.checked || undefined; const pl = t.polyId && (cur.planPolys || []).find(p => p.id === t.polyId); if (pl) pl.ref = t.ref; changed(); } }),
-              h('span', {}, 'לא להתייחסות (גיבוי בלבד)'))),
+              refChk,
+              h('span', {}, 'לא להתייחסות (גיבוי בלבד)')), refBox),
           h('div', {}, field('מין עץ', build ? speciesCombo(spIn, t) : safetySpeciesCombo(spIn)), build ? null : spExtra.row)),
         // כפתור מדידה בכל עץ בסקר לבנייה: עץ שסומן נפתח במקומו, ועץ שלא סומן נפתח לסימון (הנגיעה הבאה מסמנת אותו)
         build ? h('div', { class: 'row plan-tag' },
@@ -3579,7 +3615,7 @@
   // אורנים בלי פרטים (רק בסקר שהודלק בו ריכוז אורנים): { t, label } לכל עץ, עם מה שחסר
   function pineGaps(s) {
     if (!Core.pinesOn(s)) return [];
-    return Core.sortTrees(s.trees.filter(t => Core.hasContent(t) && !t.ref && Core.isPine(t.species))).map(t => {
+    return Core.sortTrees(s.trees.filter(t => Core.hasContent(t) && !Core.pineRef(t) && Core.isPine(t.species))).map(t => {
       const list = t.pineList || [];
       if (!list.length) return { t, label: treeLabel(t) + ' · אין פרטים' };
       const bad = list.map((p, i) => Core.pineMissing(p).length ? i + 1 : 0).filter(Boolean);
