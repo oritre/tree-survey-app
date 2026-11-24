@@ -2019,9 +2019,17 @@
         mk._grp = ms; mk._one = null; mk._icon2 = iconFor;
         mk._pop = () => mk._one || ms.length === 1 ? popOf(mk._one || ms[0], mk) : h('div', { class: 'wl-popup', dir: 'rtl' },
           h('b', {}, `${ms.length} מוסדות באותה כתובת`), h('div', {}, label(ms[0].r).addr), h('div', { class: 'muted small' }, 'בחר מוסד כדי לפתוח את הסקר שלו:'),
-          ...ms.map(m => h('button', { class: 'btn block', style: 'margin-top:6px;text-align:start', onclick: e => { e.stopPropagation(); setTimeout(() => { mk._one = m; mk.setPopupContent(mk._pop()); }, 0); } }, `${m.i + 1}. ${label(m.r).name}` + (done(m.r) ? ' ✓' : ''))),
+          // (1.154, ori) כמו בחלון "קרובים": לכל מוסד שם, תגית הרשימה, סמל, גננת/מנהל וכתובת, ופתח סקר ישר מכאן
+          ...ms.map(m => { const lb = label(m.r), mt = metaIn(l, m.r), one = e => { e.stopPropagation(); setTimeout(() => { mk._one = m; mk.setPopupContent(mk._pop()); }, 0); };
+            return h('div', { class: 'wl-stop wl-pop-item', style: 'margin-top:6px' },
+              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, `${m.i + 1}. ${lb.name}` + (done(m.r) ? ' ✓' : '')), srcTag(l.name || 'ראשית', 'background:var(--accent);color:var(--accent-ink)'),
+                mt ? h('div', { class: 'small' }, mt) : null, h('div', { class: 'muted small' }, lb.addr)),
+              h('div', { class: 'stack', style: 'gap:4px' },
+                h('button', { class: 'btn primary', onclick: e => { e.stopPropagation(); map.closePopup(); openRow(l, m.r); } }, 'פתח סקר'),
+                h('button', { class: 'btn', title: 'מקום בסדר, תיקון מיקום, ניווט וקרובים', onclick: one }, 'עוד…'))); }),
+          ...[...new Set(ms.flatMap(m => nearOf(m.id).map(x => x.S)))].map(S => { const m = ms.find(x => nearOf(x.id).some(y => y.S === S)); return nearChips(m.id, 'btn wl-near-btn', () => map.closePopup()).find((_, k) => nearOf(m.id)[k].S === S); }),
           h('div', { class: 'muted small', style: 'margin-top:6px' }, 'גרירת הנקודה מזיזה את כולם יחד'));
-        mk.addTo(layer).bindPopup(() => mk._pop(), { minWidth: 220 })
+        mk.addTo(layer).bindPopup(() => mk._pop(), { minWidth: 220, maxWidth: 360 })
           .on('popupclose', () => { mk._one = null; })
           .on('dragend', e => { const p = e.target.getLatLng(); ms.forEach(m => { m.r.geo = { lat: p.lat, lon: p.lng, key: (m.r.geo && m.r.geo.key) || '', manual: true }; m.r.u = Date.now(); geo.set(m.id, m.r.geo); }); persist(); redraw(); ui.toast(ms.length > 1 ? `המיקום של ${ms.length} המוסדות עודכן` : 'המיקום של ' + label(ms[0].r).name + ' עודכן', 2500); });
         ms.forEach(m => pinOf.set(m.id, mk));
