@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.151.0';
+  const APP_VERSION = '1.152.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1120,6 +1120,11 @@
       btn.textContent = 'קורא את הקובץ…';
       const r = await Importer.parse(await b.arrayBuffer(), f.name, { photos: true });
       if (!r) throw new Error('הקובץ לא נראה כמו סקר בטיחות עצים');
+      // אקסל בלי תמונות (מקושרות מהתיקייה Pictures ונכנסות רק בהדפסה): לוקחים אותן מה-PDF באותו שם שליד האקסל
+      if (r.trees.length && !r.trees.some(t => t.images && t.images.length)) {
+        btn.textContent = 'מחפש את התמונות ב-PDF…';
+        try { await photosFromPdf(f, r); } catch (e) { r.warnings.push('התמונות מה-PDF לא נקראו: ' + e.message); }
+      }
       const yi = path.findIndex(n => /^\s*(19|20)\d\d\s*$/.test(n));
       const old = Object.assign({}, r.survey, { id: 'file', project: (yi >= 0 && path[yi + 1]) || path[path.length - 1] || '', date: r.survey.date || (f.lastModifiedDateTime || '').slice(0, 10) });
       old.trees = r.trees.map(t => Object.assign({ id: uid(), photos: [] }, t));
@@ -1134,6 +1139,19 @@
         : `נפתח סקר חדש להיום על בסיס ${f.name} (${fmtDate(old.date)}): ${s.trees.length} עצים, ${n} תמונות.`) + (w.length ? ' ' + w.join('; ') : ''), 6000);
       go('#/s/' + s.id + '/details');
     } catch (e) { toast('נכשל: ' + e.message, 5000); btn.textContent = label; btn.disabled = false; }
+  }
+
+  // ה-PDF שליד האקסל בארכיון (אותו שם, סיומת pdf): הורדה מראש מהרשימה (wlPrev:<id>) או מגוגל דרייב
+  async function photosFromPdf(f, r) {
+    const base = f.name.replace(/\.xls[xm]?$/i, '');
+    let pf = null;
+    for (const par of f.parents || []) { pf = await OD.findFile(par, base + '.pdf'); if (pf) break; }
+    if (!pf) { r.warnings.push('אין תמונות באקסל ולא נמצא PDF באותו שם'); return 0; }
+    const b = (await DB.getKV('wlPrev:' + pf.id, null)) || await OD.download(pf.id);
+    if (!b) return 0;
+    const n = await Importer.attachPdfPhotos(await b.arrayBuffer(), r.trees, r.warnings);
+    if (!n) r.warnings.push('ב-PDF לא נמצאו תמונות של עצים');
+    return n;
   }
 
   // גרסאות קודמות של סקר (נשמרות לפני עריכה ביום אחר): שחזור כסקר נפרד, או הורדה של האקסל/PDF הישן

@@ -347,5 +347,104 @@
     });
   }
 
-  root.Importer = { parse, toIsoDate, readTable };
+  // ---------- תמונות מה-PDF (1.152.0) ----------
+  // אקסל שהתמונות בו רק מקושרות (C:\Users\origr\Pictures\<n>.jpg, נכנסות רק בהדפסה) נשמר בלי תמונות.
+  // ה-PDF באותו שם שליד האקסל כן מכיל את נספח התמונות: כל תמונה גדולה בדף, והתווית (מספר העץ או המין) מעליה
+  let pdfP = null;
+  function loadPdfJs() {
+    if (pdfP) return pdfP;
+    const base = new URL('vendor/pdfjs/', root.location.href).href;
+    pdfP = import(base + 'pdf.min.mjs').then(m => { m.GlobalWorkerOptions.workerSrc = base + 'pdf.worker.min.mjs'; return m; })
+      .catch(e => { pdfP = null; throw e; });
+    return pdfP;
+  }
+  // מחזיר [{page, x, y, w, h, label, blob}] לפי סדר הנספח: דף, שורה, ומימין לשמאל
+  async function pdfAppendixImages(bytes) {
+    const pdfjs = await loadPdfJs();
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false }).promise;
+    const O = pdfjs.OPS, out = [];
+    const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+    try {
+      for (let pn = 1; pn <= doc.numPages; pn++) {
+        const page = await doc.getPage(pn);
+        const vp = page.getViewport({ scale: 1 }), V = vp.transform, W = vp.width, H = vp.height;
+        const ops = await page.getOperatorList();
+        let ctm = [1, 0, 0, 1, 0, 0]; const stack = [], imgs = [];
+        for (let k = 0; k < ops.fnArray.length; k++) {
+          const fn = ops.fnArray[k], a = ops.argsArray[k];
+          if (fn === O.save) stack.push(ctm);
+          else if (fn === O.restore) ctm = stack.pop() || [1, 0, 0, 1, 0, 0];
+          else if (fn === O.transform) ctm = mul(ctm, a);
+          else if (fn === O.paintFormXObjectBegin) { stack.push(ctm); if (a[0]) ctm = mul(ctm, a[0]); }
+          else if (fn === O.paintFormXObjectEnd) ctm = stack.pop() || [1, 0, 0, 1, 0, 0];
+          else if (fn === O.paintImageXObject || fn === O.paintInlineImageXObject || fn === O.paintJpegXObject) {
+            const m = mul(V, ctm); // ריבוע היחידה של התמונה -> נקודות בדף (y למטה)
+            const xs = [m[4], m[0] + m[4], m[2] + m[4], m[0] + m[2] + m[4]], ys = [m[5], m[1] + m[5], m[3] + m[5], m[1] + m[3] + m[5]];
+            const x = Math.min(...xs), y = Math.min(...ys), w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+            const nw = fn === O.paintInlineImageXObject ? (a[0] && a[0].width) : a[1];
+            // בלי רקע של כל הדף (נייר מכתבים), בלי פס תחתון, לוגו או חותמת
+            if (w < 70 || h < 70 || w * h > W * H * 0.4) continue;
+            imgs.push({ x, y, w, h, nw: +nw || 0 });
+          }
+        }
+        if (!imgs.length) continue;
+        const tc = await page.getTextContent();
+        const words = tc.items.filter(t => t.str && t.str.trim()).map(t => {
+          const [X, Y] = [V[0] * t.transform[4] + V[2] * t.transform[5] + V[4], V[1] * t.transform[4] + V[3] * t.transform[5] + V[5]];
+          return { s: clean(t.str), x: X, x1: X + (t.width || 0) * Math.abs(V[0]), y: Y };
+        });
+        const scale = Math.min(4, Math.max(2, ...imgs.map(i => i.nw / i.w || 0)));
+        const v2 = page.getViewport({ scale });
+        const cv = document.createElement('canvas'); cv.width = Math.round(v2.width); cv.height = Math.round(v2.height);
+        const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height);
+        await page.render({ canvasContext: cx, viewport: v2 }).promise;
+        for (const im of imgs) {
+          // התווית: טקסט ממש מעל התמונה (עד 30 נק') שכולו בתוך רוחב התמונה (בלי שורת "הסימונים על גבי התמונות…" שעוברת על כמה תמונות)
+          const lw = words.filter(t => t.y <= im.y + 3 && t.y >= im.y - 30 && t.x >= im.x - 6 && t.x1 <= im.x + im.w + 6 && !/הסימונים על גבי/.test(t.s))
+            .sort((a, b) => b.x - a.x);
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(im.w * scale)); c.height = Math.max(1, Math.round(im.h * scale));
+          c.getContext('2d').drawImage(cv, Math.round(im.x * scale), Math.round(im.y * scale), c.width, c.height, 0, 0, c.width, c.height);
+          const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
+          c.width = c.height = 0;
+          out.push({ page: pn, x: im.x, y: im.y, w: im.w, h: im.h, label: clean(lw.map(t => t.s).join(' ')), blob });
+        }
+        cv.width = cv.height = 0;
+        page.cleanup();
+      }
+    } finally { doc.destroy(); }
+    // סדר: דף, שורה (תמונות באותה שורה בהפרש של עד 20 נק'), ימין לשמאל
+    out.sort((a, b) => a.page - b.page || (Math.abs(a.y - b.y) > 20 ? a.y - b.y : b.x - a.x));
+    return out;
+  }
+  // מצמיד תמונות מה-PDF לעצים שנקראו מהאקסל: לפי התווית (מספר מדויק, מספר בטווח, מין לעץ בלי מספר);
+  // תווית שחוזרת (כמה עצים "תקין" מאותו מין) הולכת לעץ ה-k לפי הסדר בנספח
+  async function attachPdfPhotos(bytes, trees, warnings) {
+    const imgs = await pdfAppendixImages(bytes);
+    const add = (m, k, t) => { if (!m.has(k)) m.set(k, []); if (!m.get(k).includes(t)) m.get(k).push(t); };
+    const exact = new Map(), part = new Map(), bySp = new Map();
+    for (const t of trees) {
+      if (t.num) {
+        add(exact, t.num, t); add(exact, Core.normNum(t.num), t);
+        for (const n of Core.expandNum(t.num) || []) add(part, String(n), t);
+      } else if (t.species) add(bySp, clean(t.species), t);
+    }
+    const lookup = k => k ? exact.get(k) || exact.get(Core.normNum(k)) || part.get(k) || bySp.get(k) || null : null;
+    const count = new Map();
+    let n = 0, lost = 0;
+    for (const im of imgs) {
+      const list = lookup(im.label);
+      if (!list) { lost++; continue; }
+      const j = count.get(im.label) || 0; count.set(im.label, j + 1);
+      const tree = list[Math.min(j, list.length - 1)];
+      const sub = /^\d+$/.test(im.label) && Core.normNum(tree.num) !== im.label ? +im.label : null;
+      (tree.images || (tree.images = [])).push({ blob: im.blob, sub, pdf: true });
+      n++;
+    }
+    for (const t of trees) if (!t.split && t.images && new Set(t.images.map(i => i.sub).filter(x => x != null)).size > 1) t.split = true;
+    if (lost) warnings.push(`${lost} תמונות ב-PDF בלי עץ מתאים`);
+    return n;
+  }
+
+  root.Importer = { parse, toIsoDate, readTable, attachPdfPhotos, pdfAppendixImages };
 })(self);
