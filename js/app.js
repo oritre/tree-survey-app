@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.159.1';
+  const APP_VERSION = '1.160.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -310,6 +310,7 @@
   window.App = {
     version: APP_VERSION,
     pinesFile: s => pinesFile(s),
+    uploadPines: s => uploadPines(s),
     live: id => (cur && cur.id === id ? cur : null),
     // BricsCAD במחשב (1.95.0, js/cadlink.js): ייעוד שהגיע מ-TREESTABLE לסקר הפתוח
     cadUpdated(id, changed) {
@@ -3687,10 +3688,24 @@
   // ריכוז אורנים לסקר (1.116): אקסל נפרד עם פרטי המוסד וכל אורן. עולה גם לגוגל דרייב ב"סיום סקר", ליד הדוח
   // סקר אורנים (הודלק בפרטי הסקר / מהרשימה), או סקר שכבר הוזנו בו פרטי אורנים
   function hasPines(s) { return !Construction.isConstruction(s) && (Core.pinesOn(s) || (s.trees || []).some(t => (t.pineList || []).length)) && Reports.pineTrees(s).length > 0; }
-  function pinesFileName(s) { return safeName('ריכוז אורנים - ' + fileBase(s)) + '.xlsx'; }
+  // ריכוז אורנים אחד לכל המוסדות (1.160): כל סקרי האורנים מאותה רשימת עבודה (או מאותו פרויקט כשאין רשימה), האחרון לכל מוסד
+  async function pinesGroup(s) {
+    const ref = s.listRef && s.listRef.list;
+    const same = x => ref ? !!(x.listRef && x.listRef.list === ref) : !x.listRef && (x.project || '') === (s.project || '');
+    const g = (await DB.allSurveys()).filter(x => x.id !== s.id && same(x) && hasPines(x));
+    if (hasPines(s)) g.push(s);
+    return { title: ref ? (s.listRef.name || 'רשימת עבודה') : (s.project || 'ללא פרויקט'), list: Reports.latestPerPlace(g) };
+  }
   async function pinesFile(s) {
     if (!hasPines(s)) return null;
-    return { name: pinesFileName(s), blob: await Reports.surveyPinesXlsx(s) };
+    const g = await pinesGroup(s);
+    return { name: safeName('ריכוז אורנים - ' + g.title) + '.xlsx', blob: await Reports.pinesXlsx(g.list), list: g.list };
+  }
+  // נשמר בתיקיית הפרויקט בגוגל דרייב ודורס את הגרסה הקודמת, כך שיש תמיד קובץ אחד מעודכן
+  async function uploadPines(s) {
+    const f = await pinesFile(s);
+    if (!f) return '';
+    return saveSummaryToCloud(f.list, f.name, f.blob);
   }
   function pineCard(s, status) {
     const rows = Reports.pineTrees(s);
@@ -3702,20 +3717,20 @@
       try {
         await saveNow();
         const f = await pinesFile(s);
-        if (!drive) { await deliver(f.blob, f.name); status.textContent = `✓ ריכוז האורנים הורד: ${f.name}`; return; }
+        if (!drive) { await deliver(f.blob, f.name); status.textContent = `✓ ריכוז האורנים הורד: ${f.name} (${f.list.length} מוסדות)`; return; }
         if (!(await OD.connected())) { toast('צריך לחבר את גוגל דרייב בהגדרות', 4000); return; }
         status.textContent = 'שומר את ריכוז האורנים בגוגל דרייב…';
-        const where = await Sync.uploadFile(s, f.name, f.blob);
-        status.textContent = `✓ ריכוז האורנים נשמר בגוגל דרייב${where && where.path ? ` בתיקייה "${where.path}"` : ''}.`;
+        const where = await saveSummaryToCloud(f.list, f.name, f.blob);
+        status.textContent = where ? `✓ ריכוז האורנים (${f.list.length} מוסדות) נשמר בגוגל דרייב בתיקייה "${where}".` : 'השמירה בגוגל דרייב נכשלה (ראה יומן סנכרון).';
       } catch (err) { console.error(err); status.textContent = 'נכשל: ' + err.message; }
       finally { btn.disabled = false; }
     };
     return h('div', { class: 'card stack' },
       h('h2', { style: 'margin:0;font-size:20px' }, '🌲 ריכוז אורנים'),
-      h('div', { class: 'muted small' }, `${n} אורנים ב-${rows.length} שורות. אקסל נפרד מהדוח: פרטי המוסד (${Reports.codesOf(s.code).length > 1 ? 'שני סמלי המוסד' : 'סמל מוסד'}, שם, כתובת), ולכל אורן מיקום, גובה, הגזעים, נ"צ ברשת ישראל ובגוגל וקישור לגוגל מפות. עולה לבד לגוגל דרייב ב"סיום סקר".`),
+      h('div', { class: 'muted small' }, `במוסד הזה ${n} אורנים ב-${rows.length} שורות. ריכוז האורנים הוא אקסל אחד לכל המוסדות ${s.listRef ? 'של הרשימה "' + (s.listRef.name || '') + '"' : 'של הפרויקט'}: גיליון "מוסדות" (סמלים, שם, כתובת, מספר אורנים) וגיליון "כל האורנים" (מיקום, גובה, גזעים, נ"צ וקישור לגוגל מפות). מתעדכן לבד בגוגל דרייב בכל "סיום סקר", בקובץ אחד בתיקיית הפרויקט.`),
       miss ? h('div', { class: 'small', style: 'color:var(--danger)' }, `ב-${miss} אורנים חסרים פרטים (ראה "בדיקה לפני הפקה").`) : null,
       h('div', { class: 'row' },
-        h('button', { class: 'btn primary big', onclick: run(false) }, 'הורד ריכוז אורנים (אקסל)'),
+        h('button', { class: 'btn primary big', onclick: run(false) }, 'הורד ריכוז אורנים של כל המוסדות'),
         h('button', { class: 'btn big', onclick: run(true) }, '⬆ שמור בגוגל דרייב')));
   }
 

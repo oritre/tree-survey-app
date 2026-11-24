@@ -1041,9 +1041,9 @@
     try {
       for (const f of await root.App.planFiles(s)) await putReportFile(s, f.name, f.blob);
     } catch (e) { log('error', 'קובץ המדידה לא עלה: ' + e.message, s); }
-    // ריכוז אורנים (1.116): אקסל נפרד ליד הדוח, כשיש אורנים בסקר
-    if (!isBuild(s) && root.App.pinesFile) {
-      try { const f = await root.App.pinesFile(s); if (f) { await putReportFile(s, f.name, f.blob); log('ok', 'ריכוז האורנים נשמר בגוגל דרייב', s); } }
+    // ריכוז אורנים (1.160): קובץ אחד לכל המוסדות של הרשימה/הפרויקט, בתיקיית הפרויקט, נדרס בכל סיום סקר
+    if (!isBuild(s) && root.App.uploadPines) {
+      try { if (await root.App.uploadPines(s)) log('ok', 'ריכוז האורנים של כל המוסדות עודכן בגוגל דרייב', s); }
       catch (e) { log('error', 'ריכוז האורנים לא עלה: ' + e.message, s); }
     }
     // והקובץ ש-TREES ב-BricsCAD מצייר ממנו (סקרי עצים/bricscad_data), כדי שהסימונים שהועתקו לשרטוט יתעדכנו בלי אקסל (1.111.0)
