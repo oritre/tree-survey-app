@@ -15,7 +15,7 @@
     { key: 'street', label: 'רחוב ומספר', re: /כתובת|רחוב/ },
     { key: 'city', label: 'עיר', re: /^עיר|ישוב|יישוב|רשות|^מקום$/ },
     { key: 'code', label: 'סמל מוסד', re: /סמל/, safetyOnly: true },
-    { key: 'manager', label: 'מנהל/ת', re: /מנהל|אחראי|איש\s*קשר/, safetyOnly: true },
+    { key: 'manager', label: 'מנהל/ת', re: /מנהל|אחראי|איש\s*קשר|גננ/, safetyOnly: true },
     { key: 'gush', label: 'גוש', re: /^גוש/, buildOnly: true },
     { key: 'helka', label: 'חלקה', re: /^חלק/, buildOnly: true },
   ];
@@ -1581,6 +1581,10 @@
     const nameColOf = L => L.cols.find(c => /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר)/.test(c.name)) || null;
     const labelIn = (L, r) => { const v = valuesOf(L, r), nc = nameColOf(L); return { name: (nc && clean(r.cells[nc.id])) || v.siteName || 'שורה', addr: [geoStreet(v.street), fullCity(v.city)].filter(Boolean).join(', ') }; };
     const label = r => labelIn(l, r);
+    // (1.148, ori) סמל מוסד ושם המנהל/ת (גננת) ליד שם המוסד
+    // (1.148, ori) תגית בצבע הרשימה: מאיזו רשימה המוסד
+    const srcTag = (name, css) => h('span', { class: 'wl-badge wl-src', style: css }, name);
+    const metaIn = (L, r) => { const v = valuesOf(L, r); return [v.code ? 'סמל ' + v.code : '', v.manager || ''].filter(Boolean).join(' · '); };
     const geo = new Map();
     // רשימות משניות (l.sides, 1.145 ori): רשימות נפרדות לגמרי שהמוסדות שלהן מוצגים במפה, כדי לראות מי מהם קרוב לתחנה במסלול.
     // לכל רשימה מרחק "קרוב" וצבע סמנים משלה: [{ id, m, color }]. l.side / l.sideM נשארים = הראשונה, בשביל גרסאות ישנות במכשיר אחר
@@ -1642,14 +1646,23 @@
     const sideBox = h('div', { class: 'stack' });
     function showNear(id, only) {
       const r0 = l.rows.find(x => x.id === id), groups = nearOf(id).filter(x => !only || x.S === only);
+      const pk = g => g ? g.lat.toFixed(5) + ',' + g.lon.toFixed(5) : '', k0 = pk(geo.get(id));
+      const here = vis().map(x => l.rows.find(r => r.id === x)).filter(r => r && !r.deleted && (r.id === id || (k0 && pk(geo.get(r.id)) === k0)));
       const close = () => ov.remove();
       const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
         h('div', { class: 'card stack', style: 'max-width:560px;width:96%' },
           h('h2', { style: 'margin:0;font-size:20px' }, `קרובים ל${label(r0).name}`),
+          // (1.148, ori) קודם כל המוסדות של הרשימה הראשית שעל אותה נקודה במפה (אותו מספר), ואחריהם הקרובים מהרשימות המשניות
+          h('div', { class: 'stack', style: 'gap:6px;border-inline-start:6px solid var(--accent);padding-inline-start:8px' },
+            h('div', { class: 'muted small' }, here.length > 1 ? `ברשימה "${l.name || 'הראשית'}", ${here.length} מוסדות בנקודה הזו במפה` : `ברשימה "${l.name || 'הראשית'}"`),
+            ...here.map(r => { const lb = label(r), mt = metaIn(l, r), n = l.route.indexOf(r.id) + 1; return h('div', { class: 'wl-stop' },
+              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, (n ? n + '. ' : '') + lb.name + (done(r) ? ' ✓' : '')), srcTag(l.name || 'ראשית', 'background:var(--accent);color:var(--accent-ink)'), mt ? h('div', { class: 'small' }, mt) : null, h('div', { class: 'muted small' }, lb.addr)),
+              h('button', { class: 'btn', onclick: () => { close(); jumpTo(r.id); } }, 'במפה'),
+              h('button', { class: 'btn primary', onclick: () => { close(); openRow(l, r); } }, 'פתח סקר')); })),
           ...groups.map(({ S, rs }) => h('div', { class: 'stack', style: `gap:6px;border-inline-start:6px solid ${colOf(S)};padding-inline-start:8px` },
             h('div', { class: 'muted small' }, `מהרשימה "${S.L.name}", עד ${mOf(S)} מ' מהתחנה`),
             ...rs.map(r => { const lb = labelIn(S.L, r), d = Math.round(km(geo.get(id), S.geo.get(r.id)) * 1000); return h('div', { class: 'wl-stop side', style: `border-color:${colOf(S)}` },
-              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, lb.name), h('div', { class: 'muted small' }, lb.addr + (d < 15 ? ' · באותו מקום' : ` · ${d} מ'`))),
+              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, lb.name), srcTag(S.L.name || 'רשימה', chipCss(S)), metaIn(S.L, r) ? h('div', { class: 'small' }, metaIn(S.L, r)) : null, h('div', { class: 'muted small' }, lb.addr + (d < 15 ? ' · באותו מקום' : ` · ${d} מ'`))),
               h('button', { class: 'btn', onclick: () => { close(); jumpSide(S, r.id); } }, 'במפה'),
               h('button', { class: 'btn primary', onclick: () => { close(); openRow(S.L, r, true); } }, 'פתח סקר')); }))),
           only && nearOf(id).length > 1 ? h('button', { class: 'btn', onclick: () => { close(); showNear(id); } }, 'הצג קרובים מכל הרשימות') : null,
@@ -1893,7 +1906,7 @@
         const { id, r, g, i } = m, lb = label(r);
         const mv = pos => { if (moveInRoute(l, id, pos)) { persist(); map.closePopup(); redraw(); } };
         return h('div', { class: 'wl-popup', dir: 'rtl' },
-          h('b', {}, `${i + 1}. ${lb.name}`), h('div', {}, lb.addr), g.approx ? h('i', {}, approxTxt(g)) : null,
+          h('b', {}, `${i + 1}. ${lb.name}`), metaIn(l, r) ? h('div', { class: 'small' }, metaIn(l, r)) : null, h('div', {}, lb.addr), g.approx ? h('i', {}, approxTxt(g)) : null,
           h('div', { class: 'row', style: 'gap:6px;align-items:center;margin-top:6px' }, 'מקום בסדר:',
             rnumInput(l, id, () => { persist(); map.closePopup(); redraw(); }),
             h('button', { class: 'btn', title: 'מוקדם יותר', disabled: i === 0 ? true : null, onclick: () => mv(i) }, '↑'),
