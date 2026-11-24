@@ -281,13 +281,14 @@
     return s => {
       for (const f of fieldsOf(l)) {
         if (!v[f.key]) continue;
+        if (f.key === 'hood' && !hoodOn(l)) continue;
         if (fromPrev && (l.map[f.key] || {}).prev && clean(s[f.key])) continue;
         // שני סמלי מוסד בתא אחד: שניהם נכנסים לדוח, מופרדים בפסיק
         s[f.key] = f.key === 'code' && root.Reports ? root.Reports.codeText(v[f.key]) : v[f.key];
       }
       if (l.project) s.project = l.project;
       // (1.155) שכונה: מהעמודה, ואם אין ברשימה הזו מהרשימות האחרות (לפי סמל או כתובת)
-      if (!clean(s.hood) && cache && l.type !== 'construction') { const ix0 = hoodIx; if (ix0) { const hh = hoodLookup(l, r, ix0); if (hh) s.hood = hh; } }
+      if (!clean(s.hood) && cache && hoodOn(l)) { const ix0 = hoodIx; if (ix0) { const hh = hoodLookup(l, r, ix0); if (hh) s.hood = hh; } }
       // שורה שכתוב בה "אורנים" (למשל בהערות): הסקר נפתח כסקר אורנים (חלון פרטי אורנים, תזכורות, אקסל ריכוז)
       if (l.type !== 'construction' && Object.values(r.cells || {}).some(v => /(^|[\s,;(])[הו]?או?רני?ם/.test(String(v || '')))) s.pinesMode = true;
       if ((l.repl || []).length) s.nameRepl = l.repl;
@@ -402,8 +403,10 @@
     const a = addrKey(l, r);
     return (a && ix.addr.has(a) && ix.addr.get(a).h) || '';
   }
+  // (1.155.1, ori) תיקייה לפי שכונה דולקת לכל רשימה בנפרד (l.hoodOn). בלי בחירה: דולקת ברשימות של ירושלים
+  const hoodOn = l => !!l && l.type !== 'construction' && (l.hoodOn != null ? !!l.hoodOn : /ירושל/.test(clean(l.project) + ' ' + clean(l.name)));
   async function ensureHood(l) {
-    if (l.type === 'construction') return false;
+    if (!hoodOn(l)) return false;
     l.map = l.map || {};
     let changed = false;
     if (!colsOf(l.map.hood).length) {
@@ -431,7 +434,7 @@
   const allHoods = async () => [...new Set((await live()).flatMap(L => L.rows.filter(r => !r.deleted).map(r => clean(valuesOf(L, r).hood)).filter(Boolean)))].sort((a, b) => a.localeCompare(b, 'he'));
   // סקרים קיימים (גם שנעשו לפני 1.155): מקבלים את השכונה מהשורה, והקבצים בדרייב עוברים לתיקיית השכונה
   async function hoodToSurveys(l, local) {
-    if (l.type === 'construction') return;
+    if (!hoodOn(l)) return;
     for (const r of l.rows) {
       if (r.deleted || !r.sid) continue;
       const s = local.get(r.sid);
@@ -444,6 +447,14 @@
       Sync.relocate(s).then(n => { if (n) U().toast(`${n} קבצים של ${s.siteName || 'הסקר'} הועברו לתיקייה ${h}`, 3000); }).catch(() => {});
     }
   }
+
+  // (1.155.1) בכל הפעלה (ואחרי סנכרון הרשימות): שכונה לסקרים שכבר נעשו מרשימות שהשכונה דולקת בהן, והעברת הקבצים
+  async function autoHoods() {
+    if (!root.DB || !root.Sync) return;
+    const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
+    for (const L of await live()) if (hoodOn(L)) { await ensureHood(L).catch(() => {}); await hoodToSurveys(L, local).catch(() => {}); }
+  }
+  setTimeout(() => { sync(false).catch(() => {}).then(autoHoods).catch(() => {}); }, 6000);
 
   // ---------- סטטוס מוסד: "לא קיים" / "לבדיקה" (1.155, ori) ----------
   // r.flag = 'gone' (יורד מהמפה ומהמסלול) או 'check' (נשאר במפה בצהוב, דורש התייחסות), r.flagNote = מה לבדוק.
@@ -1248,6 +1259,14 @@
           h('span', {}, '📁 תיקייה בדרייב לחיפוש סקרים קודמים: ', h('b', {}, l.folder ? l.folder.name : 'הארכיון הרגיל')),
           h('button', { class: 'btn', onclick: () => pickListFolder(l, () => renderList(l)) }, l.folder ? 'החלף' : 'בחר תיקייה'),
           l.folder ? h('button', { class: 'btn', onclick: async () => { delete l.folder; await save(l); renderList(l); } }, 'הארכיון הרגיל') : null),
+        // (1.155.1) תיקייה לפי שכונה: דולק/כבוי לרשימה הזו
+        l.type === 'construction' ? null : h('label', { class: 'row small', style: 'gap:8px;align-items:center' },
+          h('input', { type: 'checkbox', checked: hoodOn(l), onchange: async e => {
+            l.hoodOn = e.target.checked; await save(l);
+            U().toast(l.hoodOn ? 'מעכשיו כל סקר מהרשימה נשמר בתיקייה של השכונה שלו (גם סקרים שכבר נעשו)' : 'סקרים חדשים מהרשימה יישמרו ישר בתיקיית הפרויקט (סקרים קיימים נשארים במקומם)', 4000);
+            renderList(l);
+          } }),
+          '📁 תיקייה לפי שכונה בתוך תיקיית הפרויקט' + (hoodOn(l) && colsOf((l.map || {}).hood).length ? ` (עמודה: ${(l.cols.find(c => c.id === l.map.hood.col) || {}).name || 'שכונה'})` : hoodOn(l) ? ' (לא נמצאה עמודת שכונה, ולא נמצאו שכונות לפי סמל ברשימות האחרות)' : '')),
         missing.length ? h('div', { class: 'card small', style: 'background:#fff2cc;color:#5a4300' }, `⚠ עוד לא נבחרה עמודה ל: ${missing.join(', ')}. לחץ על החץ ▾ בכותרת של העמודה ובחר "העמודה הזו היא", או ב"שיוך עמודות".`) : null,
         dayBox, chipsBox,
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' }, q, qInfo, widthBox),
@@ -2535,6 +2554,25 @@
   root.WorkLists = { render, sync,
     // (1.155) מתוך מסך הסקר: שיוך לרשימות/תיקייה, וסימון המוסד ברשימה
     assign: (s, after) => assignDialog(s, after),
+    // (1.155.1) הצעת שכונה לסקר: מהשורה ברשימה, ואם אין לפי סמל המוסד או הכתובת ברשימות שהשכונה דולקת בהן
+    suggestHood: async s => {
+      if (!s || Construction.isConstruction(s)) return null;
+      const lists = await live();
+      const rows = lists.flatMap(L => L.rows.filter(r => !r.deleted && r.sid === s.id).map(r => ({ L, r })));
+      if (s.listRef) { const L = lists.find(x => x.id === s.listRef.list), r = L && L.rows.find(x => x.id === s.listRef.row); if (r) rows.unshift({ L, r }); }
+      for (const { L, r } of rows) if (hoodOn(L)) { const hh = await hoodOfRow(L, r); if (hh) return { hood: hh, list: L.name, auto: true }; }
+      const codes = Core.codesOf(s.code || '').map(c => c.replace(/\D+/g, '')).filter(c => c.length >= 3);
+      const ak = norm(s.street).split(' ').filter(Boolean).sort().join(' ') + '|' + norm(s.city);
+      for (const L of lists) {
+        if (!hoodOn(L)) continue;
+        for (const r of L.rows) {
+          if (r.deleted) continue;
+          const hh = clean(valuesOf(L, r).hood); if (!hh) continue;
+          if (codeKeys(L, r).some(c => codes.includes(c)) || (/\d/.test(ak) && addrKey(L, r) === ak)) return { hood: hh, list: L.name, auto: false };
+        }
+      }
+      return null;
+    },
     flagRow: async (lid, rid, after) => { const L = await byId(lid), r = L && L.rows.find(x => x.id === rid && !x.deleted); if (!r) { U().toast('השורה לא נמצאה ברשימה', 3000); return; } flagDialog(L, r, after); },
     _t: { ensureHood, hoodIndex, hoodLookup, setFlag, searchAll, geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
 })(window);

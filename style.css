@@ -786,3 +786,7 @@ body:has(> .modal) .wl-mapview { visibility: hidden; }
 .wl-flag-opt.gone { border-color: #8a8a8a; }
 .wl-flag-opt.on { box-shadow: 0 0 0 3px var(--accent); }
 .wl-paths { background: var(--surface-2, #f3f3f3); border-radius: 10px; padding: 8px 10px; overflow-wrap: anywhere; }
+
+/* (1.155.1) דף ראשי: חלוקה לפי שכונה בתוך פרויקט */
+.hood-head { font-size: 16px; margin: 6px 2px 6px; color: var(--muted); font-weight: 700; }
+.hood-group + .hood-group { margin-top: 4px; }
