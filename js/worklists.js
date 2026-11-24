@@ -836,6 +836,10 @@
       if (f) await importFile(f);
     };
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
+    // (1.157, ori) כפתור מפה רק לרשימה ראשית: רשימה שמשויכת כמשנית לרשימה אחרת (ולא נפתחה לה מפה משלה) בלי כפתור
+    const sideOf = new Map();
+    lists.forEach(o => (Array.isArray(o.sides) ? o.sides.map(c => c && c.id) : o.side ? [o.side] : []).forEach(id => { if (id && id !== o.id && !sideOf.has(id)) sideOf.set(id, o); }));
+    const isMain = l => !sideOf.has(l.id) || !!l.mapAt || (Array.isArray(l.sides) && l.sides.length > 0);
     const active = lists.filter(l => !l.finished && !l.offHome), finished = lists.filter(l => l.finished), hidden = lists.filter(l => !l.finished && l.offHome);
     // חיפוש בכל הרשימות (גם שהסתיימו או הוסרו), לפי שם, פרויקט, קובץ או כל תא, כמו "חיפוש סקרים בענן"
     const sq = h('input', { class: 'in', type: 'search', placeholder: 'חיפוש ברשימות: שם, פרויקט, מוסד, סמל, עיר…', style: 'font-size:17px', value: listQuery });
@@ -869,7 +873,9 @@
           h('div', { class: 't' }, l.name || 'רשימה'),
           h('div', { class: 'muted small' }, [l.project ? 'פרויקט ' + l.project : null, `${rs.length} מוסדות`, `${rs.filter(r => r.sid).length} נפתחו`, doneN ? `✓ ${doneN} הסתיימו` : null, l.finished ? 'הרשימה הסתיימה ' + new Date(l.finished).toLocaleDateString('he-IL') : null].filter(Boolean).join(' · ')),
           allDone && !l.finished ? h('div', { class: 'small', style: 'font-weight:700;color:var(--accent);margin-top:4px' }, '✓ כל המוסדות ברשימה הסתיימו') : null,
+          !isMain(l) ? h('div', { class: 'muted small', style: 'margin-top:4px' }, `🗺 מוצגת במפה של "${sideOf.get(l.id).name || 'רשימה'}"`) : null,
           h('div', { class: 'row', style: 'gap:6px;margin-top:8px;flex-wrap:wrap' },
+            isMain(l) && !l.finished ? act('🗺 מפה', 'מסלול ומפה של הרשימה', () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/route'), 'primary') : null,
             l.finished || l.offHome
               ? act('↩ החזר לפעילות', 'החזר לרשימות הפעילות', () => setState(l, { finished: null, offHome: null }), 'primary')
               : [act('✓ סיום רשימה', 'הרשימה עוברת ל"רשימות שהסתיימו"', () => setState(l, { finished: Date.now() }), allDone ? 'primary' : ''),
@@ -2180,6 +2186,8 @@
     const linksBox = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
     let map = null, layer = null, pickAfter = null, userMoved = false, extras = null;
     const persist = () => save(l);
+    // (1.157, ori) מי שפתח לה מפה משלה היא רשימה ראשית: כפתור המפה במסך הרשימות יופיע לה גם אם היא משויכת כמשנית לרשימה אחרת
+    if (!l.mapAt) { l.mapAt = Date.now(); persist(); }
     // יום עבודה שנבחר (עמודת "יום"): במפה, ברשימה ובקישורים רק התחנות שלו. המספרים נשארים לפי המסלול כולו
     const dc = dayCol(l), days = daysOf(l);
     let day = null;
