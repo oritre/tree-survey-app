@@ -1886,7 +1886,9 @@
             h('button', { class: 'btn', title: 'מוקדם יותר', disabled: i === 0 ? true : null, onclick: () => mv(i) }, '↑'),
             h('button', { class: 'btn', title: 'מאוחר יותר', disabled: i === l.route.length - 1 ? true : null, onclick: () => mv(i + 2) }, '↓'),
             h('button', { class: 'btn', title: 'שים אחרי התחנה שנבחרה קודם', onclick: () => { if (pickAfter && pickAfter !== id) { const k = l.route.indexOf(pickAfter); mv(k + (k < i ? 2 : 1)); pickAfter = null; } else { pickAfter = id; ui.toast('עכשיו לחץ על התחנה שתבוא מיד אחרי זו, ובחר "שים אחרי…"', 3500); map.closePopup(); } } }, pickAfter && pickAfter !== id ? 'שים אחרי ' + label(l.rows.find(x => x.id === pickAfter)).name : '📌 מה בא אחרי זו?')),
-          h('div', { class: 'row', style: 'gap:10px;align-items:center;margin-top:6px' },
+          h('div', { class: 'row', style: 'gap:10px;align-items:center;margin-top:6px;flex-wrap:wrap' },
+            // (1.146, ori) פתיחת הסקר ישר מהנקודה במפה, כמו "פתח סקר" בטבלה
+            h('button', { class: 'btn primary', onclick: () => { map.closePopup(); openRow(l, r); } }, done(r) ? 'פתח סקר ✓' : 'פתח סקר'),
             h('button', { class: 'btn', onclick: () => { map.closePopup(); fixLoc(r); } }, '📍 תקן מיקום'),
             h('a', { href: navUrl(r), target: '_blank', rel: 'noopener' }, 'נווט בוויז')),
           h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם לגרור את הנקודה'),
@@ -1911,7 +1913,7 @@
         const mk = L.marker([g.lat, g.lon], { icon: iconFor(false), draggable: g.src !== 'gps' });
         mk._grp = ms; mk._one = null; mk._icon2 = iconFor;
         mk._pop = () => mk._one || ms.length === 1 ? popOf(mk._one || ms[0], mk) : h('div', { class: 'wl-popup', dir: 'rtl' },
-          h('b', {}, `${ms.length} מוסדות באותה כתובת`), h('div', {}, label(ms[0].r).addr),
+          h('b', {}, `${ms.length} מוסדות באותה כתובת`), h('div', {}, label(ms[0].r).addr), h('div', { class: 'muted small' }, 'בחר מוסד כדי לפתוח את הסקר שלו:'),
           ...ms.map(m => h('button', { class: 'btn block', style: 'margin-top:6px;text-align:start', onclick: e => { e.stopPropagation(); setTimeout(() => { mk._one = m; mk.setPopupContent(mk._pop()); }, 0); } }, `${m.i + 1}. ${label(m.r).name}` + (done(m.r) ? ' ✓' : ''))),
           h('div', { class: 'muted small', style: 'margin-top:6px' }, 'גרירת הנקודה מזיזה את כולם יחד'));
         mk.addTo(layer).bindPopup(() => mk._pop(), { minWidth: 220 })
