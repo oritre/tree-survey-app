@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.162.0';
+  const APP_VERSION = '1.162.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1578,7 +1578,7 @@
       const blob = await Reports.pinesXlsx(list);
       await deliver(blob, name);
       const tot = rows[rows.length - 1];
-      let m = `✓ האקסל הורד: ${list.length} מוסדות, ${tot[tot.length - 6]} אורנים.`;
+      let m = `✓ האקסל הורד: ${list.length} מוסדות, ${tot[tot.length - 4]} אורנים.`;
       const saved = await saveSummaryToCloud(list, name, blob);
       if (saved) m += ` נשמר גם בגוגל דרייב: ${saved}.`;
       return m;
@@ -3736,7 +3736,7 @@
     };
     return h('div', { class: 'card stack' },
       h('h2', { style: 'margin:0;font-size:20px' }, '🌲 ריכוז אורנים'),
-      h('div', { class: 'muted small' }, `במוסד הזה ${n} אורנים ב-${rows.length} שורות. ריכוז האורנים הוא אקסל אחד לכל המוסדות ${s.listRef ? 'של הרשימה "' + (s.listRef.name || '') + '"' : 'של הפרויקט'}: גיליון "מוסדות" (סמלים, שם, כתובת, מספר אורנים, גובה וקוטר ממוצעים ופירוט לכל אורן) וגיליון "כל האורנים" (מיקום, גובה, גזעים, נ"צ וקישור לגוגל מפות). מתעדכן לבד בגוגל דרייב בכל "סיום סקר", בקובץ אחד בתיקיית הפרויקט.`),
+      h('div', { class: 'muted small' }, `במוסד הזה ${n} אורנים ב-${rows.length} שורות. ריכוז האורנים הוא אקסל אחד לכל המוסדות ${s.listRef ? 'של הרשימה "' + (s.listRef.name || '') + '"' : 'של הפרויקט'}: גיליון "מוסדות" (סמלים, שם, כתובת, מספר אורנים, גובה וקוטר ממוצעים) וגיליון "כל האורנים" (מיקום, גובה, גזעים, נ"צ וקישור לגוגל מפות). מתעדכן לבד בגוגל דרייב בכל "סיום סקר", בקובץ אחד בתיקיית הפרויקט.`),
       miss ? h('div', { class: 'small', style: 'color:var(--danger)' }, `ב-${miss} אורנים חסרים פרטים (ראה "בדיקה לפני הפקה").`) : null,
       h('div', { class: 'row' },
         h('button', { class: 'btn primary big', onclick: run(false) }, 'הורד ריכוז אורנים של כל המוסדות'),
