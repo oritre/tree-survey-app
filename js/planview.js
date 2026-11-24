@@ -43,7 +43,7 @@
     const undo = [];
     // הייעוד בפועל (ידני, או אוטומטי לפי הגדרות הסקר) לצבע העץ
     const effSt = t => root.Construction ? root.Construction.statusOf(t, root.Construction.settingsOf(s)) : (t.status || '');
-    let gpsWatch = null, gpsPos = null;
+    let gpsWatch = null, gpsPos = null; const gpsKey = {};
 
     // ---------- מסך ----------
     const mapEl = h('div', { class: 'map-box plan-map' });
@@ -1445,7 +1445,7 @@
       else add();
     }
     function stopGps() {
-      if (gpsWatch != null) navigator.geolocation.clearWatch(gpsWatch);
+      if (gpsWatch != null) { gpsWatch(); root.Geo.release(gpsKey); }
       gpsWatch = null; gpsPos = null; compass = null; setFollow(false);
       if (onOrient) { root.removeEventListener('deviceorientationabsolute', onOrient); root.removeEventListener('deviceorientation', onOrient); onOrient = null; }
       gpsBtn.classList.remove('on');
@@ -1456,13 +1456,19 @@
         if (!follow && gpsPos) { setFollow(true); map.panTo(gpsLL()); return; }
         stopGps(); redraw(); if (mode === 'xy') renderXySheet(); return;
       }
-      if (!navigator.geolocation) { toast('אין GPS בדפדפן הזה'); return; }
+      if (!navigator.geolocation || !root.Geo) { toast('אין GPS בדפדפן הזה'); return; }
       gpsBtn.classList.add('on'); setFollow(true);
       startCompass();
       let first = true;
-      gpsWatch = navigator.geolocation.watchPosition(p => {
-        const c = p.coords;
-        gpsPos = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, hd: c.heading, spd: c.speed };
+      // GPS משותף (js/geo.js): כשהסקר פתוח הוא כבר חם, אז הנקודה מופיעה מיד
+      const onFix = (f, err) => {
+        if (!f) {
+          // הפסקה רגעית בקליטה כשכבר יש מיקום: ממשיכים בשקט עם המיקום האחרון
+          if (err && err.code === 1) { toast('צריך לאשר גישה למיקום בדפדפן', 3000); stopGps(); redraw(); }
+          else if (err && !gpsPos) toast('אין מיקום כרגע', 3000);
+          return;
+        }
+        gpsPos = { lat: f.lat, lon: f.lon, acc: f.acc, hd: f.hd, spd: f.spd };
         const ll = gpsLL();
         if (first) {
           first = false;
@@ -1475,11 +1481,10 @@
         if (follow) map.panTo(ll, { animate: true, duration: 0.5 });
         if (mode === 'xy') renderXySheet();
         redraw();
-      }, err => {
-        // הפסקה רגעית בקליטה כשכבר יש מיקום: ממשיכים בשקט עם המיקום האחרון
-        if (err.code === 1) { toast('צריך לאשר גישה למיקום בדפדפן', 3000); stopGps(); redraw(); }
-        else if (!gpsPos) toast('אין מיקום כרגע', 3000);
-      }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+      };
+      gpsWatch = root.Geo.on(onFix); root.Geo.hold(gpsKey);
+      const f0 = root.Geo.last(10000);
+      if (f0) onFix(f0);
     }
 
     function legendHtml() {

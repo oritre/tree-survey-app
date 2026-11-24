@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.157.0';
+  const APP_VERSION = '1.158.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -236,11 +236,11 @@
         const next = await onOpenSurvey(cur);
         if (next !== cur) { cur = null; go('#/s/' + next.id + '/details'); return; }
         migrateSite(cur);
-        for (const t of cur.trees) { delete t._gpsBusy; Core.normalizePhotos(t); }
+        for (const t of cur.trees) { delete t._gpsBusy; delete t._gpsRefine; delete t._gpsAcc; Core.normalizePhotos(t); }
         refreshSuggestions();
       }
       tab = m[2] || 'trees';
-      gpsWarm(tab === 'trees');
+      gpsWarm(true);
       if (m[3]) curTreeId = decodeURIComponent(m[3]);
       if (!cur.trees.find(t => t.id === curTreeId)) curTreeId = (Core.sortTrees(cur.trees)[0] || {}).id || null;
       return renderSurvey();
@@ -2843,10 +2843,11 @@
     if (i) { p.itmX = i.x; p.itmY = i.y; } else { delete p.itmX; delete p.itmY; }
   }
   const gmapsUrl = (lat, lon) => `https://www.google.com/maps/search/?api=1&query=${(+lat).toFixed(6)},${(+lon).toFixed(6)}`;
-  function myPos() {
-    return new Promise(r => navigator.geolocation
-      ? navigator.geolocation.getCurrentPosition(p => r(p), () => r(null), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 })
-      : r(null));
+  // מיקום מה-GPS המשותף (js/geo.js): מיידי כשה-GPS חם ומדויק, אחרת עד כמה שניות. מחזיר בצורה של GeolocationPosition
+  async function myPos(o) {
+    if (!window.Geo) return null;
+    const b = await Geo.get(Object.assign({ good: 8, ok: 20, settle: 4000, timeout: 20000 }, o || {}));
+    return b ? { coords: { latitude: b.lat, longitude: b.lon, accuracy: b.acc }, timestamp: b.t } : null;
   }
 
   // (1.151) המיקום שלי במפת סימון: נקודה כחולה + עיגול דיוק + אלומה לכיוון שאני מסתכל (מצפן, ובלי מצפן כיוון ההליכה),
@@ -2891,14 +2892,18 @@
     };
     const D = window.DeviceOrientationEvent;
     try { if (D && typeof D.requestPermission === 'function') D.requestPermission().catch(() => null).then(add); else add(); } catch (_) { add(); }
-    if (navigator.geolocation) wid = navigator.geolocation.watchPosition(p => {
-      const c = p.coords;
-      pos = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, hd: c.heading, spd: c.speed };
+    // GPS משותף: אם הוא כבר חם, הנקודה מופיעה מיד
+    const key = {};
+    const onFix = f => {
+      if (!f) return;
+      pos = f;
       if (st.follow && map) { st.follow = false; map.setView([pos.lat, pos.lon], Math.max(map.getZoom(), 19)); }
       redraw();
-    }, () => {}, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+    };
+    if (window.Geo) { pos = Geo.last(15000); wid = Geo.on(onFix); Geo.hold(key); }
     return {
       get pos() { return pos; },
+      follow() { st.follow = true; },
       attach(m) {
         map = m;
         const Btn = L.Control.extend({ options: { position: 'topleft' }, onAdd: () => {
@@ -2912,7 +2917,7 @@
         draw();
       },
       stop() {
-        if (wid != null) navigator.geolocation.clearWatch(wid); wid = null;
+        if (wid) { wid(); Geo.release(key); } wid = null;
         if (onOrient) { window.removeEventListener('deviceorientationabsolute', onOrient); window.removeEventListener('deviceorientation', onOrient); onOrient = null; }
         if (raf) cancelAnimationFrame(raf); map = null;
       },
@@ -2925,7 +2930,13 @@
     const me = liveMe(); // מתחיל כבר עכשיו, בתוך הלחיצה (אישור מצפן באייפון)
     try { await loadLeaflet(); } catch (e) { me.stop(); toast(e.message, 3000); return null; }
     let at = start;
-    if (!at) { const p = me.pos ? { coords: { latitude: me.pos.lat, longitude: me.pos.lon } } : await myPos(); at = p ? [p.coords.latitude, p.coords.longitude] : [31.7683, 35.2137]; }
+    // בלי נקודת התחלה: המיקום שלי עכשיו. לא מחכים ל-GPS מדויק כדי לפתוח את המפה (עד 3 שניות, אחרת המיקום האחרון שנשמר),
+    // והמפה עוברת אליי כשמגיעה מדידה
+    if (!at) {
+      const p = me.pos || (window.Geo && (await Geo.get({ good: 30, ok: 150, settle: 1500, timeout: 3000 }) || Geo.lastSaved()));
+      at = p ? [p.lat, p.lon] : [31.7683, 35.2137];
+      if (!me.pos) me.follow();
+    }
     const L = window.L;
     const mapEl = h('div', { class: 'map-box' });
     const info = h('div', { class: 'small' });
@@ -2935,7 +2946,7 @@
         h('span', { class: 'sp', style: 'font-weight:600' }, title),
         h('button', { class: 'txt', onclick: () => close() }, 'ביטול'),
         h('button', { class: 'txt', onclick: async () => {
-          const p = me.pos && me.pos.acc < 30 ? { coords: { latitude: me.pos.lat, longitude: me.pos.lon } } : await myPos();
+          const p = await myPos({ good: 10, ok: 30, settle: 2500 });
           if (!p) return toast('לא התקבל מיקום מה-GPS', 2500);
           const ll = [p.coords.latitude, p.coords.longitude];
           mk.setLatLng(ll); map.setView(ll, Math.max(map.getZoom(), 19)); upd();
@@ -3020,7 +3031,7 @@
         .concat(cur.trees.filter(x => x.lat != null && !(x.pineList || []).length).map(x => ({ lat: x.lat, lon: x.lon, label: 'עץ ' + (x.num || ''), color: '#607d8b' })));
       const gpsBtn = h('button', { class: 'btn', type: 'button', onclick: async () => {
         gpsBtn.disabled = true; gpsBtn.lastChild.textContent = 'מאתר…';
-        const r = await myPos();
+        const r = await myPos({ onProgress: b => { gpsBtn.lastChild.textContent = `מאתר… ±${Math.round(b.acc)}מ'`; } });
         gpsBtn.disabled = false; gpsBtn.lastChild.textContent = 'נ"צ כאן';
         if (!r) return toast('לא התקבל מיקום מה-GPS', 2500);
         await setPinePos(p, r.coords.latitude, r.coords.longitude, 'gps'); p.acc = Math.round(r.coords.accuracy);
@@ -3075,98 +3086,101 @@
   }
 
   // ---------- GPS ----------
+  // (1.158) כפתור הנ"צ שומר מיד ואז משפר: "נ"צ ✓ ±4מ'" מופיע ברגע שיש מיקום טוב, וכמה שניות אחר כך ממשיך למצע מדידות
+  // כל עוד עומדים במקום. מתחת לכפתורים: מצב ה-GPS עכשיו (כמה הוא מדויק), כדי לדעת מתי ללחוץ
+  function gpsLiveText() {
+    if (!window.Geo) return null;
+    const f = Geo.last(30000);
+    if (Geo.error && Geo.error.code === 1) return ['bad', 'אין הרשאת מיקום'];
+    if (!f || !Geo.running) return Geo.running ? ['wait', 'GPS מתאפס…'] : null;
+    const a = Math.round(f.acc);
+    return [a <= 6 ? 'good' : a <= 15 ? 'mid' : 'bad', `GPS ±${a} מ'`];
+  }
+  function drawGpsLive() {
+    const el = $('#gpsLive');
+    if (!el) return;
+    const v = gpsLiveText();
+    el.hidden = !v;
+    if (v) { el.className = 'gps-live ' + v[0]; el.textContent = v[1]; }
+  }
+  if (window.Geo) {
+    let lastDraw = 0;
+    Geo.on(() => { if (Date.now() - lastDraw > 700) { lastDraw = Date.now(); drawGpsLive(); } });
+    setInterval(drawGpsLive, 4000); // מדידה שהתיישנה (אין קליטה) מתעדכנת גם בלי מדידה חדשה
+  }
   function renderGps(t, box) {
     box = box || $('#gpsBox');
     if (!box || t.id !== curTreeId) return;
     const has = t.lat != null;
+    const label = t._gpsBusy ? (t._gpsAcc != null ? `מאתר… ±${Math.round(t._gpsAcc)}מ'` : 'מאתר…')
+      : has ? `נ"צ ✓${t.acc != null ? ` ±${Math.round(t.acc)}מ'` : t.gpsSrc === 'map' ? ' (מפה)' : ''}${t._gpsRefine ? ' · משפר…' : ''}` : 'נ"צ';
     // נ"צ נלקח רק בלחיצה. כשיש כבר נ"צ, לחיצה שואלת אם לעדכן
     box.replaceChildren(
       h('button', { class: 'btn big' + (has ? ' ok' : ''), disabled: t._gpsBusy ? '' : null, onclick: () => {
-        if (has && !confirm(`לעץ כבר יש נ"צ (${t.lat.toFixed(5)}, ${t.lon.toFixed(5)}). לעדכן למיקום הנוכחי?`)) return;
+        if (has && !t._gpsRefine && !confirm(`לעץ כבר יש נ"צ (${t.lat.toFixed(5)}, ${t.lon.toFixed(5)}). לעדכן למיקום הנוכחי?`)) return;
         captureGps(t);
-      } }, icon('pin'), t._gpsBusy ? 'מאתר…' : has ? `נ"צ ✓${t.acc != null ? ` ±${Math.round(t.acc)}מ'` : t.gpsSrc === 'map' ? ' (מפה)' : ''}` : 'נ"צ'),
-      h('button', { class: 'btn big', disabled: t._gpsBusy ? '' : null, onclick: () => refineOnMap(t) }, has ? '🗺 דייק במפה' : '🗺 סמן במפה'));
+      } }, icon('pin'), label),
+      h('button', { class: 'btn big', disabled: t._gpsBusy ? '' : null, onclick: () => refineOnMap(t) }, has ? '🗺 דייק במפה' : '🗺 סמן במפה'),
+      h('span', { id: 'gpsLive', class: 'gps-live', hidden: '' }));
+    drawGpsLive();
   }
 
-  // ---------- GPS ----------
-  // GPS "חם" (סקר לבנייה בלבד): כל עוד מסך העצים פתוח (והאפליקציה על המסך), המכשיר כבר מאתר ברקע. כך לחיצה על נ"צ לא מחכה
-  // שה-GPS יידלק, ויש כבר כמה מדידות מהשניות האחרונות למיצוע. נכבה ביציאה מהמסך או כשהאפליקציה ברקע (סוללה)
-  const gw = { id: null, fixes: [], subs: new Set() };
+  // GPS "חם": כל עוד סקר פתוח (כל סוגי הסקרים, כל הלשוניות) והאפליקציה על המסך, המכשיר כבר מאתר ברקע (js/geo.js).
+  // כך לחיצה על נ"צ לא מחכה שה-GPS יידלק ויתאפס. רק אם כבר אישרו מיקום: לא מקפיצים בקשת הרשאה רק מפתיחת סקר
+  const GPS_KEY = 'survey';
   async function gpsWarm(on) {
-    on = on && !!cur && Construction.isConstruction(cur); // רק בסקר לבנייה (ori). בסקר בטיחות ה-GPS נדלק רק בלחיצה
-    if (on && document.visibilityState === 'visible' && navigator.geolocation) {
-      if (gw.id != null) return;
-      // רק אם כבר אישרו מיקום: לא מקפיצים בקשת הרשאה רק מפתיחת המסך
-      try { if (navigator.permissions && (await navigator.permissions.query({ name: 'geolocation' })).state !== 'granted') return; } catch (_) {}
-      if (gw.id != null) return;
-      gw.id = navigator.geolocation.watchPosition(pos => {
-        gw.fixes.push(pos);
-        const old = Date.now() - 20000;
-        while (gw.fixes.length && gw.fixes[0].timestamp < old) gw.fixes.shift();
-        for (const f of [...gw.subs]) f(pos);
-      }, () => {}, { enableHighAccuracy: true, maximumAge: 0 });
-    } else if (!on && gw.id != null) {
-      navigator.geolocation.clearWatch(gw.id); gw.id = null; gw.fixes = [];
-    }
-  }
-  document.addEventListener('visibilitychange', () => gpsWarm(!!cur && tab === 'trees' && document.visibilityState === 'visible'));
-  // מיקום מכמה מדידות: ממוצע משוקלל (מדידה מדויקת שוקלת יותר) של המדידות שקרובות בדיוק לטובה ביותר.
-  // כשעומדים במקום, הממוצע מבטל חלק מהקפיצות של ה-GPS ומדויק יותר ממדידה בודדת
-  function blendFixes(fixes) {
-    const bestAcc = Math.min(...fixes.map(p => p.coords.accuracy));
-    const use = fixes.filter(p => p.coords.accuracy <= Math.max(bestAcc * 1.5, bestAcc + 2));
-    let w = 0, lat = 0, lon = 0;
-    for (const p of use) { const k = 1 / Math.max(1, p.coords.accuracy) ** 2; w += k; lat += k * p.coords.latitude; lon += k * p.coords.longitude; }
-    return { lat: lat / w, lon: lon / w, acc: bestAcc, n: use.length, time: Math.max(...use.map(p => p.timestamp)) };
+    if (!window.Geo) return;
+    if (!(on && cur)) return Geo.release(GPS_KEY);
+    if ((await Geo.permission()) === 'granted' && cur) Geo.hold(GPS_KEY);
   }
 
-  // נ"צ לעץ: מדידות מ-3 השניות האחרונות (מה-GPS החם) ומה שמגיע עכשיו. מסיימים מיד כשיש 3 מדידות טובות (עד 6 מ'),
-  // אחרת אחרי 5 שניות עם מה שיש. GPS שרק נדלק: מחכים למדידה הראשונה עד 30 שניות
-  function captureGps(t, quiet) {
-    if (!navigator.geolocation) { toast('אין GPS בדפדפן הזה'); return; }
-    t._gpsBusy = true; renderGps(t);
+  // נ"צ לעץ. שלב 1: מיקום מהיר (מדידות מ-3 השניות האחרונות של ה-GPS החם): נשמר מיד כשיש עד 12 מ', אחרי 3 שניות עד 25 מ',
+  // ואחרי 30 שניות מה שיש. שלב 2 (משפר): עד 10 שניות נוספות ממצעים מדידות חדשות כל עוד לא זזים מהמקום ולא לחצו נ"צ לעץ אחר,
+  // ומעדכנים את העץ כשהדיוק משתפר. נגמר מוקדם כשיש 5 מדידות טובות (עד 5 מ')
+  let gpsRefining = null;
+  async function captureGps(t, quiet) {
+    if (!navigator.geolocation || !window.Geo) { toast('אין GPS בדפדפן הזה'); return; }
+    if (gpsRefining) gpsRefining(); // לחיצה חדשה (גם באותו עץ) עוצרת את השיפור הקודם
     const sv = cur; // הסקר של העץ (אם בינתיים עברו לסקר אחר, הנ"צ נשמר בכל זאת בסקר הנכון)
-    const started = Date.now();
-    const fixes = gw.fixes.filter(p => started - p.timestamp < 3000);
-    let done = false, wid = null;
-    const good = () => fixes.filter(p => p.coords.accuracy <= 6).length >= 3;
-    const finish = () => {
-      if (done) return; done = true;
-      if (wid != null) navigator.geolocation.clearWatch(wid);
-      gw.subs.delete(onFix);
-      t._gpsBusy = false;
-      if (fixes.length) {
-        const b = blendFixes(fixes);
-        t.lat = b.lat; t.lon = b.lon; t.acc = b.acc; t.gpsTime = b.time; delete t.gpsSrc;
-        if (cur === sv) { saveSoon(); refreshRow(t); } else if (sv && sv.trees.includes(t)) DB.putSurvey(sv).catch(saveFailed);
-      }
-      renderGps(t);
-      gpsWarm(!!cur && tab === 'trees'); // אחרי אישור ההרשאה בלחיצה הראשונה: מכאן ה-GPS נשאר חם
+    const save = b => {
+      t.lat = b.lat; t.lon = b.lon; t.acc = Math.round(b.acc * 10) / 10; t.gpsTime = b.t; delete t.gpsSrc;
+      if (cur === sv) { saveSoon(); refreshRow(t); } else if (sv && sv.trees.includes(t)) DB.putSurvey(sv).catch(saveFailed);
     };
-    function onFix(pos) {
-      if (done) return;
-      const first = !fixes.length;
-      fixes.push(pos);
-      if (good()) finish();
-      // המדידה הראשונה הגיעה מאוחר (GPS שרק נדלק): עוד 2 שניות לשיפור ומסיימים
-      else if (first && Date.now() - started > 5000) setTimeout(finish, 2000);
+    t._gpsBusy = true; delete t._gpsAcc; renderGps(t);
+    const b = await Geo.get({ fresh: 3000, good: 12, ok: 25, settle: 3000, timeout: 30000,
+      onProgress: p => { if (t._gpsBusy && t._gpsAcc !== p.acc) { t._gpsAcc = p.acc; renderGps(t); } } });
+    t._gpsBusy = false; delete t._gpsAcc;
+    gpsWarm(!!cur); // אחרי אישור ההרשאה בלחיצה הראשונה: מכאן ה-GPS נשאר חם
+    if (!b) {
+      renderGps(t);
+      const denied = Geo.error && Geo.error.code === 1;
+      if (!quiet || denied) toast(denied ? 'צריך לאשר גישה למיקום (מיקום מדויק) לדפדפן' : 'לא הצלחתי לקבל מיקום. נסה שוב בשטח פתוח, או סמן במפה.', 4000);
+      return;
     }
-    if (good()) return finish();
-    if (gw.id != null) gw.subs.add(onFix);
-    else {
-      wid = navigator.geolocation.watchPosition(onFix, err => {
-        if (!fixes.length && !done) {
-          done = true; t._gpsBusy = false; renderGps(t); navigator.geolocation.clearWatch(wid);
-          if (!quiet || err.code === 1) toast(err.code === 1 ? 'צריך לאשר גישה למיקום בדפדפן' : 'לא הצלחתי לקבל מיקום. נסה שוב בשטח פתוח.');
-        }
-      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
-    }
-    setTimeout(() => { if (fixes.length) finish(); }, 5000);
-    setTimeout(() => {
-      if (done) return;
-      if (!fixes.length && !quiet) toast('לא הצלחתי לקבל מיקום. נסה שוב בשטח פתוח.');
-      finish();
-    }, 30000);
+    save(b);
+    if (b.acc > 25) toast(`הנ"צ נשמר בדיוק נמוך (±${Math.round(b.acc)} מ'). אפשר לדייק במפה`, 3500);
+    // שלב 2: שיפור
+    const anchor = { lat: b.lat, lon: b.lon };
+    const pool = Geo.recent(3000).filter(f => Geo.dist(f, anchor) <= Math.max(8, 2 * f.acc));
+    let n = pool.length, stopT = 0, off = null;
+    const stop = () => {
+      if (gpsRefining !== stop) return;
+      gpsRefining = null; if (off) off(); clearTimeout(stopT); Geo.release(stop);
+      delete t._gpsRefine; renderGps(t);
+    };
+    gpsRefining = stop; t._gpsRefine = true; Geo.hold(stop); renderGps(t);
+    off = Geo.on(f => {
+      if (!f) return;
+      // זזו מהמקום (הולכים לעץ הבא): עוצרים, הנ"צ שכבר נשמר נשאר
+      if ((f.spd != null && f.spd > 0.8) || Geo.dist(f, anchor) > Math.max(8, 2 * f.acc, 2 * b.acc)) return stop();
+      if (t.gpsSrc === 'map' || t.lat == null) return stop(); // בינתיים סימנו במפה או מחקו
+      pool.push(f); n++;
+      const nb = Geo.blend(pool);
+      if (nb && (nb.acc < t.acc || nb.n > 1)) save(nb);
+      renderGps(t);
+      if (pool.filter(x => x.acc <= 5).length >= 5) stop();
+    });
+    stopT = setTimeout(stop, 10000);
   }
 
   // ---------- תמונות ----------
