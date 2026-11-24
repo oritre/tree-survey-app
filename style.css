@@ -759,3 +759,4 @@ img.docv-page { object-fit: contain; }
 .wl-geo-count .wl-badge.busy { font-weight: 700; }
 /* (1.147) ori: בטאבלט המפה כיסתה את חלון "מוסדות קרובים". מסתירים את מפת המסלול כשחלון פתוח מעליה */
 body:has(> .modal) .wl-mapview { visibility: hidden; }
+.wl-badge.wl-src { margin: 0 6px; font-size: 12px; padding: 1px 8px; vertical-align: middle; white-space: normal; }
