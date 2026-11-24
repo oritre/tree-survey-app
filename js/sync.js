@@ -211,8 +211,20 @@
     return [(await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים', s.project || 'ללא פרויקט'].concat(isBuild(s) ? [s.odReportDirName || buildDirName(s)] : []).join(' / ');
   }
 
+  // (1.150, ori) מוסד שנמצא בשתי רשימות עבודה (אותו סמל מוסד) וסקר אחד לשתיהן: הדוחות נשמרים גם בתיקיית הפרויקט של הרשימה השנייה
+  const extraProjects = s => isBuild(s) ? [] : [...new Set((s.extraProjects || []).map(p => String(p || '').trim()))].filter(p => p && p !== String(s.project || '').trim());
+  async function putExtra(s, name, blob) {
+    for (const p of extraProjects(s)) {
+      try { if (!await OD.upload(await OD.folder(await reportRoot(), p), name, blob, true)) throw new Error('ההעלאה נכשלה'); }
+      catch (e) { log('error', `"${name}" לא נשמר בתיקיית הפרויקט ${p}: ${e.message}`, s); }
+    }
+  }
   // קובץ דוח: נשמר בתיקיית הגיבוי, ועותק שלו (העתקה בתוך גוגל דרייב, בלי גלישה נוספת) בתיקיית הדוחות
   async function putReportFile(s, name, blob) {
+    await putReportFile0(s, name, blob);
+    await putExtra(s, name, blob);
+  }
+  async function putReportFile0(s, name, blob) {
     // PDF: רק בתיקיית הדוחות. בגיבוי של האפליקציה נשמר רק האקסל (מהנתונים שבו אפשר להפיק את ה-PDF מחדש)
     if (/\.pdf$/i.test(name)) {
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -222,7 +234,7 @@
       throw new Error('לא ניתן לשמור בתיקיית הדוחות');
     }
     const item = await OD.upload(s.odFolderId, name, blob, true);
-    if (!item) { s.odFolderId = null; s.odPhotosId = null; await syncFolders(s); return putReportFile(s, name, blob); } // תיקיית הגיבוי נמחקה
+    if (!item) { s.odFolderId = null; s.odPhotosId = null; await syncFolders(s); return putReportFile0(s, name, blob); } // תיקיית הגיבוי נמחקה
     for (let attempt = 0; attempt < 2; attempt++) {
       const dest = await reportFolder(s);
       try { await OD.copy(item.id, dest, name); return; }

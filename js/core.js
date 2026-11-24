@@ -227,7 +227,7 @@
     t.urgency = v;
     delete t.urgencyAuto;
     // דחיפות תקין כותבת "תקין" גם בהערות/טיפול מומלץ, ויציאה מתקין מורידה אותו (רק אם נכתב כך אוטומטית)
-    if (isOk(t) && !was && !hasOkNote(t.notes)) { t.notes = withOkNote(t.notes); t.okNote = true; }
+    if (isOk(t) && !hasOkNote(t.notes)) { t.notes = withOkNote(t.notes); t.okNote = true; }
     if (!isOk(t) && was && t.okNote) {
       t.notes = noteParts(t.notes).filter(x => x.replace(/[.]$/, '') !== OK).join(', ');
       delete t.okNote;
