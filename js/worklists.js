@@ -1964,7 +1964,9 @@
     // (1.148, ori) סמל מוסד ושם המנהל/ת (גננת) ליד שם המוסד
     // (1.148, ori) תגית בצבע הרשימה: מאיזו רשימה המוסד
     const srcTag = (name, css) => h('span', { class: 'wl-badge wl-src', style: css }, name);
-    const metaIn = (L, r) => { const v = valuesOf(L, r); return [v.code ? 'סמל ' + v.code : '', v.manager || ''].filter(Boolean).join(' · '); };
+    // (1.156, ori) גם סוג המוסד (גן / בית ספר / תיכון…) מעמודה "סוג מוסד" / "סוג"
+    const typeCol = L => (L.cols || []).find(c => /^סוג(\s*(ה?מוסד|מסגרת))?$/.test(String(c.name || '').trim())) || null;
+    const metaIn = (L, r) => { const v = valuesOf(L, r), tc = typeCol(L), t = tc ? clean(r.cells[tc.id]) : ''; return [t, v.code ? 'סמל ' + v.code : '', v.manager || ''].filter(Boolean).join(' · '); };
     const geo = new Map();
     // רשימות משניות (l.sides, 1.145 ori): רשימות נפרדות לגמרי שהמוסדות שלהן מוצגים במפה, כדי לראות מי מהם קרוב לתחנה במסלול.
     // לכל רשימה מרחק "קרוב" וצבע סמנים משלה: [{ id, m, color }]. l.side / l.sideM נשארים = הראשונה, בשביל גרסאות ישנות במכשיר אחר
