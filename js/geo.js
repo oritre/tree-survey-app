@@ -19,7 +19,7 @@
     const f = fixOf(p);
     if (!isFinite(f.lat) || !isFinite(f.lon)) return;
     // אותה מדידה פעמיים (חלק מהדפדפנים שולחים שוב את האחרונה)
-    if (S.last && S.last.t === f.t && S.last.lat === f.lat && S.last.lon === f.lon) return;
+    if (S.last && S.last.t === f.t && S.last.lat === f.lat && S.last.lon === f.lon) { S.last.seen = Date.now(); return; }
     S.err = null; S.last = f; S.fixes.push(f);
     const old = Date.now() - KEEP;
     while (S.fixes.length && S.fixes[0].t < old) S.fixes.shift();
@@ -41,7 +41,7 @@
     // שומר: יש דפדפנים שמפסיקים לשלוח מיקום אחרי שגיאה. אם אין מדידה 25 שניות, מתחילים את המעקב מחדש
     if (!S.dog) S.dog = setInterval(() => {
       if (S.id == null) return;
-      const lastT = S.last ? Math.max(S.last.t, S.started) : S.started;
+      const lastT = S.last ? Math.max(S.last.seen || S.last.t, S.started) : S.started;
       if (Date.now() - lastT > STALL && Date.now() - S.started > STALL) { geo.clearWatch(S.id); S.id = null; start(); }
     }, 5000);
   }
@@ -65,12 +65,14 @@
     if (document.visibilityState === 'hidden') stop();
     else if (active()) start();
   });
+  // חזרה מהמסך הכבוי: יש מכשירים שבהם visibilitychange מגיע באיחור, אז מתחילים גם ב-pageshow/focus (start לא מתחיל פעמיים)
+  for (const ev of ['pageshow', 'focus']) root.addEventListener(ev, () => { if (active()) start(); });
 
   async function permission() {
     try { if (navigator.permissions) return (await navigator.permissions.query({ name: 'geolocation' })).state; } catch (_) {}
     return 'unknown';
   }
-  const age = f => Date.now() - f.t;
+  const age = f => Date.now() - (f.seen || f.t); // seen: הדפדפן שלח שוב את אותה מדידה (עומדים במקום), אז היא עדיין עדכנית
   // המדידה האחרונה, אם היא מ-maxAge האחרונות
   function last(maxAge) { return S.last && age(S.last) <= (maxAge == null ? 5000 : maxAge) ? S.last : null; }
   function recent(ms) { const from = Date.now() - ms; return S.fixes.filter(f => f.t >= from); }
