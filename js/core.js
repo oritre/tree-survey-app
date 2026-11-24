@@ -92,7 +92,17 @@
 
   // מיון לפי המספר הראשון. עץ תקין (בלי מספר) נשאר במקום שלו: אחרי העץ הממוספר שנרשם לפניו.
   // עצים אחרים בלי מספר בסוף
+  // סדר ידני (1.150, ori): גרירת עץ ברשימה שומרת t.pos לכל העצים, והוא קובע את הסדר בטבלה ובנספח התמונות.
+  // עץ בלי pos (נוסף אחרי הגרירה) נכנס אחרי העץ שלפניו בסדר הרגיל (לפי המספר)
   function sortTrees(trees) {
+    const def = sortByNum(trees);
+    if (!trees.some(t => t.pos != null)) return def;
+    const out = def.filter(t => t.pos != null).sort((a, b) => a.pos - b.pos);
+    def.forEach((t, i) => { if (t.pos == null) out.splice(i ? out.indexOf(def[i - 1]) + 1 : 0, 0, t); });
+    return out;
+  }
+  const manualOrder = trees => trees.some(t => t.pos != null);
+  function sortByNum(trees) {
     const key = new Map();
     let last = 0;
     trees.forEach((t, i) => {
@@ -227,7 +237,7 @@
     t.urgency = v;
     delete t.urgencyAuto;
     // דחיפות תקין כותבת "תקין" גם בהערות/טיפול מומלץ, ויציאה מתקין מורידה אותו (רק אם נכתב כך אוטומטית)
-    if (isOk(t) && !was && !hasOkNote(t.notes)) { t.notes = withOkNote(t.notes); t.okNote = true; }
+    if (isOk(t) && !hasOkNote(t.notes)) { t.notes = withOkNote(t.notes); t.okNote = true; }
     if (!isOk(t) && was && t.okNote) {
       t.notes = noteParts(t.notes).filter(x => x.replace(/[.]$/, '') !== OK).join(', ');
       delete t.okNote;
@@ -302,7 +312,7 @@
   }
 
   const api = { placeOf, codesOf, pinesOn, isJerusalem, TREE_ROWS, MAX_TREES, MAX_SLOTS, MAX_PRINTED, BASE_PRINTED, PER_EXTRA_PAGE, normNum, expandNum, firstNum, isPine, pinePlural, pineCount, pineMissing, jValue, hasContent,
-    sortTrees, splitActive, slotsOf, photoForSlot, groupKey, photoSub, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
+    sortTrees, sortByNum, manualOrder, splitActive, slotsOf, photoForSlot, groupKey, photoSub, normalizePhotos, ensureReportPhoto, reportSlots, photoLabel,
     nextNum, warnings, OK, DEFAULT_URGENCY, isOk, urgencyCell, notesCell, setUrgency };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
 })(typeof self !== 'undefined' ? self : this);

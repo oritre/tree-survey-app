@@ -291,8 +291,85 @@
       s.site = U().composeSite(s);
       r.sid = s.id; r.u = Date.now();
       save(l);
+      linkTwinsNow(r, s);
     };
   }
+
+  // ---------- אותו מוסד בכמה רשימות (1.150, ori) ----------
+  // סמל מוסד ששייך גם לשורה ברשימה אחרת: שואלים, ואם מאשרים יש סקר אחד לשתי השורות,
+  // והדוחות נשמרים גם בתיקיית הפרויקט של הרשימה השנייה (s.extraProjects, ב-Sync.putReportFile)
+  const PINES_RE = /(^|[\s,;(])[הו]?או?רני?ם/;
+  const codeKeys = (L, r) => Core.codesOf(valuesOf(L, r).code).map(c => c.replace(/\D+/g, '')).filter(c => c.length >= 3);
+  async function twinsOf(l, r) {
+    const mine = new Set(codeKeys(l, r));
+    if (!mine.size) return [];
+    const out = [];
+    for (const L of await live()) {
+      if (L.id === l.id) continue;
+      for (const x of L.rows) if (!x.deleted && codeKeys(L, x).some(c => mine.has(c))) out.push({ L, r: x });
+    }
+    return out;
+  }
+  // הסקר s של השורה r: כל השורות-התאומות שאושרו (r.twins) מקבלות אותו סקר, והפרויקטים שלהן נכנסים לסקר
+  // l = הרשימה של r: כשממשיכים סקר שנפתח ברשימה אחרת, גם הפרויקט שלה נוסף
+  function linkTwinsNow(r, s, l) {
+    if (!(r.twins || []).length || !cache) return;
+    const projs = new Set(s.extraProjects || []);
+    if (l && r.sid === s.id && clean(l.project) && clean(l.project) !== clean(s.project)) projs.add(clean(l.project));
+    for (const tw of r.twins) {
+      const L = cache.find(x => x.id === tw.list && !x.deleted), x = L && L.rows.find(y => y.id === tw.row && !y.deleted);
+      if (!x) continue;
+      if (!x.sid) { x.sid = s.id; x.u = Date.now(); save(L); }
+      if (x.sid !== s.id) continue;
+      if (clean(L.project) && clean(L.project) !== clean(s.project)) projs.add(clean(L.project));
+      // השורה השנייה היא שורת אורנים: גם הסקר המשותף הוא סקר אורנים
+      if (L.type !== 'construction' && Object.values(x.cells || {}).some(v => PINES_RE.test(String(v || '')))) s.pinesMode = true;
+    }
+    if (projs.size) s.extraProjects = [...projs]; else delete s.extraProjects;
+  }
+  async function linkTwins(r, sid, l) {
+    const s = await DB.getSurvey(sid);
+    if (!s || s.deleted) return;
+    const before = JSON.stringify(s.extraProjects || []);
+    linkTwinsNow(r, s, l);
+    if (JSON.stringify(s.extraProjects || []) !== before) await DB.putSurvey(s);
+  }
+  // לפני פתיחת סקר משורה בלי סקר: אם הסמל נמצא גם ברשימה אחרת, שואלים. מחזיר סקר להמשיך בו, או null
+  async function askTwins(l, r) {
+    if (r.sid || r.twinsAsked) return null;
+    const tw = await twinsOf(l, r);
+    if (!tw.length) return null;
+    const ui = U();
+    let open = null;
+    for (const t of tw) {
+      const s = t.r.sid && await DB.getSurvey(t.r.sid);
+      if (s && !s.deleted) { open = { t, s }; break; }
+    }
+    const lname = L => `"${L.name || 'רשימה'}"` + (clean(L.project) && clean(L.project) !== clean(l.project) ? ` (פרויקט ${clean(L.project)})` : '');
+    const lists = [...new Set(tw.map(t => lname(t.L)))].join(', ');
+    const projs = [...new Set(tw.map(t => clean(t.L.project)).filter(p => p && p !== clean(l.project)))];
+    const where = projs.length ? `הדוחות יישמרו גם בתיקיית הפרויקט ${projs.join(', ')} וגם ב-${clean(l.project) || 'תיקיית הפרויקט של הרשימה הזו'}` : 'שתי השורות יקושרו לאותו סקר';
+    const code = codeKeys(l, r).join(', ');
+    const choice = await ui.askChoice(`סמל מוסד ${code} נמצא גם ברשימה ${lists}`,
+      tw.map(t => `${lname(t.L)}: ${labelOf(t.L, t.r)}${t.r.sid ? ' · כבר נפתח שם סקר' : ''}`).join(' · '), [
+        open ? { value: 'join', primary: true, label: 'כן, להמשיך את הסקר שנפתח שם', hint: `${open.s.site || 'סקר'} מ-${ui.fmtDate(open.s.date)}. ${where}` }
+          : { value: 'both', primary: true, label: 'כן, סקר אחד לשתי הרשימות', hint: where },
+        { value: 'no', label: 'לא, סקר נפרד לרשימה הזו' }]);
+    r.twinsAsked = true; r.u = Date.now();
+    if (choice === 'no') { delete r.twins; await save(l); return null; }
+    r.twins = tw.filter(t => !t.r.sid || (open && t.r.sid === open.s.id)).map(t => ({ list: t.L.id, row: t.r.id }));
+    if (choice === 'join') {
+      r.sid = open.s.id;
+      r.twins.push({ list: open.t.L.id, row: open.t.r.id });
+      await save(l);
+      await linkTwins(r, open.s.id, l);
+      return open.s;
+    }
+    await save(l);
+    return null;
+  }
+  // שם המוסד בשורה, לחלון השאלה
+  function labelOf(L, x) { const v = valuesOf(L, x); return [v.siteName, v.street].filter(Boolean).join(', ') || 'שורה'; }
   // ---------- קישור שורות לסקרים משנים קודמות (1.109) ----------
   // סקר קודם שבחרת לשורה (בחיפוש): "פתח" ממשיך ממנו ישר
   function prevOf(x) {
@@ -320,6 +397,8 @@
     } catch (e) { ui.toast('הפתיחה מהסקר הקודם נכשלה: ' + e.message + '. בחר סקר אחר.', 5000); openRow(l, r, true); }
   }
   async function openRow(l, r, choose, onLinked) {
+    const joined = await askTwins(l, r);
+    if (joined) { U().go('#/s/' + joined.id); return; }
     if (!choose && !r.sid && r.prev && !r.prev.none) return openFromPrev(l, r);
     const ui = U();
     if (r.sid) {
@@ -390,7 +469,7 @@
         ui.h('div', { class: 'muted small' }, 'באפליקציה · ' + sub),
         ui.h('div', { class: 'row' },
           cont ? ui.h('button', { class: 'btn primary', onclick: ev => busy(ev.currentTarget, async () => {
-            r.sid = e.id; r.u = Date.now(); await save(l);
+            r.sid = e.id; r.u = Date.now(); await save(l); await linkTwins(r, e.id, l);
             if (e.local) ui.go('#/s/' + e.id); else await ui.lists.fromCloud(e, false, ev.currentTarget);
           }) }, 'המשך את הסקר הזה') : null,
           ui.h('button', { class: 'btn' + (cont ? '' : ' primary'), onclick: ev => busy(ev.currentTarget, () => ui.lists.fromApp(e, ev.currentTarget, applier(l, r, v, true))) },
