@@ -570,6 +570,13 @@
     const cands = [];
     for (const L of await live()) for (const x of L.rows) if (!x.deleted && !sel.has(K(L, x)) && codeKeys(L, x).some(c => codes.has(c))) cands.push({ L, r: x });
     const extra = new Map(); // שורות שנוספו מחיפוש
+    // 1.162 (ori): שם ותאריך של הסקר האחר שמחובר לשורה, וסמל הסקר הפתוח (אזהרה כשהשורה נערכה לסמל אחר)
+    const fmtD = d => { const m = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${+m[3]}.${+m[2]}.${m[1]}` : ''; };
+    const sLabel = x => [x.siteName || x.site || 'סקר', x.code ? 'סמל ' + x.code : '', fmtD(x.date)].filter(Boolean).join(' · ');
+    const otherName = new Map();
+    const loadOthers = async xs => { for (const x of xs) if (x.r.sid && x.r.sid !== s.id && !otherName.has(x.r.sid)) { const o = await surveyFor(x.r.sid); otherName.set(x.r.sid, o ? sLabel(o) : ''); } };
+    const sCodes = new Set(Core.codesOf(s.code || '').map(c => c.replace(/\D+/g, '')).filter(c => c.length >= 3));
+    await loadOthers(cands);
     const hoods = await allHoods();
     const rowHood = async () => { for (const x of [main, ...sel.values()].filter(Boolean)) { const hh = await hoodOfRow(x.L, x.r); if (hh) return hh; } return ''; };
     const hoodIn = h('input', { class: 'in', value: clean(s.hood), placeholder: 'למשל: גונן, עיר דוד', style: 'flex:1;min-width:160px' });
@@ -592,7 +599,8 @@
       return h('div', { class: 'wl-stop' + (on ? '' : ' out') },
         h('div', { style: 'flex:1;min-width:0' }, h('b', {}, x.L.name || 'רשימה'), clean(x.L.project) ? h('span', { class: 'muted small' }, ' · פרויקט ' + clean(x.L.project)) : null,
           h('div', { class: 'small' }, [v.code ? 'סמל ' + v.code : '', v.siteName, v.street].filter(Boolean).join(' · ')),
-          other ? h('div', { class: 'small', style: 'color:#8a5200' }, 'לשורה הזו כבר משויך סקר אחר. שיוך כאן יחליף אותו (הסקר האחר לא נמחק)') : null),
+          other ? h('div', { class: 'small', style: 'color:#8a5200' }, (otherName.get(x.r.sid) ? `לשורה הזו משויך עכשיו הסקר "${otherName.get(x.r.sid)}". ` : 'לשורה הזו כבר משויך סקר אחר. ') + (on ? 'ב"שמור שיוך" היא תעבור לסקר הזה' : 'שיוך כאן יעביר אותה לסקר הזה') + ' (הסקר האחר לא נמחק)') : null,
+          on && sCodes.size && codeKeys(x.L, x.r).length && !codeKeys(x.L, x.r).some(c => sCodes.has(c)) ? h('div', { class: 'small', style: 'color:#c62828;font-weight:700' }, `⚠ הסמל בשורה שונה מהסמל של הסקר הזה (${s.code}). אם ערכת את השורה למוסד אחר: לחץ "הסר" כאן, ושייך אותה מחלון השיוך של הסקר הנכון`) : null),
         on ? h('label', { class: 'row small', style: 'gap:4px;align-items:center;white-space:nowrap' }, h('input', { type: 'radio', name: 'wlmain', checked: main === x, onchange: () => { main = x; drawPaths(); } }), 'תיקייה ראשית') : null,
         on ? h('button', { class: 'btn', onclick: () => { sel.delete(k); if (main === x) main = [...sel.values()][0] || null; drawRows(); } }, '✕ הסר')
           : h('button', { class: 'btn primary', onclick: () => { sel.set(k, x); if (!main) main = x; drawRows(); } }, '➕ שייך'));
@@ -616,6 +624,7 @@
         const hay = norm(Object.values(x.cells || {}).join(' ') + ' ' + (L.name || ''));
         if (words.every(w => hay.includes(w))) res.push({ L, r: x });
       }
+      await loadOthers(res.slice(0, 12));
       found.replaceChildren(...(res.length ? res.slice(0, 12).map(x => { const ln = rowLine(x, false); ln.querySelector('.btn').onclick = () => { sel.set(K(x.L, x.r), x); if (!main) main = x; found.replaceChildren(); q.value = ''; drawRows(); }; return ln; })
         : [h('div', { class: 'muted small' }, 'לא נמצאה שורה')]));
     };
@@ -657,6 +666,7 @@
     const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
       h('div', { class: 'card stack', style: 'max-width:640px;width:96%' },
         h('h2', { style: 'margin:0;font-size:20px' }, '📁 שיוך: ' + (s.siteName || s.site || 'סקר')),
+        h('div', { class: 'small', style: 'font-weight:700' }, 'הסקר הפתוח: ' + [sLabel(s), clean(s.street)].filter(Boolean).join(' · ')),
         h('div', { class: 'muted small' }, 'לאיזו רשימה הסקר שייך ובאיזו תיקייה הקבצים. לסקר אחד לכמה רשימות: הקבצים בתיקייה הראשית ועותק בתיקיית הפרויקט של כל רשימה נוספת.'),
         rowsBox,
         h('div', { class: 'row', style: 'gap:8px' }, q, h('button', { class: 'btn', onclick: search }, '🔎')), found,
