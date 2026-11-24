@@ -767,3 +767,26 @@ body:has(> .modal) .wl-mapview { visibility: hidden; }
 .tree-list .tree-row { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
 .tree-list.dragging { cursor: grabbing; }
 .tree-row.drag-lift { position: relative; z-index: 2; transform: scale(1.02); box-shadow: 0 8px 22px rgba(0,0,0,.28); outline: 2px solid var(--accent); background: var(--surface); }
+
+/* (1.155) סטטוס מוסד ברשימה: לבדיקה (צהוב) / לא קיים (אפור) */
+.wl-badge.check, .wl-badge.flag-check { background: #ffd60a; color: #3a2c00; }
+.wl-badge.gone, .wl-badge.flag-gone { background: #6b6b6b; color: #fff; }
+.wl-badge.flag-check, .wl-badge.flag-gone { margin: 2px 6px; font-size: 12px; padding: 1px 8px; white-space: normal; vertical-align: middle; }
+.wl-table tbody tr.st-check td, .wl-table tbody tr.st-check td.wl-act { background: #fff3a6; }
+.wl-table tbody tr.st-check td.wl-act { box-shadow: inset -6px 0 0 #f5b800; }
+.wl-table tbody tr.st-check .wl-cell { color: #2a2000; }
+.wl-table tbody tr.st-gone td, .wl-table tbody tr.st-gone td.wl-act { background: var(--surface-3); }
+.wl-table tbody tr.st-gone .wl-cell { color: var(--muted); text-decoration: line-through; }
+.wl-pin.check { background: #ffd60a !important; color: #222 !important; border: 3px solid #b38600; }
+.wl-pin.side.check .wl-sp { background: #ffd60a; color: #222; border-width: 3px; border-style: solid; }
+.wl-stop.check { border-color: #f5b800; background: #fff8cc; }
+.wl-stop.check, .wl-stop.check .muted { color: #2a2000; }
+.wl-flag-opt { border: 2px solid var(--line, #ccc); border-radius: 12px; padding: 10px; gap: 6px; }
+.wl-flag-opt.check { border-color: #f5b800; }
+.wl-flag-opt.gone { border-color: #8a8a8a; }
+.wl-flag-opt.on { box-shadow: 0 0 0 3px var(--accent); }
+.wl-paths { background: var(--surface-2, #f3f3f3); border-radius: 10px; padding: 8px 10px; overflow-wrap: anywhere; }
+
+/* (1.155.1) דף ראשי: חלוקה לפי שכונה בתוך פרויקט */
+.hood-head { font-size: 16px; margin: 6px 2px 6px; color: var(--muted); font-weight: 700; }
+.hood-group + .hood-group { margin-top: 4px; }

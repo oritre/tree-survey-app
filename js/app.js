@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.154.0';
+  const APP_VERSION = '1.155.1';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -424,9 +424,19 @@
         h('span', { class: 'arrow', 'aria-hidden': 'true' }, '‹'));
     };
     const shown = projectFilter == null ? projects : [projectFilter];
+    // (1.155.1, ori) בתוך כל פרויקט: חלוקה לפי שכונה (התיקייה בדרייב), כשיש בפרויקט סקרים עם שכונה
+    const hoodOfS = s => Construction.isConstruction(s) ? '' : String(s.hood || '').trim();
+    const projBody = ss => {
+      const hoods = [...new Set(ss.map(hoodOfS))];
+      if (hoods.length === 1 && !hoods[0]) return h('div', { class: 'grid-list' }, ss.map(card));
+      hoods.sort((a, b) => (a === '') - (b === '') || a.localeCompare(b, 'he'));
+      return h('div', { class: 'stack' }, hoods.map(hd => h('div', { class: 'hood-group' },
+        h('h3', { class: 'hood-head' }, '📁 ' + (hd || 'בלי שכונה') + ` (${ss.filter(s => hoodOfS(s) === hd).length})`),
+        h('div', { class: 'grid-list' }, ss.filter(s => hoodOfS(s) === hd).map(card)))));
+    };
     const list = surveys.length ? shown.map(pr => h('section', {},
       h('h2', { class: 'proj-head' }, (pr || 'ללא פרויקט') + ` (${surveys.filter(s => (s.project || '') === pr).length})`),
-      h('div', { class: 'grid-list' }, surveys.filter(s => (s.project || '') === pr).map(card))))
+      projBody(surveys.filter(s => (s.project || '') === pr))))
       : h('div', { class: 'empty' }, icon('sprout'), all.length ? 'אין סקרים מהיום. סקרים קודמים נמצאים ב"חיפוש סקרים בענן".' : 'עוד אין סקרים. לחץ על "סקר חדש" כדי להתחיל.');
     const chips = projects.length > 1 ? h('div', { class: 'project-chips', role: 'group', 'aria-label': 'סינון לפי פרויקט' },
       h('button', { class: 'chip' + (projectFilter == null ? ' on' : ''), onclick: () => { projectFilter = null; renderHome(); } }, 'כל הפרויקטים'),
@@ -1687,6 +1697,20 @@
       },
     }, attrs));
     // הצעות מסקרים קודמים (בלי הסקר הנוכחי, כדי שמה שמקלידים עכשיו לא יופיע כהצעה)
+    // (1.155.1, ori) הצעת שכונה לפי עמודת השכונות ברשימה. סקר מרשימה שהשכונה דולקת בה ובלי שכונה: נכנסת לבד
+    const hoodHint = async () => {
+      const box = document.getElementById('hoodSug');
+      if (!box || !window.WorkLists || Construction.isConstruction(cur)) return;
+      const sg = await WorkLists.suggestHood(cur).catch(() => null);
+      if (sg && sg.auto && !String(cur.hood || '').trim() && !cur.hoodManual) {
+        cur.hood = sg.hood; saveSoon(); const el = document.getElementById('hoodIn'); if (el) el.value = sg.hood;
+      }
+      const now = String(cur.hood || '').trim();
+      box.replaceChildren(...(sg && sg.hood !== now ? ['💡 לפי הרשימה "' + sg.list + '": ', h('b', {}, sg.hood), ' ',
+        h('button', { class: 'btn', onclick: () => { cur.hood = sg.hood; delete cur.hoodManual; saveSoon(); const el = document.getElementById('hoodIn'); if (el) el.value = sg.hood; hoodHint(); toast('השכונה עודכנה. הקבצים יעברו לתיקייה ' + sg.hood + ' בהעלאה הבאה', 3000); if (window.Sync) DB.putSurvey(cur).then(() => Sync.relocate(cur)).catch(() => {}); } }, 'שייך לשכונה הזו')]
+        : sg && now ? [h('span', { class: 'muted' }, '✓ לפי הרשימה "' + sg.list + '"')] : []));
+    };
+    setTimeout(hoodHint, 0);
     const used = { project: [], city: [], street: [] };
     DB.allSurveys().then(all => { all = all.filter(x => x.id !== cur.id); for (const k in used) used[k] = usedValues(all, k); });
     projectsRecent(cur.id).then(v => { used.projectRecent = v; });
@@ -1694,8 +1718,15 @@
     body.append(h('div', { class: 'card stack', style: 'max-width:720px;margin:0 auto' },
       field('סוג הסקר', h('select', { class: 'in', onchange: e => { cur.type = e.target.value; cur.site = composeSite(cur); saveSoon(); renderSurvey(); } },
         Object.entries(Construction.TYPES).map(([k, v]) => h('option', { value: k, selected: Construction.typeOf(cur) === k ? '' : null }, v)))),
-      cur.listRef ? h('div', { class: 'small' }, '📋 נפתח מהרשימה ', h('a', { href: '#/lists/' + encodeURIComponent(cur.listRef.list) }, cur.listRef.name || 'רשימה')) : null,
+      cur.listRef ? h('div', { class: 'small' }, '📋 נפתח מהרשימה ', h('a', { href: '#/lists/' + encodeURIComponent(cur.listRef.list) }, cur.listRef.name || 'רשימה'),
+        (cur.extraProjects || []).length ? ' · עותק גם בתיקייה ' + cur.extraProjects.join(', ') : '') : null,
       field('פרויקט (למשל: ירושלים)', sugg('project', { placeholder: 'לניהול וסינון הסקרים, לא מופיע בדוח' })),
+      // (1.155, ori) שכונה = תיקייה בתוך תיקיית הפרויקט בדרייב. שיוך לרשימות וסטטוס המוסד (לא קיים / לבדיקה)
+      build ? null : field('שכונה (תיקייה בדרייב בתוך הפרויקט, לא מופיע בדוח)', inp('hood', { id: 'hoodIn', placeholder: 'למשל: גונן, עיר דוד', oninput: e => { cur.hood = e.target.value; cur.hoodManual = true; saveSoon(); hoodHint(); } })),
+      build ? null : h('div', { id: 'hoodSug', class: 'small' }),
+      build || !window.WorkLists ? null : h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+        h('button', { class: 'btn', title: 'לאיזו רשימה הסקר שייך (אפשר כמה), שכונה ותיקייה בדרייב. קבצים שכבר עלו עוברים לתיקייה החדשה', onclick: async () => { await DB.putSurvey(cur); WorkLists.assign(cur, () => renderSurvey()); } }, '📁 שיוך לרשימות ותיקייה'),
+        cur.listRef ? h('button', { class: 'btn', title: 'סימון המוסד ברשימה: לא קיים / לבדיקה', onclick: () => WorkLists.flagRow(cur.listRef.list, cur.listRef.row, () => renderSurvey()) }, '⚑ לא קיים / לבדיקה') : null),
       build ? null : field('שם המוסד / האתר', inp('siteName', { placeholder: 'למשל: גן חצב' })),
       h('div', { class: 'row', style: 'align-items:stretch' },
         h('div', { style: 'flex:2;min-width:200px' }, field('רחוב ומספר', sugg('street', { placeholder: 'למשל: הנרקיס 5' }))),
