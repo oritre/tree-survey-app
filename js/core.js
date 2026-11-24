@@ -199,7 +199,11 @@
   const isOk = t => (t.urgency || '').trim() === OK;
   // דחיפות בעמודה I בדוח: עץ תקין נשאר ריק, כמו בדוחות במחשב (ההערה "תקין")
   const urgencyCell = t => isOk(t) ? '' : (t.urgency || '').trim();
-  const notesCell = t => (t.notes || '').trim() || (isOk(t) ? OK : '');
+  // הערות/טיפול מומלץ: עץ תקין תמיד מתחיל ב"תקין" (ori), גם בעץ ישן שההערה שלו נכתבה בלי זה
+  const noteParts = s => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
+  const hasOkNote = s => noteParts(s).some(x => x.replace(/[.]$/, '') === OK);
+  const withOkNote = s => { const n = String(s || '').trim(); return !n ? OK : hasOkNote(n) ? n : OK + ', ' + n; };
+  const notesCell = t => isOk(t) ? withOkNote(t.notes) : (t.notes || '').trim();
 
   // מספרים שמשתנים: כל מספר בשדה (גם בטווח "7-9") ובתמונות של עץ מפוצל
   function renumber(trees, skip, fn) {
@@ -222,6 +226,12 @@
     const was = isOk(t);
     t.urgency = v;
     delete t.urgencyAuto;
+    // דחיפות תקין כותבת "תקין" גם בהערות/טיפול מומלץ, ויציאה מתקין מורידה אותו (רק אם נכתב כך אוטומטית)
+    if (isOk(t) && !was && !hasOkNote(t.notes)) { t.notes = withOkNote(t.notes); t.okNote = true; }
+    if (!isOk(t) && was && t.okNote) {
+      t.notes = noteParts(t.notes).filter(x => x.replace(/[.]$/, '') !== OK).join(', ');
+      delete t.okNote;
+    }
     if (isOk(t) && !was) {
       const num = String(t.num || '').trim();
       if (!num) return [];

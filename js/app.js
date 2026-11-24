@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.148.0';
+  const APP_VERSION = '1.149.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -2478,10 +2478,10 @@
     // תקין = בלי מספר עץ, והספירה של העצים הבאים ממשיכה בלעדיו
     const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'דחיפות' }, [[Core.OK, 'תקין'], ['כ', 'כ - כריתה'], ['1', '1 - מיידי'], ['2', '2 - חצי שנה'], ['', 'ללא']].map(([v, label]) =>
       h('button', { type: 'button', class: (v ? 'v-' + (v === Core.OK ? 'ok' : v) : '') + ((t.urgency || '') === v ? ' on' : ''), onclick: e => {
-        const num0 = t.num;
+        const num0 = t.num, notes0 = t.notes;
         const others = applyUrgency(t, v); changed();
         [...seg.children].forEach(b => b.classList.toggle('on', b === e.currentTarget));
-        if (t.num !== num0) { renderTreeList(); renderEditor(); }
+        if (t.num !== num0 || t.notes !== notes0) { renderTreeList(); renderEditor(); }
         if (others.length) toast(`מספרי העצים עודכנו (${others.length} עצים)`);
       } }, label)));
 
