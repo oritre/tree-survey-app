@@ -743,3 +743,14 @@ img.docv-page { object-fit: contain; }
 .mx-park.mine.k-open, .mx-park.mine.k-temp { background: #2e7d32; }
 .mx-park.mine.k-paid, .mx-park.mine.k-cheap { background: #ad5a00; }
 .mx-found { font-size: 26px; line-height: 30px; text-align: center; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
+/* (1.146) רוחב עמודות בטבלת הרשימה: קו גרירה בצד הכותרת, לחיצה כפולה = לפי התוכן; תאים שנמצאו בחיפוש */
+.wl-table th.wl-thr { position: sticky; }
+.wl-rsz { position: absolute; top: 0; bottom: 0; inset-inline-end: -7px; width: 14px; cursor: col-resize; z-index: 4; touch-action: none; }
+.wl-rsz::after { content: ''; position: absolute; top: 6px; bottom: 6px; left: 6px; width: 2px; border-radius: 2px; background: rgba(255,255,255,.55); }
+.wl-rsz:hover::after, .wl-rsz.on::after { background: #ffd400; width: 3px; }
+.wl-cell { box-sizing: border-box; text-overflow: ellipsis; }
+.wl-cell.wl-hit { background: #fff3a6; color: #000; }
+.wl-search { font-size: 16px; }
+/* העמודה האחרונה (✕) לוקחת את הרווח שנשאר, כדי שהעמודות יהיו ברוחב שנקבע ואפשר יהיה גם לצמצם */
+.wl-table > thead > tr > th:last-child, .wl-table > tbody > tr > td:last-child { width: 100%; text-align: start; }
+.wl-table tr.wl-dayrow > td:last-child { width: auto; }

@@ -687,8 +687,10 @@
     // מיון וסינון לפי עמודה כמו באקסל (נשמר במכשיר הזה לכל רשימה). '_st' = עמודת הסטטוס
     const VKEY = 'wlView:' + l.id;
     const saved = (await DB.getKV(VKEY, null)) || {};
-    const view = { sort: saved.sort || (!saved.filt && (l.route || []).length ? { col: '_route', dir: 1 } : null), filt: Object.fromEntries(Object.entries(saved.filt || {}).map(([k, v]) => [k, new Set(v)])) };
-    const saveView = () => DB.setKV(VKEY, { sort: view.sort, filt: Object.fromEntries(Object.entries(view.filt).map(([k, v]) => [k, [...v]])) }).catch(() => {});
+    const view = { sort: saved.sort || (!saved.filt && (l.route || []).length ? { col: '_route', dir: 1 } : null), filt: Object.fromEntries(Object.entries(saved.filt || {}).map(([k, v]) => [k, new Set(v)])),
+      // (1.146, ori) רוחב עמודה שנקבע ביד (גרירה) או אוטומטית (לחיצה כפולה), בפיקסלים, במכשיר הזה
+      w: Object.assign({}, saved.w || {}) };
+    const saveView = () => DB.setKV(VKEY, { sort: view.sort, filt: Object.fromEntries(Object.entries(view.filt).map(([k, v]) => [k, [...v]])), w: view.w }).catch(() => {});
     const valOf = (r, cid) => cid === '_st' ? stateOf(r).t : cid === '_route' ? ((l.route || []).indexOf(r.id) + 1 ? String((l.route || []).indexOf(r.id) + 1) : '') : clean(r.cells[cid]);
     const cmp = (a, b) => (a === '') - (b === '') || a.localeCompare(b, 'he', { numeric: true, sensitivity: 'base' });
     function colMenu(cid, name, btn) {
@@ -748,8 +750,46 @@
         onclick: e => { e.stopPropagation(); colMenu(cid, name, b); } }, (so === 1 ? '↓' : so === -1 ? '↑' : '') + (on ? '⧩' : '▾'));
       return b;
     };
-    const q = h('input', { class: 'in', type: 'search', placeholder: 'חיפוש ברשימה', style: 'flex:1;min-width:160px' });
+    // (1.146) חיפוש על כל הטבלה: כל העמודות (גם מוסתרות), הסטטוס ומספר במסלול. התאים שנמצאו מסומנים
+    const q = h('input', { class: 'in wl-search', type: 'search', placeholder: '🔎 חיפוש בכל הטבלה (שם, כתובת, סמל, מנהל, טלפון…)', 'aria-label': 'חיפוש בכל הטבלה', style: 'flex:1;min-width:200px' });
+    const qInfo = h('span', { class: 'small muted' });
+    // רוחב עמודות: גרירת הקו בצד הכותרת = ביד, לחיצה כפולה עליו = לפי הטקסט הארוך בעמודה
+    const meas = document.createElement('canvas').getContext('2d');
+    const textW = (t, bold) => { meas.font = (bold ? '700 ' : '400 ') + '15px Arimo, Arial, sans-serif'; return meas.measureText(String(t || '')).width; };
+    const fitW = cid => { const c = l.cols.find(x => x.id === cid); const rs = l.rows.filter(r => !r.deleted);
+      return Math.round(Math.min(900, Math.max(60, textW(c ? c.name : '', true) + 34, ...rs.map(r => textW(r.cells[cid]))) + 20)); };
+    const tableEl = () => table.querySelector('table');
+    const setW = (cid, px) => { view.w[cid] = Math.round(px); const t = tableEl(); if (t) t.style.setProperty('--w-' + cid, view.w[cid] + 'px'); };
+    function resizer(cid) {
+      let x0 = 0, w0 = 0, moved = false, lastUp = 0;
+      const el = h('div', { class: 'wl-rsz', title: 'גרור כדי לשנות רוחב · לחיצה כפולה = רוחב לפי התוכן', 'aria-hidden': 'true' });
+      el.addEventListener('pointerdown', e => {
+        e.preventDefault(); e.stopPropagation(); el.setPointerCapture(e.pointerId);
+        const inp = table.querySelector(`td[data-c="${cid}"] .wl-cell`), th = el.parentElement;
+        x0 = e.clientX; w0 = view.w[cid] || (inp ? inp.getBoundingClientRect().width : th.getBoundingClientRect().width); moved = false;
+        el.classList.add('on');
+      });
+      el.addEventListener('pointermove', e => {
+        if (!el.hasPointerCapture(e.pointerId)) return;
+        // מימין לשמאל: גרירה שמאלה מרחיבה
+        const dx = (document.dir === 'ltr' ? 1 : -1) * (e.clientX - x0);
+        if (Math.abs(dx) > 3) moved = true;
+        if (moved) setW(cid, Math.max(50, w0 + dx));
+      });
+      const up = e => {
+        if (!el.hasPointerCapture || !el.classList.contains('on')) return;
+        el.classList.remove('on');
+        if (moved) { saveView(); return; }
+        // לחיצה כפולה (גם באצבע): רוחב לפי הטקסט הארוך בעמודה
+        const now = Date.now();
+        if (now - lastUp < 400) { setW(cid, fitW(cid)); saveView(); lastUp = 0; } else lastUp = now;
+      };
+      el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+      el.addEventListener('click', e => e.stopPropagation());
+      return el;
+    }
     const clearBox = h('span');
+    const widthBox = h('span', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
     const hideBox = h('span');
     const dayBox = h('div', { class: 'row project-chips', style: 'gap:6px;flex-wrap:wrap;align-items:center' });
     const table = h('div', { class: 'wl-wrap' });
@@ -763,7 +803,8 @@
       chipsBox.replaceChildren(...[['all', 'הכל'], ['todo', 'טרם נפתחו'], ['open', 'בעבודה'], ['done', 'הסתיימו']].map(([k, t]) =>
         h('button', { class: 'chip' + (filter === k ? ' on' : ''), onclick: () => { filter = k; draw(); } }, `${t} (${n[k]})`)));
       const words = norm(q.value).split(' ').filter(Boolean);
-      const shown = rs.filter(r => (filter === 'all' || stateOf(r).k === filter) && words.every(w => norm(Object.values(r.cells).join(' ')).includes(w))
+      const hay = r => norm([...Object.values(r.cells), stateOf(r).t, valOf(r, '_route')].join(' '));
+      const shown = rs.filter(r => (filter === 'all' || stateOf(r).k === filter) && (!words.length || ((t) => words.every(w => t.includes(w)))(hay(r)))
         && Object.entries(view.filt).every(([cid, set]) => (cid !== '_st' && !l.cols.some(c => c.id === cid)) || set.has(valOf(r, cid))));
       if (view.sort && (view.sort.col === '_st' || view.sort.col === '_route' || l.cols.some(c => c.id === view.sort.col))) {
         const { col, dir } = view.sort;
@@ -782,12 +823,17 @@
       const active = Object.keys(view.filt).length || view.sort;
       clearBox.replaceChildren(active ? h('button', { class: 'btn', onclick: () => { view.filt = {}; view.sort = null; saveView(); draw(); } }, '✕ נקה מיון וסינון') : '');
       counts.textContent = shown.length === rs.length ? `${rs.length} שורות` : `${shown.length} מתוך ${rs.length} שורות`;
+      qInfo.textContent = words.length ? (shown.length ? `נמצאו ${shown.length}` : 'לא נמצא') : '';
+      const hit = v => words.length && words.some(w => norm(v).includes(w));
       // רוחב כל עמודה לפי הטקסט הארוך בה (בגבולות), כדי שכתובת שלמה תיראה בלי לגלול בתוך התא
       const cols = visCols(l);
       const width = new Map(cols.map(c => [c.id, Math.min(38, Math.max(8, c.name.length, ...rs.map(r => (r.cells[c.id] || '').length)) + 2)]));
       const mapped = new Map(Object.entries(l.map || {}).filter(([k]) => fieldsOf(l).some(f => f.key === k)).flatMap(([k, m]) => { const cs = colsOf(m); return cs.map((c, i) => [c, FIELDS.find(f => f.key === k).label + (cs.length > 1 ? ` (${i + 1})` : '')]); }));
-      table.replaceChildren(h('table', { class: 'wl-table' },
-        h('thead', {}, h('tr', {}, h('th', { class: 'wl-act' }, h('div', { class: 'wl-th' }, h('span', {}, 'סקר'), headBtn('_st', 'סטטוס הסקר'))), ...cols.map(c => h('th', {}, h('div', { class: 'wl-th' }, h('span', {}, c.name), headBtn(c.id, c.name)), mapped.has(c.id) ? h('div', { class: 'wl-tag' }, '← ' + mapped.get(c.id)) : null)), h('th', {}))),
+      const fixed = cols.filter(c => view.w[c.id]);
+      const autoBtn = h('button', { class: 'btn', title: 'כל עמודה ברוחב של הטקסט הארוך בה', onclick: () => { cols.forEach(c => setW(c.id, fitW(c.id))); saveView(); draw(); } }, '↔ התאם רוחב לכל העמודות');
+      widthBox.replaceChildren(autoBtn, ...(fixed.length ? [h('button', { class: 'btn', onclick: () => { view.w = {}; saveView(); draw(); } }, '↺ רוחב עמודות רגיל')] : []));
+      table.replaceChildren(h('table', { class: 'wl-table', style: cols.filter(c => view.w[c.id]).map(c => `--w-${c.id}:${view.w[c.id]}px`).join(';') },
+        h('thead', {}, h('tr', {}, h('th', { class: 'wl-act' }, h('div', { class: 'wl-th' }, h('span', {}, 'סקר'), headBtn('_st', 'סטטוס הסקר'))), ...cols.map(c => h('th', { class: 'wl-thr' }, h('div', { class: 'wl-th' }, h('span', {}, c.name), headBtn(c.id, c.name)), mapped.has(c.id) ? h('div', { class: 'wl-tag' }, '← ' + mapped.get(c.id)) : null, resizer(c.id))), h('th', {}))),
         h('tbody', {}, shown.flatMap((r, i) => {
           const st = stateOf(r);
           // מפריד בין ימים, כשהרשימה ממוינת לפי סדר הנסיעה או לפי היום
@@ -806,7 +852,7 @@
                 : h('button', { class: 'link-btn small wl-find', onclick: () => openRow(l, r, true, draw) }, '🔎 חפש סקר קודם'),
               h('div', { class: 'wl-badge ' + st.k }, st.t), st.d ? h('div', { class: 'wl-st small' }, st.d) : null,
               r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null),
-            ...cols.map(c => h('td', {}, h('input', { class: 'wl-cell', value: r.cells[c.id] || '', 'aria-label': c.name, style: `width:${width.get(c.id)}ch`,
+            ...cols.map(c => h('td', { 'data-c': c.id }, h('input', { class: 'wl-cell' + (hit(r.cells[c.id] || '') ? ' wl-hit' : ''), value: r.cells[c.id] || '', 'aria-label': c.name, style: `width:var(--w-${c.id}, ${width.get(c.id)}ch)`, title: (r.cells[c.id] || '').length > 20 ? r.cells[c.id] : null,
               oninput: e => { r.cells[c.id] = e.target.value; r.u = Date.now(); saveSoon(); } }))),
             h('td', {}, h('button', { class: 'icon-btn', title: 'מחק שורה', 'aria-label': 'מחק שורה', onclick: () => {
               if (!confirm('למחוק את השורה מהרשימה?')) return;
@@ -832,7 +878,7 @@
     const missing = fieldsOf(l).filter(f => ['street', 'city'].includes(f.key) && !(l.map[f.key] || {}).col && !clean((l.map[f.key] || {}).pre)).map(f => f.label);
     ui.app().replaceChildren(ui.bar({ title: l.name || 'רשימה', sub: [l.project ? 'פרויקט ' + l.project : null, Construction.TYPES[l.type || 'safety']].filter(Boolean).join(' · ') }, '#/lists'),
       h('main', { class: 'stack' },
-        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, q,
+        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/setup') }, ui.icon('gear'), 'שיוך עמודות (כתובת, עיר, סמל…) והגדרות'),
           h('button', { class: 'btn', onclick: () => { l.rows.push({ id: uid(), cells: {}, u: Date.now() }); save(l); filter = 'all'; q.value = ''; draw(); const ins = table.querySelectorAll('tbody tr:last-child input'); if (ins[0]) ins[0].focus(); } }, '➕ שורה'),
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/route') }, '🗺 מסלול ומפה'),
@@ -849,7 +895,9 @@
           h('button', { class: 'btn', onclick: () => pickListFolder(l, () => renderList(l)) }, l.folder ? 'החלף' : 'בחר תיקייה'),
           l.folder ? h('button', { class: 'btn', onclick: async () => { delete l.folder; await save(l); renderList(l); } }, 'הארכיון הרגיל') : null),
         missing.length ? h('div', { class: 'card small', style: 'background:#fff2cc;color:#5a4300' }, `⚠ עוד לא נבחרה עמודה ל: ${missing.join(', ')}. לחץ על החץ ▾ בכותרת של העמודה ובחר "העמודה הזו היא", או ב"שיוך עמודות".`) : null,
-        dayBox, chipsBox, counts, table));
+        dayBox, chipsBox,
+        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' }, q, qInfo, widthBox),
+        counts, table));
     draw();
     prevAuto(l, draw);
 
@@ -1838,7 +1886,9 @@
             h('button', { class: 'btn', title: 'מוקדם יותר', disabled: i === 0 ? true : null, onclick: () => mv(i) }, '↑'),
             h('button', { class: 'btn', title: 'מאוחר יותר', disabled: i === l.route.length - 1 ? true : null, onclick: () => mv(i + 2) }, '↓'),
             h('button', { class: 'btn', title: 'שים אחרי התחנה שנבחרה קודם', onclick: () => { if (pickAfter && pickAfter !== id) { const k = l.route.indexOf(pickAfter); mv(k + (k < i ? 2 : 1)); pickAfter = null; } else { pickAfter = id; ui.toast('עכשיו לחץ על התחנה שתבוא מיד אחרי זו, ובחר "שים אחרי…"', 3500); map.closePopup(); } } }, pickAfter && pickAfter !== id ? 'שים אחרי ' + label(l.rows.find(x => x.id === pickAfter)).name : '📌 מה בא אחרי זו?')),
-          h('div', { class: 'row', style: 'gap:10px;align-items:center;margin-top:6px' },
+          h('div', { class: 'row', style: 'gap:10px;align-items:center;margin-top:6px;flex-wrap:wrap' },
+            // (1.146, ori) פתיחת הסקר ישר מהנקודה במפה, כמו "פתח סקר" בטבלה
+            h('button', { class: 'btn primary', onclick: () => { map.closePopup(); openRow(l, r); } }, done(r) ? 'פתח סקר ✓' : 'פתח סקר'),
             h('button', { class: 'btn', onclick: () => { map.closePopup(); fixLoc(r); } }, '📍 תקן מיקום'),
             h('a', { href: navUrl(r), target: '_blank', rel: 'noopener' }, 'נווט בוויז')),
           h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם לגרור את הנקודה'),
@@ -1863,7 +1913,7 @@
         const mk = L.marker([g.lat, g.lon], { icon: iconFor(false), draggable: g.src !== 'gps' });
         mk._grp = ms; mk._one = null; mk._icon2 = iconFor;
         mk._pop = () => mk._one || ms.length === 1 ? popOf(mk._one || ms[0], mk) : h('div', { class: 'wl-popup', dir: 'rtl' },
-          h('b', {}, `${ms.length} מוסדות באותה כתובת`), h('div', {}, label(ms[0].r).addr),
+          h('b', {}, `${ms.length} מוסדות באותה כתובת`), h('div', {}, label(ms[0].r).addr), h('div', { class: 'muted small' }, 'בחר מוסד כדי לפתוח את הסקר שלו:'),
           ...ms.map(m => h('button', { class: 'btn block', style: 'margin-top:6px;text-align:start', onclick: e => { e.stopPropagation(); setTimeout(() => { mk._one = m; mk.setPopupContent(mk._pop()); }, 0); } }, `${m.i + 1}. ${label(m.r).name}` + (done(m.r) ? ' ✓' : ''))),
           h('div', { class: 'muted small', style: 'margin-top:6px' }, 'גרירת הנקודה מזיזה את כולם יחד'));
         mk.addTo(layer).bindPopup(() => mk._pop(), { minWidth: 220 })
