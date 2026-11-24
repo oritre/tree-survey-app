@@ -760,3 +760,7 @@ img.docv-page { object-fit: contain; }
 /* (1.147) ori: בטאבלט המפה כיסתה את חלון "מוסדות קרובים". מסתירים את מפת המסלול כשחלון פתוח מעליה */
 body:has(> .modal) .wl-mapview { visibility: hidden; }
 .wl-badge.wl-src { margin: 0 6px; font-size: 12px; padding: 1px 8px; vertical-align: middle; white-space: normal; }
+/* (1.150) ori: לחיצה ארוכה וגרירה של עץ ברשימה משנה את הסדר בדוח ובנספח */
+.tree-list .tree-row { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+.tree-list.dragging { cursor: grabbing; }
+.tree-row.drag-lift { position: relative; z-index: 2; transform: scale(1.02); box-shadow: 0 8px 22px rgba(0,0,0,.28); outline: 2px solid var(--accent); background: var(--surface); }

@@ -2003,6 +2003,11 @@
       cadOk() && window.CadLink && CadLink.supported ? cadBar() : null,
       Construction.isConstruction(cur) || !VOICE_UI ? null : h('button', { class: 'btn big block', onclick: voiceMode }, icon('mic'), 'מצב דיבור'),
       h('div', { class: 'list-head' }, h('span', {}, `${n} עצים בסקר` + (n > maxTrees(cur) ? ` (בתבנית יש מקום ל-${maxTrees(cur)})` : '')),
+        // (1.150) אחרי גרירה: חזרה לסדר לפי מספרי העצים
+        !selMode && Core.manualOrder(cur.trees) ? h('button', { class: 'btn small', title: 'הסדר נקבע בגרירה. לחיצה מחזירה לסדר לפי מספרי העצים', onclick: async () => {
+          for (const t of cur.trees) delete t.pos;
+          await saveNow(); renderTreeList(); toast('הסדר חזר להיות לפי מספרי העצים', 2500);
+        } }, 'סדר לפי מספרים') : null,
         trees.length > 1 && !selMode ? h('button', { class: 'btn small', onclick: () => { saveNow(); selMode = true; selIds = new Set(); renderTreeList(); } }, icon('check'), 'בחירה') : null),
       selMode ? h('div', { class: 'pick-bar' },
         h('span', { class: 'pick-count' }, selIds.size ? `נבחרו ${selIds.size}` : 'סמן עצים'),
@@ -2020,9 +2025,64 @@
       trees.length ? list : h('div', { class: 'empty' }, icon('sprout'), 'עוד אין עצים'),
       h('div', { class: 'muted small no-match hidden', style: 'text-align:center' }, 'אין עץ שמתאים לסינון')].filter(Boolean));
     applyTreeFilter(list);
+    dragTrees(list);
     list.scrollTop = oldTop;
     const on = $('.tree-row.on', pane);
     if (on) scrollRowIntoList(list, on);
+  }
+  // (1.150, ori) לחיצה ארוכה על עץ ברשימה וגרירה: משנה את מקומו בטבלה בדוח ובנספח התמונות (t.pos, Core.sortTrees).
+  // רק בסקר בטיחות, לא במצב בחירה ולא כשיש סינון
+  function dragTrees(list) {
+    if (Construction.isConstruction(cur)) return;
+    let timer = null, drag = null, sx = 0, sy = 0, lastY = 0, raf = 0, eatClick = false;
+    const rows = () => [...list.querySelectorAll('.tree-row')];
+    const cancelWait = () => { clearTimeout(timer); timer = null; };
+    function start(row) {
+      timer = null;
+      drag = { row, before: rows().map(r => r.dataset.id) };
+      row.classList.add('drag-lift'); list.classList.add('dragging');
+      if (navigator.vibrate) try { navigator.vibrate(30); } catch (_) {}
+      raf = requestAnimationFrame(tick);
+    }
+    // מעבירים את השורה כשהאצבע עוברת את אמצע השורה השכנה, וגוללים כשמתקרבים לקצה הרשימה
+    function tick() {
+      if (!drag) return;
+      const lr = list.getBoundingClientRect();
+      if (lastY < lr.top + 48) list.scrollTop -= 12; else if (lastY > lr.bottom - 48) list.scrollTop += 12;
+      const all = rows(), i = all.indexOf(drag.row), prev = all[i - 1], next = all[i + 1];
+      const mid = r => { const b = r.getBoundingClientRect(); return b.top + b.height / 2; };
+      if (prev && lastY < mid(prev)) list.insertBefore(drag.row, prev);
+      else if (next && lastY > mid(next)) list.insertBefore(drag.row, next.nextSibling);
+      raf = requestAnimationFrame(tick);
+    }
+    async function end() {
+      cancelAnimationFrame(raf);
+      const d = drag; drag = null;
+      d.row.classList.remove('drag-lift'); list.classList.remove('dragging');
+      eatClick = true; setTimeout(() => { eatClick = false; }, 400);
+      const order = rows().map(r => r.dataset.id);
+      if (order.join() === d.before.join()) return;
+      order.forEach((id, i) => { const t = treeById(id); if (t) t.pos = i; });
+      await saveNow(); renderTreeList();
+      toast('הסדר עודכן: בטבלה ובנספח התמונות', 2500);
+    }
+    list.addEventListener('pointerdown', e => {
+      if (selMode || treeFilter.trim() || drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      const row = e.target.closest('.tree-row');
+      if (!row) return;
+      sx = e.clientX; sy = lastY = e.clientY;
+      cancelWait(); timer = setTimeout(() => start(row), 450);
+    });
+    const moveTo = (x, y) => { if (drag) { lastY = y; return true; } if (timer && Math.hypot(x - sx, y - sy) > 8) cancelWait(); return false; };
+    list.addEventListener('pointermove', e => { if (moveTo(e.clientX, e.clientY)) e.preventDefault(); });
+    // באצבע: בזמן גרירה הרשימה לא נגללת
+    list.addEventListener('touchmove', e => { const p = e.touches[0]; if (p && moveTo(p.clientX, p.clientY)) e.preventDefault(); }, { passive: false });
+    const up = () => { cancelWait(); if (drag) end(); };
+    list.addEventListener('pointerup', up);
+    list.addEventListener('touchend', up);
+    list.addEventListener('pointercancel', () => { if (!drag) cancelWait(); });
+    list.addEventListener('contextmenu', e => { if (drag || timer) e.preventDefault(); });
+    list.addEventListener('click', e => { if (eatClick) { e.preventDefault(); e.stopPropagation(); eatClick = false; } }, true);
   }
   // מגלגל רק בתוך הרשימה (לא את כל הדף), ורק אם העץ הנבחר לא נראה
   function scrollRowIntoList(list, row) {
