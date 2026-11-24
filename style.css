@@ -616,8 +616,8 @@ textarea.doc-text.b { font-weight: 700; }
 .wl-pop-row input { width: 18px; height: 18px; }
 /* מסלול נסיעה (1.97.0) */
 .wl-route { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 14px; align-items: start; }
-.wl-mapview { height: calc(100vh - 110px); min-height: 320px; border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden; position: sticky; top: 70px; }
-@media (max-width: 860px) { .wl-route { grid-template-columns: 1fr; } .wl-mapview { height: 46vh; position: relative; top: auto; } } /* (1.145.1) leaflet-container is position:relative, so top:70px from the sticky rule pushed the map down over the ⚡ auto-order button on portrait tablets/phones */
+.wl-mapview { height: calc(100vh - 110px); min-height: 320px; border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden; position: sticky; top: 70px; isolation: isolate; } /* (1.147) Leaflet panes use z-index 400-1000; without its own stacking context the map covered dialogs (z 70) on tablets */
+@media (max-width: 860px) { .wl-route { grid-template-columns: 1fr; } .wl-mapview { height: 46vh; position: relative; top: auto; z-index: 0; } } /* (1.145.1) leaflet-container is position:relative, so top:70px from the sticky rule pushed the map down over the ⚡ auto-order button on portrait tablets/phones */
 .wl-stop { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .wl-stop.done { background: #92d050; color: #000; }
 .wl-stop.done .muted { color: #1b3d14; }
@@ -754,3 +754,8 @@ img.docv-page { object-fit: contain; }
 /* העמודה האחרונה (✕) לוקחת את הרווח שנשאר, כדי שהעמודות יהיו ברוחב שנקבע ואפשר יהיה גם לצמצם */
 .wl-table > thead > tr > th:last-child, .wl-table > tbody > tr > td:last-child { width: 100%; text-align: start; }
 .wl-table tr.wl-dayrow > td:last-child { width: auto; }
+/* (1.147) מונה איתור ליד סדר אוטומטי */
+.wl-geo-count .wl-badge { margin-top: 0; white-space: normal; font-weight: 500; }
+.wl-geo-count .wl-badge.busy { font-weight: 700; }
+/* (1.147) ori: בטאבלט המפה כיסתה את חלון "מוסדות קרובים". מסתירים את מפת המסלול כשחלון פתוח מעליה */
+body:has(> .modal) .wl-mapview { visibility: hidden; }
