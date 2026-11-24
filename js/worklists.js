@@ -380,29 +380,41 @@
   // ברשימה הכללית יש עמודת שכונה. ברשימה בלי שכונה (למשל האורנים) נוספת עמודה "שכונה" שמתמלאת מהרשימות האחרות
   // לפי סמל מוסד, ואם אין סמל תואם לפי אותה כתובת. מה שנכתב ביד בתא לא נדרס
   const addrKey = (L, r) => { const v = valuesOf(L, r), st = norm(v.street).split(' ').filter(Boolean).sort().join(' '); return st && /\d/.test(st) ? st + '|' + norm(v.city) : ''; };
+  // (1.156.1, ori: "השיוך חייב להיות אמיתי ונכון") רק מעמודות שכונה מקוריות (לא מעמודה שהאפליקציה מילאה, כדי לא לנחש על ניחוש).
+  // אותו סמל / אותה כתובת עם שתי שכונות שונות = לא ברור = בלי שיוך. סמל שנמצא ברשימה אבל בלי שכונה = בלי שיוך (לא עוברים לכתובת)
   async function hoodIndex(l) {
     const code = new Map(), addr = new Map();
+    const add = (m, k, h) => { if (!m.has(k)) m.set(k, new Set()); if (h) m.get(k).add(h); };
     for (const L of await live()) {
-      if (L.id === l.id || L.type === 'construction') continue;
-      // עמודת השכונה של הרשימה: משויכת, או בשם "שכונה" (גם לפני שהרשימה נפתחה בגרסה הזו)
-      const hc = colsOf((L.map || {}).hood).length ? null : (L.cols || []).find(c => /שכונ/.test(c.name));
-      if (!hc && !colsOf((L.map || {}).hood).length) continue;
-      // עמודה מקורית קודם, ואחריה עמודות שהאפליקציה מילאה
-      const pri = !hc && L.hoodAuto && L.hoodAuto === L.map.hood.col ? 1 : 0;
+      if ((l && L.id === l.id) || L.type === 'construction') continue;
+      const mapped = colsOf((L.map || {}).hood);
+      if (mapped.length && L.hoodAuto && mapped[0] === L.hoodAuto) continue;
+      const hc = mapped.length ? null : (L.cols || []).find(c => /שכונ/.test(c.name));
+      if (!hc && !mapped.length) continue;
       for (const r of L.rows) {
         if (r.deleted) continue;
-        const h = clean(hc ? r.cells[hc.id] : valuesOf(L, r).hood); if (!h) continue;
-        for (const c of codeKeys(L, r)) if (!code.has(c) || code.get(c).pri > pri) code.set(c, { h, pri });
-        const a = addrKey(L, r); if (a && (!addr.has(a) || addr.get(a).pri > pri)) addr.set(a, { h, pri });
+        const h = clean(hc ? r.cells[hc.id] : valuesOf(L, r).hood);
+        for (const c of codeKeys(L, r)) add(code, c, h);
+        const a = addrKey(L, r); if (a) add(addr, a, h);
       }
     }
     return { code, addr, size: code.size + addr.size };
   }
-  function hoodLookup(l, r, ix) {
-    for (const c of codeKeys(l, r)) if (ix.code.has(c)) return ix.code.get(c).h;
-    const a = addrKey(l, r);
-    return (a && ix.addr.has(a) && ix.addr.get(a).h) || '';
+  // מחזיר { h, by } או { h: '', why }
+  function hoodMatch(codes, ak, ix) {
+    for (const c of codes) if (ix.code.has(c)) {
+      const set = ix.code.get(c);
+      if (set.size === 1) return { h: [...set][0], by: 'סמל ' + c };
+      return { h: '', why: set.size ? `לסמל ${c} יש ${set.size} שכונות שונות` : `לסמל ${c} אין שכונה ברשימה` };
+    }
+    if (ak && ix.addr.has(ak)) {
+      const set = ix.addr.get(ak);
+      if (set.size === 1) return { h: [...set][0], by: 'אותה כתובת' };
+      return { h: '', why: set.size ? `לכתובת הזו יש ${set.size} שכונות שונות` : 'לכתובת הזו אין שכונה ברשימה' };
+    }
+    return { h: '', why: 'הסמל והכתובת לא נמצאו ברשימה עם שכונות' };
   }
+  const hoodLookup = (l, r, ix) => hoodMatch(codeKeys(l, r), addrKey(l, r), ix).h;
   // (1.155.1, ori) תיקייה לפי שכונה דולקת לכל רשימה בנפרד (l.hoodOn). בלי בחירה: דולקת ברשימות של ירושלים
   const hoodOn = l => !!l && l.type !== 'construction' && (l.hoodOn != null ? !!l.hoodOn : /ירושל/.test(clean(l.project) + ' ' + clean(l.name)));
   async function ensureHood(l) {
@@ -417,14 +429,22 @@
       const ix = await hoodIndex(l);
       if (ix.size) {
         const id = 'hood' + uid(); let found = 0;
-        for (const r of l.rows) { if (r.deleted) continue; const h = hoodLookup(l, r, ix); r.cells[id] = h; if (h) { found++; r.u = Date.now(); } }
+        for (const r of l.rows) { if (r.deleted) continue; const h = hoodLookup(l, r, ix); r.cells[id] = h; if (h) { r.hoodA = h; found++; r.u = Date.now(); } }
         if (found) { l.cols.push({ id, name: 'שכונה' }); l.map.hood = { col: id, pre: '', prev: false }; l.hoodAuto = id; changed = true; }
         else for (const r of l.rows) delete r.cells[id];
       }
     } else if (l.hoodAuto && l.map.hood && l.map.hood.col === l.hoodAuto && l.cols.some(c => c.id === l.hoodAuto)) {
-      // עמודה שהאפליקציה הוסיפה: שורות חדשות / ריקות מתמלאות
-      const empty = l.rows.filter(r => !r.deleted && !clean(r.cells[l.hoodAuto]));
-      if (empty.length) { const ix = await hoodIndex(l); for (const r of empty) { const h = hoodLookup(l, r, ix); if (h) { r.cells[l.hoodAuto] = h; r.u = Date.now(); changed = true; } } }
+      // עמודה שהאפליקציה הוסיפה: מתעדכנת לפי הרשימה עם השכונות (גם אם שם השתנה, או שהשיוך כבר לא ודאי).
+      // תא שכתבת ביד (שונה ממה שהאפליקציה מילאה, r.hoodA) לא נדרס
+      const ix = await hoodIndex(l);
+      for (const r of l.rows) {
+        if (r.deleted) continue;
+        const cur = clean(r.cells[l.hoodAuto]);
+        // שורות שמולאו בגרסה 1.155 (בלי hoodA) נבדקות מחדש; תא שנכתב ביד אחרי המילוי נשאר
+        if (cur && r.hoodA != null && cur !== clean(r.hoodA)) continue;
+        const h = hoodLookup(l, r, ix);
+        if (h !== cur || (h && r.hoodA !== h)) { r.cells[l.hoodAuto] = h; if (h) r.hoodA = h; else delete r.hoodA; r.u = Date.now(); changed = true; }
+      }
     }
     if (changed) await save(l);
     return changed;
@@ -442,9 +462,12 @@
       const own = !s.listRef || s.listRef.list === l.id;
       if (clean(s.hood) && !own) continue;
       const h = await hoodOfRow(l, r);
-      if (!h || clean(s.hood) === h) continue;
-      s.hood = h; await DB.putSurvey(s);
-      Sync.relocate(s).then(n => { if (n) U().toast(`${n} קבצים של ${s.siteName || 'הסקר'} הועברו לתיקייה ${h}`, 3000); }).catch(() => {});
+      if (clean(s.hood) === h) continue;
+      // (1.156.1) אין שיוך ודאי: סקר שקיבל שכונה אוטומטית חוזר ל"ללא שיוך" (הקבצים חוזרים לתיקיית הפרויקט)
+      if (!h && !own) continue;
+      if (h) s.hood = h; else delete s.hood;
+      await DB.putSurvey(s);
+      Sync.relocate(s).then(n => { if (n) U().toast(`${n} קבצים של ${s.siteName || 'הסקר'} הועברו לתיקייה ${h || clean(s.project) + ' (ללא שיוך לשכונה)'}`, 3000); }).catch(() => {});
     }
   }
 
@@ -2562,19 +2585,13 @@
       const lists = await live();
       const rows = lists.flatMap(L => L.rows.filter(r => !r.deleted && r.sid === s.id).map(r => ({ L, r })));
       if (s.listRef) { const L = lists.find(x => x.id === s.listRef.list), r = L && L.rows.find(x => x.id === s.listRef.row); if (r) rows.unshift({ L, r }); }
-      for (const { L, r } of rows) if (hoodOn(L)) { const hh = await hoodOfRow(L, r); if (hh) return { hood: hh, list: L.name, auto: true }; }
+      for (const { L, r } of rows) if (hoodOn(L)) { const hh = await hoodOfRow(L, r); if (hh) return { hood: hh, src: `הרשימה "${L.name || 'רשימה'}"`, auto: true }; }
       const codes = Core.codesOf(s.code || '').map(c => c.replace(/\D+/g, '')).filter(c => c.length >= 3);
-      const ak = norm(s.street).split(' ').filter(Boolean).sort().join(' ') + '|' + norm(s.city);
-      for (const L of lists) {
-        if (!hoodOn(L)) continue;
-        for (const r of L.rows) {
-          if (r.deleted) continue;
-          const hh = clean(valuesOf(L, r).hood); if (!hh) continue;
-          if (codeKeys(L, r).some(c => codes.includes(c)) || (/\d/.test(ak) && addrKey(L, r) === ak)) return { hood: hh, list: L.name, auto: false };
-        }
-      }
+      const st = norm(s.street).split(' ').filter(Boolean).sort().join(' ');
+      const m = hoodMatch(codes, st && /\d/.test(st) ? st + '|' + norm(s.city) : '', await hoodIndex(null));
+      if (m.h) return { hood: m.h, src: m.by + ' ברשימות', auto: false };
       return null;
     },
     flagRow: async (lid, rid, after) => { const L = await byId(lid), r = L && L.rows.find(x => x.id === rid && !x.deleted); if (!r) { U().toast('השורה לא נמצאה ברשימה', 3000); return; } flagDialog(L, r, after); },
-    _t: { ensureHood, hoodIndex, hoodLookup, setFlag, searchAll, geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
+    _t: { ensureHood, hoodIndex, hoodLookup, hoodMatch, addrKey, codeKeys, setFlag, searchAll, geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
 })(window);
