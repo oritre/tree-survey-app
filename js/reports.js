@@ -150,18 +150,17 @@
   const sortPlaces = surveys => surveys.slice().sort((a, b) => Core.placeOf(a).name.localeCompare(Core.placeOf(b).name, 'he'));
   function pineRows(surveys) {
     const nc = codeCols(surveys);
-    const head = [...codeHead(nc), 'שם המוסד', 'כתובת', 'מנהל/ת', 'תאריך הסקר', 'מספר אורנים', "גובה ממוצע (מ')", 'קוטר ממוצע (ס"מ)', 'סה"כ עצים בסקר (כל המינים)'];
+    const head = [...codeHead(nc), 'שם המוסד', 'כתובת', 'מנהל/ת', 'תאריך הסקר', 'מספר אורנים', "גובה ממוצע (מ')", 'קוטר ממוצע (ס"מ)'];
     const allH = [], allD = [];
     const rows = sortPlaces(surveys).map(s => {
       const p = Core.placeOf(s);
-      const trees = (s.trees || []).filter(Core.hasContent);
       const lines = pineLines(s);
       const hs = lines.map(l => l[4]), ds = lines.map(l => l[7]);
       allH.push(...hs); allD.push(...ds);
-      return [...codeCells(s, nc), p.name, p.address, (s.manager || '').trim(), fmtDate(s.date), lines.length, avg(hs), avg(ds), trees.length];
+      return [...codeCells(s, nc), p.name, p.address, (s.manager || '').trim(), fmtDate(s.date), lines.length, avg(hs), avg(ds)];
     });
     const sum = i => rows.reduce((a, r) => a + (+r[i + nc] || 0), 0);
-    return [head, ...rows, ['סה"כ', ...Array(nc - 1).fill(''), `${rows.length} מוסדות`, '', '', sum(4), avg(allH), avg(allD), sum(7)]];
+    return [head, ...rows, ['סה"כ', ...Array(nc - 1).fill(''), `${rows.length} מוסדות`, '', '', sum(4), avg(allH), avg(allD)]];
   }
   async function pinesXlsx(surveys) {
     const inst = pineRows(surveys), nc = codeCols(surveys);
@@ -169,7 +168,7 @@
     let k = 0;
     const all = sortPlaces(surveys).flatMap(s => { const p = Core.placeOf(s); return pineLines(s).map(l => [...codeCells(s, nc), p.name, p.address, ++k, ...l.slice(1)]); });
     return book([
-      { name: 'מוסדות', rows: inst, widths: [...Array(nc).fill(12), 30, 30, 18, 12, 11, 12, 12, 14], boldLast: true, table: inst.length - 2 },
+      { name: 'מוסדות', rows: inst, widths: [...Array(nc).fill(12), 30, 30, 18, 12, 11, 12, 12], boldLast: true, table: inst.length - 2 },
       { name: 'כל האורנים', rows: [head, ...all], widths: [...Array(nc).fill(12), 26, 26, ...PINE_W], table: all.length }]);
   }
 
