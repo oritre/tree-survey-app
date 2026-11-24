@@ -1706,6 +1706,19 @@
     }
     const status = h('div', { class: 'muted small', role: 'status' });
     const listBox = h('div', { class: 'stack wl-route-list' });
+    // (1.147, ori) ליד "סדר אוטומטי": כמה מוסדות עוד נשאר לאתר מתוך כמה, לרשימה הראשית ולכל רשימה משנית
+    const geoCount = h('div', { class: 'row small wl-geo-count', role: 'status', style: 'gap:6px;flex-wrap:wrap;align-items:center' });
+    function showGeoCount() {
+      const one = (name, ids, gm, css) => {
+        const tot = ids.length, tried = ids.filter(id => gm.has(id)).length, found = ids.filter(id => gm.get(id)).length, left = tot - tried;
+        const txt = left ? `📍 ${name}נשארו לאתר ${left} מתוך ${tot}` : found === tot ? `✓ ${name}כל ${tot} המוסדות אותרו` : `✓ ${name}אותרו ${found} מתוך ${tot}, ${tot - found} לא נמצאו`;
+        return h('span', { class: 'wl-badge' + (left ? ' busy' : ''), style: css || '' }, txt);
+      };
+      const named = SIDES.length > 0;
+      geoCount.replaceChildren(
+        one(named ? (l.name || 'ראשית') + ': ' : '', l.route.filter(id => l.rows.some(r => r.id === id && !r.deleted)), geo),
+        ...SIDES.map(S => one((S.L.name || 'רשימה') + ': ', rowsOf(S).map(r => r.id), S.geo, chipCss(S))));
+    }
     const outBox = h('div', { class: 'stack' });
     const mapEl = h('div', { class: 'wl-mapview' });
     // נקודת התחלה לסידור האוטומטי ולקישור לגוגל מפות: בלי / המיקום שלי / כתובת שבוחרים (נשמר ברשימה)
@@ -1977,7 +1990,7 @@
     function showStatus() {
       status.textContent = (job && !job.done ? `מאתר כתובות במפה… ${job.i} מתוך ${job.n} (ממשיך גם אם יוצאים מהמסך) · ` : '') + (day ? `${day}: ` : '') + `${vis().length} תחנות במסלול` + (drive ? ` · ${Math.round(drive.km)} ק"מ נסיעה בכבישים · כ-${hm(drive.min)} (בלי עצירות)` : airKm ? ` · כ-${Math.round(airKm)} ק"מ בקו אווירי` : '');
     }
-    const redraw = () => { drawList(); drawMap(); drawSide(); };
+    const redraw = () => { drawList(); drawMap(); drawSide(); showGeoCount(); };
     // כל התחנות (בלי הגבלה) ממוספרות לפי הסדר: CSV לייבוא ב-Google My Maps (שכבה חדשה > ייבוא, מיקום לפי Latitude/Longitude, כותרת לפי "שם")
     function exportMyMaps() {
       const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
@@ -2000,6 +2013,7 @@
     function onGeo(r, g) {
       if (!document.body.contains(status)) { job && job.subs.delete(onGeo); return; }
       if (r) geo.set(r.id, g);
+      showGeoCount();
       if (!r || Date.now() - lastDraw > 2500) { lastDraw = Date.now(); redraw(); }
       if (job.err && r) status.textContent = 'שגיאה באיתור: ' + job.err;
     }
@@ -2059,6 +2073,7 @@
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' },
             h('button', { class: 'btn primary', onclick: ev => { ev.currentTarget.disabled = true; auto().finally(() => { ev.target.disabled = false; }); } }, '⚡ סדר אוטומטי (הכי מהר בכבישים)'),
             h('label', { class: 'row small', style: 'gap:6px;align-items:center' }, 'התחלה:', startSel), startWrap, startPick),
+          geoCount,
           sideCtl,
           dayBox, linksBox, status, listBox,
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
@@ -2089,7 +2104,7 @@
     let lastS = 0;
     for (const S of SIDES) {
       const sj = geoJob(S.L, local, true);
-      const onS = (r, g) => { if (!document.body.contains(status)) { sj.subs.delete(onS); return; } if (r) S.geo.set(r.id, g || null); if (!r || Date.now() - lastS > 2500) { lastS = Date.now(); redraw(); } };
+      const onS = (r, g) => { if (!document.body.contains(status)) { sj.subs.delete(onS); return; } if (r) S.geo.set(r.id, g || null); showGeoCount(); if (!r || Date.now() - lastS > 2500) { lastS = Date.now(); redraw(); } };
       sj.subs.add(onS);
     }
     if (SIDES.length) redraw();
