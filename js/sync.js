@@ -156,6 +156,11 @@
     }
     // (1.155, ori) סקר בטיחות: תיקיית פרויקט / שכונה. השתנו הפרויקט, השכונה או הרשימות: הקבצים שכבר עלו עוברים לתיקיות החדשות
     if (!isBuild(s) && !s.odReportOwn && s.odReportDir && s.odReportPlace !== placeKey(s.project, s.hood)) await relocate(s);
+    // (1.159.1) תיקיית שכונה כפולה שאוחדה: התיקייה שנשארה
+    else if (!isBuild(s) && !s.odReportOwn && s.odReportDir && hoodOf(s)) {
+      const want = await placeFolder(s.project, s.hood);
+      if (want !== s.odReportDir) { s.odReportDir = want; s.odPlaces = Object.assign(s.odPlaces || {}, { [s.odReportPlace]: want }); await DB.putSurvey(s, false); }
+    }
     // ori (1.108.2): הקבצים של הסקר הועברו בדרייב לתיקייה אחרת: מעלים מעכשיו לשם, ולא שוב ל"סקרי עצים"
     // גם כשאין עדיין תיקייה בסקר (במכשיר הזה, או אחרי שינוי שם): קודם בודקים לאן הועבר האקסל הראשי, ולא יוצרים תיקייה ריקה (1.112.2)
     if (isBuild(s) && (s.odReportDir || s.xlMain) && !followChecked.has(s.id)) {
@@ -182,7 +187,7 @@
         s.odReportDir = await OD.folder(proj, name);
         s.odReportDirName = name;
       } else {
-        s.odReportDir = hoodOf(s) ? await OD.folder(proj, hoodOf(s)) : proj;
+        s.odReportDir = hoodOf(s) ? await hoodFolder(proj, hoodOf(s)) : proj;
         s.odReportPlace = placeKey(s.project, s.hood);
         s.odPlaces = Object.assign(s.odPlaces || {}, { [s.odReportPlace]: s.odReportDir });
       }
@@ -220,7 +225,40 @@
   const projOfKey = k => k.split(' / ')[0];
   async function placeFolder(proj, hood) {
     const f = await OD.folder(await reportRoot(), tidy(proj) || 'ללא פרויקט');
-    return tidy(hood) ? OD.folder(f, tidy(hood)) : f;
+    return tidy(hood) ? hoodFolder(f, tidy(hood)) : f;
+  }
+  // (1.159.1, ori: "למה יש 2 תיקיות תלפיות מזרח באורנים?") כמה סקרים עברו באותו רגע לתיקיית שכונה חדשה ונוצרו כמה תיקיות באותו שם.
+  // פעם אחת בכל הפעלה לכל תיקיית שכונה: מאחדים את הכפולות לתיקייה אחת (הקבצים עוברים, קובץ שכבר קיים בשם הזה עובר לפח, התיקייה הריקה לפח)
+  const hoodChecked = new Map();
+  function hoodFolder(parent, hood) {
+    const k = parent + '|' + hood;
+    if (!hoodChecked.has(k)) hoodChecked.set(k, (async () => {
+      const id = await OD.folder(parent, hood);
+      const all = await OD.foldersNamed(parent, hood).catch(() => []);
+      const keep = all.some(f => f.id === id) ? id : (all[0] || {}).id || id;
+      let n = 0;
+      for (const d of all) {
+        if (d.id === keep) continue;
+        const there = new Map((await OD.children(keep).catch(() => [])).map(x => [x.name, x]));
+        for (const it of await OD.children(d.id).catch(() => [])) {
+          try {
+            // אותו קובץ בשתי התיקיות: נשאר החדש יותר, הישן לפח
+            const o = it.file && there.get(it.name);
+            if (o && o.file) {
+              const older = (Date.parse(it.lastModifiedDateTime) || 0) > (Date.parse(o.lastModifiedDateTime) || 0) ? o : it;
+              await OD.api('PATCH', `/files/${older.id}?supportsAllDrives=true`, { trashed: true });
+              if (older === o) { await moveFile(it.id, d.id, keep); there.set(it.name, it); }
+            } else { await moveFile(it.id, d.id, keep); there.set(it.name, it); }
+            n++;
+          } catch (e) { log('error', `איחוד תיקיות "${hood}": "${it.name}" לא הועבר: ${e.message}`); }
+        }
+        if (!(await OD.children(d.id).catch(() => [null])).length) await OD.api('PATCH', `/files/${d.id}?supportsAllDrives=true`, { trashed: true }).catch(() => {});
+      }
+      if (keep !== id) await OD._remember(OD._key(parent, hood, true), keep);
+      if (all.length > 1) log('ok', `${all.length} תיקיות "${hood}" אוחדו לאחת (${n} קבצים)`);
+      return keep;
+    })().catch(e => { hoodChecked.delete(k); throw e; }));
+    return hoodChecked.get(k);
   }
   const noteName = (s, name) => { const n = OD.clean(name); if (!(s.odRepNames || []).includes(n)) s.odRepNames = [...(s.odRepNames || []), n].slice(-30); };
   // הקבצים של הסקר בתיקייה: לפי השמות שהועלו, ובסקר ישן לפי שם הקובץ של הסקר
@@ -265,7 +303,7 @@
       have[to.k] = dest;
     }
     const main = want[0];
-    s.odReportDir = have[main.k] || await placeFolder(main.p, s.hood);
+    s.odReportDir = await placeFolder(main.p, s.hood);
     have[main.k] = s.odReportDir;
     s.odPlaces = have; s.odReportPlace = main.k;
     await DB.putSurvey(s, false);
@@ -285,7 +323,7 @@
     for (const p of extraProjects(s)) {
       try {
         const k = placeKey(p, s.hood);
-        const dir = (s.odPlaces || {})[k] || await placeFolder(p, s.hood);
+        const dir = await placeFolder(p, s.hood);
         if (!await OD.upload(dir, name, blob, true)) { if (s.odPlaces) delete s.odPlaces[k]; throw new Error('ההעלאה נכשלה'); }
         s.odPlaces = Object.assign(s.odPlaces || {}, { [k]: dir }); noteName(s, name);
       }
