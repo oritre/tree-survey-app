@@ -183,7 +183,18 @@
     async _forget(key) { const m = await OD._idMap(); if (m.delete(key)) OD._saveIds(); },
 
     // תיקייה בתוך תיקייה (או בשורש), נוצרת אם אינה קיימת
-    async folder(parentId, name) {
+    // (1.159.1) כמה קריאות במקביל לאותה תיקייה (למשל כמה סקרים שעוברים לתיקיית שכונה חדשה): תיקייה אחת, לא כמה
+    _folderBusy: new Map(),
+    folder(parentId, name) {
+      const key = OD._key(parentId, name, true);
+      if (OD._folderBusy.has(key)) return OD._folderBusy.get(key);
+      const p = OD._folder(parentId, name).finally(() => OD._folderBusy.delete(key));
+      OD._folderBusy.set(key, p);
+      return p;
+    },
+    // כל התיקיות בשם הזה בתוך תיקייה (לאיחוד כפולות)
+    async foldersNamed(parentId, name) { return (await OD._list(`${q(parentId || 'root')} in parents and name = ${q(OD.clean(name))} and trashed = false and mimeType = '${FOLDER}'`)).map(shape); },
+    async _folder(parentId, name) {
       const key = OD._key(parentId, name, true);
       const hit = await OD._cached(key);
       if (hit) return hit;
