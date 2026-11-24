@@ -145,12 +145,12 @@
   const codeCols = surveys => Math.max(1, ...surveys.map(s => codesOf(s.code).length));
   const codeHead = n => Array.from({ length: n }, (_, i) => i ? 'סמל מוסד ' + (i + 1) : 'סמל מוסד');
   const codeCells = (s, n) => Array.from({ length: n }, (_, i) => { const c = codesOf(s.code)[i] || ''; return /^\d+$/.test(c) ? +c : c; });
-  // לכל מוסד (1.162): מספר אורנים, גובה ממוצע וקוטר ממוצע (עץ עם כמה גזעים = סכום הגזעים, 40+40=80), ופירוט כל אורן בתא אחד
+  // לכל מוסד (1.162): מספר אורנים, גובה ממוצע וקוטר ממוצע (עץ עם כמה גזעים = סכום הגזעים, 40+40=80), (הפירוט לכל אורן בגיליון "כל האורנים")
   const avg = v => { const x = v.filter(n => n !== '' && n != null); return x.length ? Math.round(x.reduce((a, b) => a + b, 0) / x.length * 10) / 10 : ''; };
   const sortPlaces = surveys => surveys.slice().sort((a, b) => Core.placeOf(a).name.localeCompare(Core.placeOf(b).name, 'he'));
   function pineRows(surveys) {
     const nc = codeCols(surveys);
-    const head = [...codeHead(nc), 'שם המוסד', 'כתובת', 'מנהל/ת', 'תאריך הסקר', 'מספר אורנים', "גובה ממוצע (מ')", 'קוטר ממוצע (ס"מ)', 'פירוט: גובה / קוטר לכל אורן', 'סה"כ עצים בסקר (כל המינים)'];
+    const head = [...codeHead(nc), 'שם המוסד', 'כתובת', 'מנהל/ת', 'תאריך הסקר', 'מספר אורנים', "גובה ממוצע (מ')", 'קוטר ממוצע (ס"מ)', 'סה"כ עצים בסקר (כל המינים)'];
     const allH = [], allD = [];
     const rows = sortPlaces(surveys).map(s => {
       const p = Core.placeOf(s);
@@ -158,11 +158,10 @@
       const lines = pineLines(s);
       const hs = lines.map(l => l[4]), ds = lines.map(l => l[7]);
       allH.push(...hs); allD.push(...ds);
-      const detail = lines.map(l => `אורן ${l[0]}: ${l[4] !== '' ? l[4] + " מ'" : '?'} / ${l[7] !== '' ? l[7] + ' ס"מ' : '?'}`).join('\n');
-      return [...codeCells(s, nc), p.name, p.address, (s.manager || '').trim(), fmtDate(s.date), lines.length, avg(hs), avg(ds), detail, trees.length];
+      return [...codeCells(s, nc), p.name, p.address, (s.manager || '').trim(), fmtDate(s.date), lines.length, avg(hs), avg(ds), trees.length];
     });
     const sum = i => rows.reduce((a, r) => a + (+r[i + nc] || 0), 0);
-    return [head, ...rows, ['סה"כ', ...Array(nc - 1).fill(''), `${rows.length} מוסדות`, '', '', sum(4), avg(allH), avg(allD), '', sum(8)]];
+    return [head, ...rows, ['סה"כ', ...Array(nc - 1).fill(''), `${rows.length} מוסדות`, '', '', sum(4), avg(allH), avg(allD), sum(7)]];
   }
   async function pinesXlsx(surveys) {
     const inst = pineRows(surveys), nc = codeCols(surveys);
@@ -170,7 +169,7 @@
     let k = 0;
     const all = sortPlaces(surveys).flatMap(s => { const p = Core.placeOf(s); return pineLines(s).map(l => [...codeCells(s, nc), p.name, p.address, ++k, ...l.slice(1)]); });
     return book([
-      { name: 'מוסדות', rows: inst, widths: [...Array(nc).fill(12), 30, 30, 18, 12, 11, 12, 12, 30, 14], boldLast: true, table: inst.length - 2 },
+      { name: 'מוסדות', rows: inst, widths: [...Array(nc).fill(12), 30, 30, 18, 12, 11, 12, 12, 14], boldLast: true, table: inst.length - 2 },
       { name: 'כל האורנים', rows: [head, ...all], widths: [...Array(nc).fill(12), 26, 26, ...PINE_W], table: all.length }]);
   }
 
