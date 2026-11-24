@@ -2170,7 +2170,8 @@
     startPick.hidden = l.start.mode !== 'addr';
     async function startPoint() {
       if (l.start.mode === 'me') {
-        const p = me || await new Promise(res => navigator.geolocation ? navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lon: p.coords.longitude }), () => res(null), { timeout: 8000, maximumAge: 120000 }) : res(null));
+        // לסידור מסלול מספיק מיקום גס: המיקום האחרון מה-GPS המשותף (עד 2 דקות), אחרת עד 8 שניות
+        const p = me || (window.Geo && (Geo.last(120000) || await Geo.get({ good: 100, ok: 1000, settle: 2000, timeout: 8000 })));
         if (!p) ui.toast('המיקום שלך לא זמין, המסלול מסודר מצפון לדרום', 3500);
         return p;
       }
@@ -2492,7 +2493,7 @@
     // המיקום שלי על המפה (נקודה כחולה כמו בגוגל מפות) + כפתור למרכז אליו
     let me = null, meDot = null, meAcc = null, watch = null, follow = false;
     function showMe() {
-      if (!navigator.geolocation || !map) return;
+      if (!navigator.geolocation || !window.Geo || !map) return;
       const Btn = L.Control.extend({ options: { position: 'topleft' }, onAdd: () => {
         const b = L.DomUtil.create('button', 'wl-mebtn');
         b.type = 'button'; b.title = 'המיקום שלי'; b.setAttribute('aria-label', 'המיקום שלי'); b.textContent = '◎';
@@ -2501,16 +2502,21 @@
         return b;
       } });
       new Btn().addTo(map);
-      watch = navigator.geolocation.watchPosition(p => {
-        me = { lat: p.coords.latitude, lon: p.coords.longitude };
+      // GPS משותף (js/geo.js): אם הוא כבר חם, הנקודה מופיעה מיד
+      const onFix = f => {
+        if (!f) return;
+        me = { lat: f.lat, lon: f.lon };
         const ll = [me.lat, me.lon];
         if (!meDot) {
-          meAcc = L.circle(ll, { radius: p.coords.accuracy, color: '#1a73e8', weight: 1, fillOpacity: .12, interactive: false }).addTo(map);
+          meAcc = L.circle(ll, { radius: f.acc, color: '#1a73e8', weight: 1, fillOpacity: .12, interactive: false }).addTo(map);
           meDot = L.circleMarker(ll, { radius: 8, color: '#fff', weight: 3, fillColor: '#1a73e8', fillOpacity: 1 }).addTo(map).bindPopup('המיקום שלי');
-        } else { meDot.setLatLng(ll); meAcc.setLatLng(ll).setRadius(p.coords.accuracy); }
+        } else { meDot.setLatLng(ll); meAcc.setLatLng(ll).setRadius(f.acc); }
         if (follow) { map.panTo(ll); follow = false; }
-      }, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
-      const stop = () => { if (watch != null) navigator.geolocation.clearWatch(watch); watch = null; window.removeEventListener('hashchange', stop); };
+      };
+      const key = {};
+      watch = Geo.on(onFix); Geo.hold(key);
+      const f0 = Geo.last(60000); if (f0) onFix(f0);
+      const stop = () => { if (watch != null) { watch(); Geo.release(key); } watch = null; window.removeEventListener('hashchange', stop); };
       window.addEventListener('hashchange', stop);
     }
     ui.app().replaceChildren(ui.bar({ title: 'מסלול נסיעה', sub: l.name }, back),
