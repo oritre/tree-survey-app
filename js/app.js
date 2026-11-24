@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.160.0';
+  const APP_VERSION = '1.161.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -3051,9 +3051,18 @@
           if ((p.loc || p.h !== '' || p.lat != null) && !confirm(`למחוק את אורן ${i + 1} ואת הפרטים שלו?`)) return;
           t.pineList.splice(t.pineList.indexOf(p), 1); t.pines = t.pineList.length || null; onChange(); draw();
         } }, icon('trash'), 'מחק אורן') : null;
+      // (1.161) שכפול: אורן חדש מיד אחרי זה, עם אותו מיקום, גובה וקטרי גזעים (בלי נ"צ)
+      const dup = h('button', { class: 'btn small', type: 'button', title: 'אורן חדש עם אותם פרטים, בלי נ"צ', onclick: () => {
+        const k = t.pineList.indexOf(p) + 1;
+        t.pineList.splice(k, 0, Object.assign(newPine(), { loc: p.loc || '', h: p.h == null ? '' : p.h, trunks: (p.trunks || ['']).slice() }));
+        t.pines = t.pineList.length; onChange(); draw();
+        const c = list.children[k]; if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        toast(`נוצר אורן ${k + 1} עם אותם פרטים. צריך לסמן לו נ"צ`, 2500);
+      } }, '⧉ שכפל אורן');
       showMiss();
       return h('div', { class: 'card stack pine-card' },
-        h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' }, h('b', { style: 'font-size:18px' }, `🌲 אורן ${i + 1}`), missEl, del),
+        h('div', { class: 'row', style: 'justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px' }, h('b', { style: 'font-size:18px' }, `🌲 אורן ${i + 1}`), missEl,
+          h('span', { class: 'row', style: 'gap:6px' }, dup, del)),
         field('מיקום', locIn), chips,
         field('גובה (מ\')', numIn(p, 'h', 'מטר')),
         field('קוטר גזע (ס"מ), לכל גזע בנפרד', trunks),
