@@ -18,6 +18,8 @@
     { key: 'manager', label: 'מנהל/ת', re: /מנהל|אחראי|איש\s*קשר|גננ/, safetyOnly: true },
     // (1.155, ori) שכונה: תיקייה בתוך תיקיית הפרויקט בדרייב (סקרי עצים / ירושלים / גונן)
     { key: 'hood', label: 'שכונה (תיקייה בדרייב)', re: /שכונ/, safetyOnly: true },
+    // (1.163, ori) קב"ט: בירושלים כללי תיקייה לכל קב"ט (הראשון, לפני /) בתוך תיקיית הפרויקט, ובתוכה השכונות
+    { key: 'kabat', label: 'קב"ט (תיקייה בדרייב, מעל השכונה)', re: /קב["״'׳]?ט/, safetyOnly: true },
     { key: 'gush', label: 'גוש', re: /^גוש/, buildOnly: true },
     { key: 'helka', label: 'חלקה', re: /^חלק/, buildOnly: true },
   ];
@@ -282,6 +284,7 @@
       for (const f of fieldsOf(l)) {
         if (!v[f.key]) continue;
         if (f.key === 'hood' && !hoodOn(l)) continue;
+        if (f.key === 'kabat') continue; // נכנס לסקר רק השם הראשון (למטה)
         if (fromPrev && (l.map[f.key] || {}).prev && clean(s[f.key])) continue;
         // שני סמלי מוסד בתא אחד: שניהם נכנסים לדוח, מופרדים בפסיק
         s[f.key] = f.key === 'code' && root.Reports ? root.Reports.codeText(v[f.key]) : v[f.key];
@@ -289,6 +292,8 @@
       if (l.project) s.project = l.project;
       // (1.155) שכונה: מהעמודה, ואם אין ברשימה הזו מהרשימות האחרות (לפי סמל או כתובת)
       if (!clean(s.hood) && cache && hoodOn(l)) { const ix0 = hoodIx; if (ix0) { const hh = hoodLookup(l, r, ix0); if (hh) s.hood = hh; } }
+      // (1.163) קב"ט: תיקייה מעל השכונה, רק בתיקיית הפרויקט של הרשימה הזו. בלי קב"ט: "ללא שיוך"
+      if (kabatOn(l)) { s.kabatProj = clean(l.project); s.kabat = kabatOfRow(l, r); }
       // שורה שכתוב בה "אורנים" (למשל בהערות): הסקר נפתח כסקר אורנים (חלון פרטי אורנים, תזכורות, אקסל ריכוז)
       if (l.type !== 'construction' && Object.values(r.cells || {}).some(v => /(^|[\s,;(])[הו]?או?רני?ם/.test(String(v || '')))) s.pinesMode = true;
       if ((l.repl || []).length) s.nameRepl = l.repl;
@@ -476,8 +481,149 @@
     if (!root.DB || !root.Sync) return;
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
     for (const L of await live()) if (hoodOn(L)) { await ensureHood(L).catch(() => {}); await hoodToSurveys(L, local).catch(() => {}); }
+    await kabatToSurveys(local).catch(e => console.warn('kabat', e));
   }
   setTimeout(() => { sync(false).catch(() => {}).then(autoHoods).catch(() => {}); }, 6000);
+
+  // ---------- תיקייה לפי קב"ט (1.163, ori) ----------
+  // ירושלים כללי: סקרי עצים / ירושלים / <קב"ט ראשון> / <שכונה>. שורה בלי קב"ט ודאי: "ללא שיוך" / <שכונה>.
+  // רק ברשימה שיש בה עמודת קב"ט (l.map.kabat), ואפשר לכבות (l.kabatOn). לא ברשימות האורנים / החדשים
+  const NO_KABAT = 'ללא שיוך', KABAT_RE = /קב["״'׳]?ט/;
+  const codesIn = v => Core.codesOf(v).map(c => c.replace(/\D+/g, '')).filter(c => c.length >= 3);
+  // "און אסרף / דניאל יודורובסקי" -> "און אסרף"; "שלומי כהן {גיבוי}" -> "שלומי כהן"; "-" / "אין" -> ''
+  const kabatFirst = v => { const t = clean(String(v || '').split(/[/\\|;,]/)[0].replace(/\{[^}]*\}?|\([^)]*\)?|\[[^\]]*\]?/g, ' ')).replace(/^[-–—.\s]+|[-–—.\s]+$/g, '');
+    return /^(אין|ללא|לא ידוע|ללא שיוך|לא משויך|\?)$/.test(t) ? '' : t; };
+  // אותו שם בכתיב אחר (אסנת / אוסנת, רווח כפול): תיקייה אחת
+  const kabatKey = v => norm(v).replace(/[וי\s]/g, '');
+  const kabatOn = l => !!l && l.type !== 'construction' && colsOf((l.map || {}).kabat).length > 0 &&
+    (l.kabatOn != null ? !!l.kabatOn : !/אורנ|חדש/.test(clean(l.project) + ' ' + clean(l.name)));
+  // הכתיב של כל קב"ט ברשימה: הנפוץ ביותר
+  function kabatSpell(l) {
+    const cnt = new Map();
+    for (const r of l.rows) { if (r.deleted) continue; const n = kabatFirst(valuesOf(l, r).kabat); if (!n) continue; const k = kabatKey(n); if (!cnt.has(k)) cnt.set(k, new Map()); cnt.get(k).set(n, (cnt.get(k).get(n) || 0) + 1); }
+    return new Map([...cnt].map(([k, m]) => [k, [...m].sort((a, b) => b[1] - a[1])[0][0]]));
+  }
+  function kabatOfRow(l, r, sp) {
+    const n = kabatFirst(valuesOf(l, r).kabat);
+    return n ? (sp || kabatSpell(l)).get(kabatKey(n)) || n : '';
+  }
+  // סקרים שנפתחו מהרשימה (גם כרשימה נוספת של סקר משותף): הקב"ט לסקר והעברת הקבצים. רשימה שכובתה / שורה שהוסרה: הסקר חוזר לתיקיית הפרויקט / שכונה
+  let kabatRun = Promise.resolve();
+  async function kabatToSurveys(local) {
+    const lists = await live(), want = new Map();
+    for (const L of lists) {
+      if (!kabatOn(L)) continue;
+      const sp = kabatSpell(L);
+      for (const r of L.rows) if (!r.deleted && r.sid && !want.has(r.sid)) want.set(r.sid, { proj: clean(L.project), kabat: kabatOfRow(L, r, sp) });
+    }
+    const projs = new Set(lists.map(L => clean(L.project)));
+    const changed = [];
+    for (const s of local.values()) {
+      if (!s || s.deleted || Construction.isConstruction(s)) continue;
+      const w = want.get(s.id);
+      if (w) {
+        // רק אם הסקר באמת שייך לפרויקט של הרשימה (ראשי או נוסף)
+        if (![s.project, ...(s.extraProjects || [])].some(p => clean(p) === w.proj)) continue;
+        if (s.kabatProj === w.proj && clean(s.kabat) === w.kabat) continue;
+        s.kabatProj = w.proj; s.kabat = w.kabat;
+      } else if (s.kabatProj != null && projs.has(s.kabatProj)) { delete s.kabatProj; delete s.kabat; }
+      else continue;
+      await DB.putSurvey(s);
+      changed.push(s);
+    }
+    if (!changed.length) return 0;
+    // אחד אחרי השני (כדי שתיקיות חדשות ייווצרו פעם אחת)
+    kabatRun = kabatRun.then(async () => {
+      let n = 0;
+      for (const s of changed) n += await Sync.relocate(s).catch(e => { console.warn('kabat relocate', e); return 0; }) || 0;
+      if (n) U().toast(`${n} קבצים הועברו לתיקיות לפי קב"ט ושכונה`, 3500);
+    });
+    return changed.length;
+  }
+  // הערך לכל שורה ברשימה מגיליון בקובץ: { ok, none: [תיאור], set: Map(שורה -> ערך) }
+  function colPlan(l, sh, vi) {
+    const ci = sh.code.i;
+    const isK = KABAT_RE.test(sh.head[vi] || '');
+    const si = sh.head.findIndex(n => /כתובת|רחוב/.test(n)), ni = sh.head.findIndex(n => /מס['׳]?\s*ה?בית|^מספר\s*בית/.test(n));
+    const akey = (st, city) => { const t = norm(st).split(' ').filter(Boolean).sort().join(' '); return t && /\d/.test(t) ? t + '|' + norm(city || 'ירושלים') : ''; };
+    const fAddr = r => si < 0 ? '' : akey(clean(r[si]) + (ni >= 0 && !/\d/.test(r[si]) ? ' ' + clean(r[ni]) : ''), '');
+    const byCode = new Map();
+    for (const r of sh.rows) for (const c of codesIn(r[ci])) { if (!byCode.has(c)) byCode.set(c, []); byCode.get(c).push(r); }
+    const cmp = v => isK ? kabatKey(kabatFirst(v)) : norm(v);
+    // מחזיר ערך אחד, או '' כשאין / לא חד-משמעי
+    const pick = rs => { const vals = rs.map(r => clean(r[vi])).filter(v => cmp(v)); const keys = new Set(vals.map(cmp)); if (keys.size !== 1) return { v: '', why: keys.size ? 'ערכים שונים' : 'ריק בקובץ' }; const same = new Set(vals); return { v: same.size === 1 ? vals[0] : isK ? kabatFirst(vals[0]) : vals[0] }; };
+    const res = { ok: 0, none: [], set: new Map() };
+    for (const r of l.rows) {
+      if (r.deleted) continue;
+      const v = valuesOf(l, r), myA = akey(v.street, '');
+      let rs = codeKeys(l, r).flatMap(c => byCode.get(c) || []), m = rs.length ? pick(rs) : null;
+      // אותו סמל לכמה מוסדות עם ערכים שונים / בלי סמל תואם: לפי הכתובת (רחוב ומספר)
+      if ((!m || !m.v) && myA) { const ra = (rs.length ? rs : sh.rows).filter(x => fAddr(x) === myA); if (ra.length) { const m2 = pick(ra); if (m2.v || !m) m = m2; } }
+      if (m && m.v) { res.set.set(r.id, m.v); res.ok++; }
+      else res.none.push([v.code ? 'סמל ' + v.code : 'בלי סמל', v.siteName, v.street].filter(Boolean).join(' · ') + ' (' + (m ? m.why : 'לא נמצא בקובץ') + ')');
+    }
+    return res;
+  }
+
+  // עמודה מקובץ אחר (1.163): למשל עמודת הקב"טים מהאקסל המקורי, לפי סמל המוסד (ואם הסמל לא חד-משמעי לפי הכתובת)
+  async function addColumnFromFile(l, file, after) {
+    const ui = U(), { h } = ui;
+    const sheets = (await readFile(file)).map(sh => {
+      const hr = guessHeader(sh.rows), head = (sh.rows[hr] || []).map(cellText);
+      return { name: sh.name, hr, head, rows: sh.rows.slice(hr + 1).map(r => (r || []).map(cellText)).filter(r => r.some(Boolean)) };
+    }).filter(sh => sh.head.filter(Boolean).length >= 2 && sh.rows.length);
+    if (!sheets.length) { ui.toast('לא נמצאה טבלה בקובץ', 3500); return; }
+    const myCodes = new Set(l.rows.filter(r => !r.deleted).flatMap(r => codeKeys(l, r)));
+    // עמודת הסמל: זו שהכי הרבה מהסמלים שלה ברשימה
+    const codeColOf = sh => { let best = -1, bi = -1; sh.head.forEach((_, i) => { const n = sh.rows.filter(r => codesIn(r[i]).some(c => myCodes.has(c))).length; if (n > best) { best = n; bi = i; } }); return { i: bi, n: best }; };
+    sheets.forEach(sh => { sh.code = codeColOf(sh); });
+    sheets.sort((a, b) => b.code.n - a.code.n);
+    const sheetSel = h('select', { class: 'in' }, sheets.map((sh, i) => h('option', { value: i }, `${sh.name} (${sh.rows.length} שורות, ${sh.code.n} סמלים תואמים)`)));
+    const colSel = h('select', { class: 'in' });
+    const nameIn = h('input', { class: 'in', placeholder: 'שם העמודה ברשימה' });
+    const out = h('div', { class: 'small stack', style: 'gap:4px' });
+    let plan = null;
+    const sheet = () => sheets[+sheetSel.value];
+    function fillCols() {
+      const sh = sheet();
+      colSel.replaceChildren(...sh.head.map((n, i) => n && i !== sh.code.i ? h('option', { value: i }, n) : null).filter(Boolean));
+      const k = sh.head.findIndex((n, i) => i !== sh.code.i && KABAT_RE.test(n));
+      if (k >= 0) colSel.value = k;
+      calc();
+    }
+    function calc() {
+      const sh = sheet(), vi = +colSel.value, isK = KABAT_RE.test(sh.head[vi] || '');
+      nameIn.value = isK ? 'קב"ט' : sh.head[vi] || '';
+      const res = colPlan(l, sh, vi);
+      plan = res;
+      out.replaceChildren(h('b', {}, `✓ ${res.ok} שורות קיבלו ערך` + (res.none.length ? `, ${res.none.length} נשארות ריקות${isK ? ' (יישמרו ב"' + NO_KABAT + '")' : ''}:` : '')),
+        ...res.none.slice(0, 40).map(t => h('div', { class: 'muted' }, '• ' + t)), ...(res.none.length > 40 ? [h('div', { class: 'muted' }, `ועוד ${res.none.length - 40}…`)] : []));
+    }
+    sheetSel.onchange = fillCols; colSel.onchange = calc;
+    const close = () => ov.remove();
+    const ok = h('button', { class: 'btn primary big', onclick: async () => {
+      if (!plan) return;
+      const name = clean(nameIn.value) || 'עמודה חדשה';
+      const id = 'x' + uid();
+      l.cols.push({ id, name });
+      for (const r of l.rows) { if (r.deleted) continue; r.cells[id] = plan.set.get(r.id) || ''; r.u = Date.now(); }
+      const f = l.type === 'construction' ? null : FIELDS.find(f => f.key === 'kabat' && f.re.test(name));
+      l.map = l.map || {};
+      if (f && f.key === 'kabat' && !colsOf(l.map.kabat).length) { l.map.kabat = { col: id, pre: '', prev: false }; delete l.kabatOn; }
+      await save(l);
+      close();
+      ui.toast(`העמודה "${name}" נוספה (${plan.ok} שורות)` + (kabatOn(l) ? '. הסקרים עוברים לתיקיות לפי קב"ט' : ''), 4500);
+      if (after) after();
+    } }, '➕ הוסף את העמודה');
+    const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
+      h('div', { class: 'card stack', style: 'max-width:640px;width:96%;max-height:90vh;overflow:auto' },
+        h('h2', { style: 'margin:0;font-size:20px' }, '➕ עמודה מקובץ: ' + file.name),
+        h('div', { class: 'muted small' }, 'הערך לכל שורה נלקח מהשורה בקובץ עם אותו סמל מוסד. סמל שמופיע בקובץ עם ערכים שונים, או שורה בלי סמל: לפי אותה כתובת. מה שלא חד-משמעי נשאר ריק.'),
+        h('label', { class: 'small' }, 'גיליון: ', sheetSel), h('label', { class: 'small' }, 'העמודה להוספה: ', colSel), h('label', { class: 'small' }, 'שם ברשימה: ', nameIn),
+        out, h('div', { class: 'row', style: 'gap:8px' }, ok, h('button', { class: 'btn', onclick: close }, 'ביטול'))));
+    document.body.append(ov);
+    fillCols();
+  }
 
   // ---------- סטטוס מוסד: "לא קיים" / "לבדיקה" (1.155, ori) ----------
   // r.flag = 'gone' (יורד מהמפה ומהמסלול) או 'check' (נשאר במפה בצהוב, דורש התייחסות), r.flagNote = מה לבדוק.
@@ -581,11 +727,14 @@
     const paths = h('div', { class: 'small wl-paths' });
     const root0 = (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים';
     const projOf = x => clean(x.L.project) || clean(s.project) || 'ללא פרויקט';
+    // (1.163) רשימה עם קב"ט (ירושלים כללי): תיקיית הקב"ט מעל השכונה בפרויקט שלה
+    const kabRow = () => [...sel.values()].find(x => kabatOn(x.L)) || null;
+    const kabOf = p => { const x = kabRow(); return x && projOf(x) === p ? kabatOfRow(x.L, x.r) || NO_KABAT : ''; };
     function drawPaths() {
       const hood = clean(hoodIn.value);
       const mp = main ? projOf(main) : clean(s.project) || 'ללא פרויקט';
       const ps = [mp, ...new Set([...sel.values()].filter(x => x !== main).map(projOf).filter(p => p !== mp))];
-      paths.replaceChildren(h('b', {}, 'הקבצים יהיו ב:'), ...ps.map((p, i) => h('div', {}, `📁 ${[root0, p, hood].filter(Boolean).join(' / ')}` + (i ? ' (עותק)' : ' (ראשי)'))));
+      paths.replaceChildren(h('b', {}, 'הקבצים יהיו ב:'), ...ps.map((p, i) => h('div', {}, `📁 ${[root0, p, kabOf(p), hood].filter(Boolean).join(' / ')}` + (i ? ' (עותק)' : ' (ראשי)'))));
     }
     const rowLine = (x, on) => {
       const v = valuesOf(x.L, x.r), k = K(x.L, x.r), other = x.r.sid && x.r.sid !== s.id;
@@ -646,12 +795,14 @@
       const hood = clean(hoodIn.value), rh = await rowHood();
       if (hood) s.hood = hood; else delete s.hood;
       if (hood !== rh) s.hoodManual = true; else delete s.hoodManual;
+      const kx = kabRow();
+      if (kx) { s.kabatProj = clean(kx.L.project); s.kabat = kabatOfRow(kx.L, kx.r); } else { delete s.kabatProj; delete s.kabat; }
       s.site = ui.composeSite(s);
       await DB.putSurvey(s);
       close();
       ui.toast('השיוך נשמר' + (s.odReportDir ? '. מעביר את הקבצים בדרייב…' : ''), 3000);
       if (after) after(s);
-      Sync.relocate(s).then(n => ui.toast(n ? `${n} קבצים הועברו לתיקייה ${[s.project, s.hood].filter(Boolean).join(' / ')}` : 'הקבצים בדרייב כבר במקום הנכון (הבאים יישמרו לפי השיוך)', 3500))
+      Sync.relocate(s).then(n => ui.toast(n ? `${n} קבצים הועברו לתיקייה ${[s.project, s.kabatProj != null && clean(s.kabatProj) === clean(s.project) ? clean(s.kabat) || NO_KABAT : '', s.hood].filter(Boolean).join(' / ')}` : 'הקבצים בדרייב כבר במקום הנכון (הבאים יישמרו לפי השיוך)', 3500))
         .catch(e => ui.toast('העברת הקבצים בדרייב נכשלה: ' + e.message + '. ינסה שוב בהעלאה הבאה', 5000));
     } }, 'שמור שיוך');
     const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
@@ -1058,7 +1209,7 @@
     const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
     // (1.155) עמודת שכונה (גם מהרשימות האחרות), והשכונה לסקרים שכבר נפתחו מהרשימה
     await ensureHood(l).catch(() => {});
-    hoodToSurveys(l, local).catch(() => {});
+    hoodToSurveys(l, local).catch(() => {}).then(() => kabatToSurveys(local)).catch(() => {});
     // סקר שנפתח מהשורה במכשיר אחר, לפני שהרשימה סונכרנה: לפי listRef
     for (const s of local.values()) if (s.listRef && s.listRef.list === l.id && !s.deleted) { const r = l.rows.find(x => x.id === s.listRef.row); if (r && !r.sid) { r.sid = s.id; r.u = Date.now(); save(l); } }
     let idx = new Map();
@@ -1296,6 +1447,17 @@
             renderList(l);
           } }),
           '📁 תיקייה לפי שכונה בתוך תיקיית הפרויקט' + (hoodOn(l) && colsOf((l.map || {}).hood).length ? ` (עמודה: ${(l.cols.find(c => c.id === l.map.hood.col) || {}).name || 'שכונה'})` : hoodOn(l) ? ' (לא נמצאה עמודת שכונה, ולא נמצאו שכונות לפי סמל ברשימות האחרות)' : '')),
+        // (1.163) תיקייה לפי קב"ט (מעל השכונה), ועמודה מקובץ אחר (למשל הקב"טים מהאקסל המקורי)
+        l.type === 'construction' ? null : h('div', { class: 'row small', style: 'gap:8px;align-items:center;flex-wrap:wrap' },
+          colsOf((l.map || {}).kabat).length ? h('label', { class: 'row', style: 'gap:8px;align-items:center' },
+            h('input', { type: 'checkbox', checked: kabatOn(l), onchange: async e => {
+              l.kabatOn = e.target.checked; await save(l);
+              U().toast(l.kabatOn ? `מעכשיו: ${clean(l.project) || 'הפרויקט'} / קב"ט / שכונה. סקרים בלי קב"ט ב"${NO_KABAT}". הסקרים הקיימים עוברים` : 'הסקרים חוזרים לתיקיית הפרויקט / שכונה', 4500);
+              kabatToSurveys(new Map((await DB.allSurveys()).map(s => [s.id, s]))).catch(() => {});
+              renderList(l);
+            } }), `📁 תיקייה לפי קב"ט (הראשון) ובתוכה לפי שכונה (עמודה: ${(l.cols.find(c => c.id === l.map.kabat.col) || {}).name || 'קב"ט'})`) : null,
+          h('label', { class: 'btn', title: 'עמודה מאקסל אחר לפי סמל המוסד (למשל עמודת הקב"טים)' }, '➕ עמודה מקובץ',
+            h('input', { type: 'file', accept: '.xlsx,.xlsm,.csv', style: 'display:none', onchange: e => { const f = e.target.files[0]; e.target.value = ''; if (f) addColumnFromFile(l, f, () => renderList(l)).catch(err => U().toast('קריאת הקובץ נכשלה: ' + err.message, 5000)); } }))),
         missing.length ? h('div', { class: 'card small', style: 'background:#fff2cc;color:#5a4300' }, `⚠ עוד לא נבחרה עמודה ל: ${missing.join(', ')}. לחץ על החץ ▾ בכותרת של העמודה ובחר "העמודה הזו היא", או ב"שיוך עמודות".`) : null,
         dayBox, chipsBox,
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' }, q, qInfo, widthBox),
@@ -2607,5 +2769,5 @@
       return null;
     },
     flagRow: async (lid, rid, after) => { const L = await byId(lid), r = L && L.rows.find(x => x.id === rid && !x.deleted); if (!r) { U().toast('השורה לא נמצאה ברשימה', 3000); return; } flagDialog(L, r, after); },
-    _t: { ensureHood, hoodIndex, hoodLookup, hoodMatch, addrKey, codeKeys, setFlag, searchAll, geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
+    _t: { kabatFirst, kabatKey, kabatOn, kabatOfRow, kabatSpell, kabatToSurveys, colPlan, ensureHood, hoodIndex, hoodLookup, hoodMatch, addrKey, codeKeys, setFlag, searchAll, geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
 })(window);
