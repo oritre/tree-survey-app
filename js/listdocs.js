@@ -454,5 +454,5 @@
     return { el: box, redraw: draw, add };
   }
 
-  root.ListDocs = { section, merge, open, syncDocs, popup, count, _t: { kindOf, merge, copyDocs, sameDoc } };
+  root.ListDocs = { section, merge, open, syncDocs, popup, count, showPdf, _t: { kindOf, merge, copyDocs, sameDoc } };
 })(window);
