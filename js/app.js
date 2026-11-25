@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.176.0';
+  const APP_VERSION = '1.177.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -4330,7 +4330,8 @@
     const bytes = await out.save();
     return { blob: new Blob([bytes], { type: 'application/pdf' }), name: safeName(name || 'סקרי עצים') + '.pdf', pages: out.getPageCount(), html: allHtml ? html : null, surveys: used, failed };
   }
-  // צפייה ב-PDF המאוחד: בתוך האפליקציה כשיש את העמודים, אחרת הורדה / שליחה / פתיחה בדפדפן
+  // צפייה ב-PDF המאוחד: תמיד בתוך האפליקציה (ori, 1.177). כשיש את עמודי ה-HTML — כמו אחרי סיום סקר,
+  // אחרת (PDF מגוגל דרייב / סקר לבנייה) העמודים מצוירים מתוך הקובץ עצמו (pdf.js), בלי לפתוח אפליקציה חיצונית
   function viewCombined(pdf) {
     const share = async () => {
       const file = new File([pdf.blob], shareName(pdf.name), { type: 'application/pdf' });
@@ -4338,8 +4339,8 @@
       if (!(await shareFilesTogether([file], subject, body))) downloadFile(pdf.blob, pdf.name);
     };
     const view = pdf.html ? PdfVec.view(pdf.html, { rootId: 'printRoot' }) : null;
-    const url = view ? null : URL.createObjectURL(pdf.blob);
-    const close = () => { ov.remove(); if (view) view.cleanup(); if (url) URL.revokeObjectURL(url); window.removeEventListener('hashchange', close); };
+    const pages = view ? null : h('div', { class: 'pdfv-pages', style: '--z:1' });
+    const close = () => { ov.remove(); if (view) view.cleanup(); window.removeEventListener('hashchange', close); };
     window.addEventListener('hashchange', close);
     const ov = h('div', { class: 'pdfv' },
       h('div', { class: 'annot-bar' },
@@ -4347,13 +4348,14 @@
         h('span', { class: 'sp pdfv-title' }, `${pdf.surveys.length} סקרים · ${pdf.pages} עמודים`),
         h('button', { class: 'txt', onclick: share }, '✉ שליחה'),
         h('button', { class: 'txt', title: 'הורדה', 'aria-label': 'הורדה', onclick: () => downloadFile(pdf.blob, pdf.name) }, '⬇')),
-      view || h('div', { class: 'stack', style: 'padding:24px;max-width:520px;margin:0 auto;color:#fff' },
-        h('div', {}, `נוצר קובץ PDF אחד: ${pdf.name}`),
-        h('div', { class: 'row' },
-          h('a', { class: 'btn primary', href: url, target: '_blank', rel: 'noopener' }, '👁 פתח את ה-PDF'),
-          h('button', { class: 'btn', onclick: () => downloadFile(pdf.blob, pdf.name) }, '⬇ הורדה'),
-          h('button', { class: 'btn', onclick: share }, '✉ שליחה'))));
+      view || pages);
     document.body.append(ov);
+    if (pages) {
+      const wait = h('div', { class: 'small', style: 'color:#fff' }, 'טוען עמודים…');
+      pages.append(wait);
+      ListDocs.showPdf(pages, pdf.blob, h).then(() => wait.remove())
+        .catch(e => { wait.textContent = '⚠ ' + ((e && e.message) || e); });
+    }
   }
 
   // ---------- שליחת כמה סקרים במייל אחד ----------
