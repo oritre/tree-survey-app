@@ -2058,18 +2058,19 @@
     }
   }
   const SHARE_MAX_FILES = 10, SHARE_MAX_BYTES = 45 * 1048576;
-  // יותר מ-10 קבצים או קבצים גדולים מדי: קבצי ה-PDF הנפרדים (לא ריכוז הדוחות ולא דוח המנהלים) נכנסים ל-ZIP אחד
-  async function packForShare(files, say) {
-    const total = files.reduce((a, f) => a + f.size, 0);
-    if (files.length <= SHARE_MAX_FILES && total <= SHARE_MAX_BYTES) return files;
-    const keep = files.filter(f => f.name === COMBINED_NAME + '.pdf' || !/\.pdf$/i.test(f.name));
-    const each = files.filter(f => !keep.includes(f));
-    if (!each.length) return files;
-    say(`אורז ${each.length} קבצי PDF לקובץ ZIP אחד…`);
-    const zip = new JSZip(), used = new Set();
-    for (const f of each) { let n = f.name, k = 2; while (used.has(n)) n = f.name.replace(/\.pdf$/i, ` (${k++}).pdf`); used.add(n); zip.file(n, f); }
-    const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
-    return [...keep, new File([blob], 'דוחות לפי סקר.zip', { type: 'application/zip' })];
+  // (1.182, ori: בלי ZIP) חלון השיתוף של אנדרואיד מקבל עד 10 קבצים (ועד כ-50MB) במייל אחד.
+  // יותר מזה: מחלקים לכמה מיילים, כל אחד עם קבצים רגילים, לפי הסדר (ריכוז הדוחות ודוח המנהלים במייל הראשון)
+  function splitForShare(files) {
+    const first = files.filter(f => f.name === COMBINED_NAME + '.pdf' || !/\.pdf$/i.test(f.name));
+    const ordered = [...first, ...files.filter(f => !first.includes(f))];
+    const groups = [];
+    let cur = [], bytes = 0;
+    for (const f of ordered) {
+      if (cur.length && (cur.length >= SHARE_MAX_FILES || bytes + f.size > SHARE_MAX_BYTES)) { groups.push(cur); cur = []; bytes = 0; }
+      cur.push(f); bytes += f.size;
+    }
+    if (cur.length) groups.push(cur);
+    return groups;
   }
   function combinedPdfDialog(l, shownRows, stateOf, mode) {
     const ui = U(), { h } = ui;
@@ -2157,23 +2158,40 @@
         if (r) files.push(asFile(r.blob, r.name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
       }
       if (!files.length) { say('לא נוצרו קבצים לשליחה. ' + [...new Set(bad)].join(', ')); return; }
-      // (1.181, ori) חלון השיתוף של אנדרואיד מקבל עד 10 קבצים (ועד כ-50MB). יותר מזה: קבצי ה-PDF של כל סקר נארזים ב-ZIP אחד
-      const out = await packForShare(files, say);
+      const groups = splitForShare(files);
       const { subject, body } = App.mailText(sent);
-      const mb = Math.round(out.reduce((a, f) => a + f.size, 0) / 1048576 * 10) / 10;
-      const info = `${out.length} קבצים מוכנים (${mb}MB): ${out.map(f => f.name).join(', ')}` + (bad.length ? `. לא נכללו: ${[...new Set(bad)].join(', ')}` : '');
+      const mb = Math.round(files.reduce((a, f) => a + f.size, 0) / 1048576 * 10) / 10;
+      const info = `${files.length} קבצים מוכנים (${mb}MB): ${files.map(f => f.name).join(', ')}` + (bad.length ? `. לא נכללו: ${[...new Set(bad)].join(', ')}` : '');
       if (bad.length) ui.toast('לא נכללו: ' + [...new Set(bad)].join(', '), 7000);
-      const fail = msg => status.replaceChildren(h('div', {}, info), h('div', { style: 'color:var(--danger)' }, '⚠ ' + msg),
-        h('button', { class: 'btn', onclick: () => out.forEach(f => ui.downloadFile(f, f.name)) }, '⬇ הורד את הקבצים'));
-      // ההכנה לוקחת זמן, ואז הדפדפן כבר לא מרשה לפתוח את חלון השיתוף בלי לחיצה נוספת
-      const r = await shareOut(out, subject, body);
-      if (r === 'ok') { say('✓ ' + info); return; }
-      if (r !== 'gesture') { fail(r); return; }
-      status.replaceChildren(h('div', {}, info), h('button', { class: 'btn primary big', onclick: async () => {
-        const r2 = await shareOut(out, subject, body);
-        if (r2 === 'ok') say('✓ ' + info);
-        else fail(r2 === 'gesture' ? 'הטאבלט לא פתח את חלון השיתוף. נסה שוב, או הורד את הקבצים וצרף אותם ב-Gmail.' : r2);
-      } }, '✉ לחץ לפתיחת המייל'));
+      const dl = () => h('button', { class: 'btn', onclick: () => files.forEach(f => ui.downloadFile(f, f.name)) }, '⬇ הורד את כל הקבצים');
+      if (groups.length === 1) {
+        const fail = msg => status.replaceChildren(h('div', {}, info), h('div', { style: 'color:var(--danger)' }, '⚠ ' + msg), dl());
+        // ההכנה לוקחת זמן, ואז הדפדפן כבר לא מרשה לפתוח את חלון השיתוף בלי לחיצה נוספת
+        const r = await shareOut(files, subject, body);
+        if (r === 'ok') { say('✓ ' + info); return; }
+        if (r !== 'gesture') { fail(r); return; }
+        status.replaceChildren(h('div', {}, info), h('button', { class: 'btn primary big', onclick: async () => {
+          const r2 = await shareOut(files, subject, body);
+          if (r2 === 'ok') say('✓ ' + info);
+          else fail(r2 === 'gesture' ? 'הטאבלט לא פתח את חלון השיתוף. נסה שוב, או הורד את הקבצים וצרף אותם ב-Gmail.' : r2);
+        } }, '✉ לחץ לפתיחת המייל'));
+        return;
+      }
+      // כמה מיילים: כפתור לכל מייל (כל לחיצה פותחת את Gmail עם הקבצים שלו)
+      const err = h('div', { style: 'color:var(--danger)' });
+      const btns = groups.map((g, i) => {
+        const b = h('button', { class: 'btn' + (i === 0 ? ' primary big' : ''), onclick: async () => {
+          err.textContent = '';
+          const r = await shareOut(g, `${subject} (${i + 1}/${groups.length})`, body);
+          if (r === 'ok') { b.textContent = `✓ מייל ${i + 1} מתוך ${groups.length} נפתח`; b.classList.remove('primary', 'big'); const nx = btns[i + 1]; if (nx) nx.classList.add('primary', 'big'); }
+          else err.textContent = '⚠ ' + (r === 'gesture' ? 'הטאבלט לא פתח את חלון השיתוף. לחץ שוב.' : r);
+        } }, `✉ מייל ${i + 1} מתוך ${groups.length} (${g.length} קבצים)`);
+        return b;
+      });
+      status.replaceChildren(h('div', {}, info),
+        h('div', { class: 'small', style: 'font-weight:600' }, `אנדרואיד מצרף עד ${SHARE_MAX_FILES} קבצים למייל אחד, לכן הקבצים מחולקים ל-${groups.length} מיילים. לחץ על כל מייל בתורו ושלח אותו מ-Gmail. אפשרות אחרת: להוריד את כל הקבצים ולצרף אותם ב-Gmail ממסך ההורדות.`),
+        ...groups.map((g, i) => h('div', { class: 'stack', style: 'gap:2px' }, btns[i], h('div', { class: 'muted small' }, g.map(f => f.name).join(', ')))),
+        err, dl());
     });
     const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
       h('div', { class: 'card stack', style: 'max-width:620px;width:96%;max-height:92vh;display:flex;flex-direction:column' },
