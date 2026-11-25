@@ -2069,6 +2069,8 @@
   // "הפק PDF": קובץ אחד "ריכוז דוחות" שנפתח בתוך האפליקציה.
   // "שליחה במייל": חלון השיתוף (Gmail) עם PDF אחד "ריכוז דוחות" או קובץ לכל סקר, ואפשר לצרף את דוח המנהלים של הרשימה
   const COMBINED_NAME = 'ריכוז דוחות';
+  // מחשב (לא טלפון/טאבלט): שם חלון השיתוף לא פותח את Gmail
+  const isDesktop = () => !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) && !(navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
   // חלון השיתוף (Gmail): 'ok', 'gesture' (צריך לחיצה נוספת) או הודעת שגיאה
   async function shareOut(files, subject, body) {
     if (!(navigator.canShare && navigator.share)) { await App.shareFiles(files, subject, body); return 'ok'; }
@@ -2189,6 +2191,23 @@
       if (!files.length) { say((mgrFile ? '✓ אין קובצי PDF למייל' : 'לא נוצרו קבצים לשליחה') + mgrNote + (bad.length ? '. ' + [...new Set(bad)].join(', ') : '')); return; }
       // (1.181, 1.183, 1.184 ori) חלון השיתוף של אנדרואיד: עד 10 קבצים, ורק PDF/תמונות (לא ZIP ולא אקסל). מעל 10: ה-PDF של כל סקר ב-ZIP שיורד לטאבלט.
       // ריכוז דוחות ודוח מנהלים תמיד קבצים רגילים. לא לחלק לכמה מיילים (ori ביטל)
+      // (1.187, ori) במחשב חלון השיתוף של Windows לא מגיע ל-Gmail: כל הקבצים יורדים ל"הורדות" (בלי ZIP, אין מגבלה), ונפתח Gmail בדפדפן עם נושא וגוף
+      if (isDesktop()) {
+        const { subject, body } = App.mailText(sent);
+        const url = 'https://mail.google.com/mail/?view=cm&fs=1&su=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+        say('מוריד את הקבצים…');
+        for (const f of files) { ui.downloadFile(f, f.name); await new Promise(r => setTimeout(r, 350)); }
+        const names = files.map(f => f.name).concat(mgrFile ? [mgrFile.name] : []);
+        const info = `✓ ${names.length} קבצים ירדו ל"הורדות": ${names.join(', ')}` + (bad.length ? `. לא נכללו: ${[...new Set(bad)].join(', ')}` : '');
+        if (bad.length) ui.toast('לא נכללו: ' + [...new Set(bad)].join(', '), 7000);
+        const opened = window.open(url, '_blank', 'noopener');
+        status.replaceChildren(h('div', {}, info),
+          h('div', { class: 'small', style: 'font-weight:600' }, 'ב-Gmail גרור את הקבצים מ"הורדות" לחלון ההודעה (או 📎 ← בחר אותם מ"הורדות"). אם הדפדפן שאל אם להתיר הורדה של כמה קבצים, אשר.'),
+          h('div', { class: 'row' },
+            h('a', { class: 'btn' + (opened ? '' : ' primary big'), href: url, target: '_blank', rel: 'noopener' }, '✉ פתח את Gmail'),
+            h('button', { class: 'btn', onclick: () => files.concat(mgrFile ? [mgrFile] : []).forEach((f, i) => setTimeout(() => ui.downloadFile(f, f.name), i * 350)) }, '⬇ הורד שוב את הקבצים')));
+        return;
+      }
       const packed = await packForShare(files, say), out = packed.share;
       const { subject, body } = App.mailText(sent);
       const mb = Math.round(out.reduce((a, f) => a + f.size, 0) / 1048576 * 10) / 10;
