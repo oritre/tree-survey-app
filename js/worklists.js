@@ -2049,6 +2049,8 @@
   // חלון השיתוף (Gmail): 'ok', 'gesture' (צריך לחיצה נוספת) או הודעת שגיאה
   async function shareOut(files, subject, body) {
     if (!(navigator.canShare && navigator.share)) { await App.shareFiles(files, subject, body); return 'ok'; }
+    const badType = files.filter(f => !/\.(pdf|jpe?g|png|webp|gif|txt|csv)$/i.test(f.name));
+    if (badType.length) return `אנדרואיד לא מאפשר לשתף מהדפדפן את הקבצים: ${badType.map(f => f.name).join(', ')}. הורד אותם וצרף ב-Gmail.`;
     if (!navigator.canShare({ files })) return `הדפדפן לא מאפשר לשתף את הקבצים האלה (${files.length} קבצים). הורד אותם וצרף ב-Gmail.`;
     try { await navigator.share({ files, title: subject, text: body }); return 'ok'; }
     catch (e) {
@@ -2058,18 +2060,58 @@
     }
   }
   const SHARE_MAX_FILES = 10, SHARE_MAX_BYTES = 45 * 1048576;
-  // יותר מ-10 קבצים או קבצים גדולים מדי: קבצי ה-PDF הנפרדים (לא ריכוז הדוחות ולא דוח המנהלים) נכנסים ל-ZIP אחד
+  // (1.184) אנדרואיד משתף מהדפדפן רק סוגי קבצים מסוימים (PDF, תמונות, טקסט…), לא אקסל ולא ZIP — אחרת חלון השיתוף לא נפתח בכלל.
+  // לכן דוח המנהלים מצורף למייל כ-PDF, ומעל 10 קבצים (או 45MB) קבצי ה-PDF של כל סקר נארזים ב-ZIP שיורד לטאבלט
+  // (מצרפים אותו ב-Gmail מ"הורדות"), וריכוז הדוחות ודוח המנהלים נפתחים ב-Gmail כקבצים רגילים
   async function packForShare(files, say) {
     const total = files.reduce((a, f) => a + f.size, 0);
-    if (files.length <= SHARE_MAX_FILES && total <= SHARE_MAX_BYTES) return files;
-    const keep = files.filter(f => f.name === COMBINED_NAME + '.pdf' || !/\.pdf$/i.test(f.name));
+    if (files.length <= SHARE_MAX_FILES && total <= SHARE_MAX_BYTES) return { share: files, zip: null };
+    const keep = files.filter(f => f.name === COMBINED_NAME + '.pdf' || !/\.pdf$/i.test(f.name) || /^דוח מנהלים/.test(f.name));
     const each = files.filter(f => !keep.includes(f));
-    if (!each.length) return files;
+    if (!each.length) return { share: files, zip: null };
     say(`אורז ${each.length} קבצי PDF לקובץ ZIP אחד…`);
     const zip = new JSZip(), used = new Set();
     for (const f of each) { let n = f.name, k = 2; while (used.has(n)) n = f.name.replace(/\.pdf$/i, ` (${k++}).pdf`); used.add(n); zip.file(n, f); }
     const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
-    return [...keep, new File([blob], 'דוחות לפי סקר.zip', { type: 'application/zip' })];
+    return { share: keep, zip: new File([blob], 'דוחות לפי סקר.zip', { type: 'application/zip' }) };
+  }
+  // דוח המנהלים כ-PDF (כדי שאפשר יהיה לצרף אותו דרך חלון השיתוף): כותרת ואז טבלה, A4 לרוחב, עמודים לפי גובה השורות
+  async function managersPdf(t, name) {
+    const esc = v => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const W = 1123, H = 794, PAD = 34;
+    const css = `@font-face{font-family:RepArial;src:url(fonts/arimo-hebrew-400-normal.woff2) format('woff2');font-weight:400;unicode-range:U+0590-05FF,U+200C-2010,U+20AA,U+25CC,U+FB1D-FB4F}
+@font-face{font-family:RepArial;src:url(fonts/arimo-latin-400-normal.woff2) format('woff2');font-weight:400;unicode-range:U+0000-00FF,U+2000-206F}
+@font-face{font-family:RepArial;src:url(fonts/arimo-hebrew-700-normal.woff2) format('woff2');font-weight:700;unicode-range:U+0590-05FF,U+200C-2010,U+20AA,U+25CC,U+FB1D-FB4F}
+@font-face{font-family:RepArial;src:url(fonts/arimo-latin-700-normal.woff2) format('woff2');font-weight:700;unicode-range:U+0000-00FF,U+2000-206F}
+#mgrRoot .mp{width:${W}px;height:${H}px;box-sizing:border-box;padding:${PAD}px;background:#fff;color:#000;direction:rtl;font-family:RepArial,Arial,sans-serif;font-size:12px;overflow:hidden}
+#mgrRoot .mh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+#mgrRoot .mh b{font-size:18px}#mgrRoot table{border-collapse:collapse;width:100%;table-layout:fixed}
+#mgrRoot th{background:#2e6b34;color:#fff;font-weight:700}#mgrRoot th,#mgrRoot td{border:1px solid #999;padding:3px 5px;text-align:right;vertical-align:top;word-wrap:break-word}`;
+    const widths = [8, 16, 15, 9, 6, 11, 29, 6];
+    const colg = '<colgroup>' + widths.map(w => `<col style="width:${w}%">`).join('') + '</colgroup>';
+    const headRow = '<tr>' + t.head.map(x => `<th>${esc(x)}</th>`).join('') + '</tr>';
+    const rowHtml = r => '<tr>' + r.map(x => `<td>${esc(x)}</td>`).join('') + '</tr>';
+    const top = n => `<div class="mh"><b>דו"ח מנהלים, סקר יציבות עצים</b><span>${esc(t.sub)}</span><span>תאריך ${esc(t.date)}${n > 1 ? '' : ''}</span></div>`;
+    // מחלקים לעמודים לפי המדידה בדפדפן
+    const probe = document.createElement('div');
+    probe.id = 'mgrRoot'; probe.style.cssText = 'position:fixed;left:-100000px;top:0';
+    probe.innerHTML = `<style>${css}</style><div class="mp">${top(1)}<table>${colg}<thead>${headRow}</thead><tbody>${t.rows.map(rowHtml).join('')}</tbody></table></div>`;
+    document.body.append(probe);
+    if (document.fonts && document.fonts.load) await Promise.all(['400 12px RepArial', '700 12px RepArial'].map(f => document.fonts.load(f, 'אבג abc').catch(() => {})));
+    const tb = probe.querySelector('table'), trs = [...tb.querySelectorAll('tbody tr')];
+    const startY = tb.getBoundingClientRect().top - probe.querySelector('.mp').getBoundingClientRect().top + tb.querySelector('thead').getBoundingClientRect().height;
+    const pages = [];
+    let cur = [], y = startY;
+    trs.forEach((tr, i) => {
+      const hgt = tr.getBoundingClientRect().height;
+      if (cur.length && y + hgt > H - PAD) { pages.push(cur); cur = []; y = startY; }
+      cur.push(t.rows[i]); y += hgt;
+    });
+    pages.push(cur);
+    probe.remove();
+    const html = pages.map((rs, i) => `<div class="mp">${top(i)}<table>${colg}<thead>${headRow}</thead><tbody>${rs.map(rowHtml).join('')}</tbody></table></div>`);
+    const blob = await PdfVec.fromHtml(html, { rootId: 'mgrRoot', css, widthPt: 842 });
+    return new File([blob], name.replace(/\.xlsx$/i, '.pdf'), { type: 'application/pdf' });
   }
   function combinedPdfDialog(l, shownRows, stateOf, mode) {
     const ui = U(), { h } = ui;
@@ -2089,7 +2131,7 @@
     const mgr = h('input', { type: 'checkbox', style: 'width:20px;height:20px' });
     const mailOpts = h('div', { class: 'stack', style: 'gap:6px;border-top:1px solid var(--line, #ddd);padding-top:8px' },
       h('b', { class: 'small' }, 'לצרף למייל (אפשר לסמן כמה):'), kindBox,
-      h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, mgr, 'לצרף גם דוח מנהלים (אקסל) של הסקרים שסימנת'));
+      h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, mgr, 'לצרף גם דוח מנהלים (PDF) של הסקרים שסימנת'));
     const boxes = rows.map(r => h('input', { type: 'checkbox', checked: true, style: 'width:22px;height:22px;flex:none', onchange: e => { e.target.checked ? sel.add(r.id) : sel.delete(r.id); upd(); } }));
     let busy = false;
     const upd = () => { count.textContent = `נבחרו ${sel.size} מתוך ${rows.length}`; btnPdf.disabled = btnMail.disabled = !sel.size || busy; };
@@ -2154,14 +2196,17 @@
       const sent = surveys.filter(s => sentIds.has(s.id) || (!cbOne.checked && !cbEach.checked));
       if (mgr.checked) {
         const r = await buildManagersReport(l, say, new Set(rows.filter(x => sel.has(x.id)).map(x => x.id))).catch(e => { bad.push('דוח מנהלים (' + e.message + ')'); return null; });
-        if (r) files.push(asFile(r.blob, r.name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
+        if (r) { say('מכין את דוח המנהלים כ-PDF…'); files.push(await managersPdf(r.table, r.name)); }
       }
       if (!files.length) { say('לא נוצרו קבצים לשליחה. ' + [...new Set(bad)].join(', ')); return; }
-      // (1.181, 1.183 ori) חלון השיתוף של אנדרואיד מקבל עד 10 קבצים (ועד כ-50MB). יותר מזה: קבצי ה-PDF של כל סקר נארזים ב-ZIP אחד; ריכוז דוחות ודוח מנהלים תמיד קבצים רגילים. לא לחלק לכמה מיילים (ori ביטל)
-      const out = await packForShare(files, say);
+      // (1.181, 1.183, 1.184 ori) חלון השיתוף של אנדרואיד: עד 10 קבצים, ורק PDF/תמונות (לא ZIP ולא אקסל). מעל 10: ה-PDF של כל סקר ב-ZIP שיורד לטאבלט.
+      // ריכוז דוחות ודוח מנהלים תמיד קבצים רגילים. לא לחלק לכמה מיילים (ori ביטל)
+      const packed = await packForShare(files, say), out = packed.share;
       const { subject, body } = App.mailText(sent);
       const mb = Math.round(out.reduce((a, f) => a + f.size, 0) / 1048576 * 10) / 10;
-      const info = `${out.length} קבצים מוכנים (${mb}MB): ${out.map(f => f.name).join(', ')}` + (bad.length ? `. לא נכללו: ${[...new Set(bad)].join(', ')}` : '');
+      const zipNote = packed.zip ? `. קבצי ה-PDF של כל סקר נשמרו ב"הורדות" בקובץ "${packed.zip.name}" (אנדרואיד לא מצרף יותר מ-10 קבצים או ZIP דרך השיתוף): ב-Gmail לחץ 📎 ← צרף קובץ ← הורדות` : '';
+      if (packed.zip) ui.downloadFile(packed.zip, packed.zip.name);
+      const info = `${out.length} קבצים במייל (${mb}MB): ${out.map(f => f.name).join(', ')}` + zipNote + (bad.length ? `. לא נכללו: ${[...new Set(bad)].join(', ')}` : '');
       if (bad.length) ui.toast('לא נכללו: ' + [...new Set(bad)].join(', '), 7000);
       const fail = msg => status.replaceChildren(h('div', {}, info), h('div', { style: 'color:var(--danger)' }, '⚠ ' + msg),
         h('button', { class: 'btn', onclick: () => out.forEach(f => ui.downloadFile(f, f.name)) }, '⬇ הורד את הקבצים'));
@@ -2243,7 +2288,8 @@
         [],
         head, ...rows];
       const blob = await reportXlsx(out, [11, 24, 22, 14, 9, 16, 50, 9], 4);
-      return { blob, name: ui.safeName('דוח מנהלים - ' + (l.project || l.name || 'רשימה')) + ' ' + date.replace(/\//g, '.') + '.xlsx', inst, trees, missing: missing.length };
+      return { blob, name: ui.safeName('דוח מנהלים - ' + (l.project || l.name || 'רשימה')) + ' ' + date.replace(/\//g, '.') + '.xlsx', inst, trees, missing: missing.length,
+        table: { head, rows, date, sub: [l.project, l.name].filter(Boolean).join(' - ') } };
     }
   }
 
