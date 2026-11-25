@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.162.2';
+  const APP_VERSION = '1.163.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -426,7 +426,8 @@
     };
     const shown = projectFilter == null ? projects : [projectFilter];
     // (1.155.1, ori) בתוך כל פרויקט: חלוקה לפי שכונה (התיקייה בדרייב), כשיש בפרויקט סקרים עם שכונה
-    const hoodOfS = s => Construction.isConstruction(s) ? '' : String(s.hood || '').trim();
+    // (1.163) ירושלים כללי: קב"ט / שכונה, כמו התיקיות בדרייב
+    const hoodOfS = s => Construction.isConstruction(s) ? '' : [s.kabatProj != null && String(s.kabatProj).trim() === String(s.project || '').trim() ? String(s.kabat || '').trim() || 'ללא שיוך' : '', String(s.hood || '').trim()].filter(Boolean).join(' / ');
     const projBody = ss => {
       const hoods = [...new Set(ss.map(hoodOfS))];
       if (hoods.length === 1 && !hoods[0]) return h('div', { class: 'grid-list' }, ss.map(card));
