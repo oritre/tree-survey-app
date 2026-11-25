@@ -2088,9 +2088,10 @@
   // (1.184) אנדרואיד משתף מהדפדפן רק סוגי קבצים מסוימים (PDF, תמונות, טקסט…), לא אקסל ולא ZIP — אחרת חלון השיתוף לא נפתח בכלל.
   // לכן דוח המנהלים (אקסל) יורד לטאבלט, ומעל 10 קבצים (או 45MB) קבצי ה-PDF של כל סקר נארזים ב-ZIP שיורד לטאבלט
   // (מצרפים אותו ב-Gmail מ"הורדות"), וריכוז הדוחות ודוח המנהלים נפתחים ב-Gmail כקבצים רגילים
-  async function packForShare(files, say) {
+  // force: (1.188, ori) בחר בעצמו "ZIP אחד" לקבצים של כל סקר
+  async function packForShare(files, say, force) {
     const total = files.reduce((a, f) => a + f.size, 0);
-    if (files.length <= SHARE_MAX_FILES && total <= SHARE_MAX_BYTES) return { share: files, zip: null };
+    if (!force && files.length <= SHARE_MAX_FILES && total <= SHARE_MAX_BYTES) return { share: files, zip: null };
     const keep = files.filter(f => f.name === COMBINED_NAME + '.pdf' || !/\.pdf$/i.test(f.name));
     const each = files.filter(f => !keep.includes(f));
     if (!each.length) return { share: files, zip: null };
@@ -2114,7 +2115,12 @@
     const cbOne = h('input', { type: 'checkbox', checked: true, style: 'width:20px;height:20px' });
     const cbEach = h('input', { type: 'checkbox', style: 'width:20px;height:20px' });
     const cbRow = (cb, t) => h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, cb, t);
-    const kindBox = h('div', { class: 'stack', style: 'gap:4px' }, cbRow(cbOne, `PDF אחד לכל הסקרים ("${COMBINED_NAME}")`), cbRow(cbEach, 'קובץ PDF נפרד לכל סקר'));
+    // (1.188, ori) הקבצים של כל סקר: אחד אחד או בתוך ZIP אחד (בטאבלט מעל 10 קבצים תמיד ZIP — מגבלה של אנדרואיד)
+    const zipR = (v, t, on) => h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, h('input', { type: 'radio', name: 'wlEachZip', value: v, checked: on || null }), t);
+    const eachHow = h('div', { class: 'stack', style: 'gap:2px;margin-inline-start:28px' }, zipR('sep', 'כל סקר כקובץ PDF נפרד', true), zipR('zip', 'כל הסקרים בתוך קובץ ZIP אחד'));
+    const syncHow = () => { eachHow.style.display = cbEach.checked ? '' : 'none'; };
+    cbEach.addEventListener('change', syncHow); syncHow();
+    const kindBox = h('div', { class: 'stack', style: 'gap:4px' }, cbRow(cbOne, `PDF אחד לכל הסקרים ("${COMBINED_NAME}")`), cbRow(cbEach, 'קובץ PDF נפרד לכל סקר'), eachHow);
     const mgr = h('input', { type: 'checkbox', style: 'width:20px;height:20px' });
     const mailOpts = h('div', { class: 'stack', style: 'gap:6px;border-top:1px solid var(--line, #ddd);padding-top:8px' },
       h('b', { class: 'small' }, 'לצרף למייל (אפשר לסמן כמה):'), kindBox,
@@ -2195,23 +2201,26 @@
       if (isDesktop()) {
         const { subject, body } = App.mailText(sent);
         const url = 'https://mail.google.com/mail/?view=cm&fs=1&su=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+        const wantZip = cbEach.checked && (eachHow.querySelector('input:checked') || {}).value === 'zip';
+        const pk = wantZip ? await packForShare(files, say, true) : { share: files, zip: null };
+        const dlFiles = pk.zip ? [...pk.share, pk.zip] : files;
         say('מוריד את הקבצים…');
-        for (const f of files) { ui.downloadFile(f, f.name); await new Promise(r => setTimeout(r, 350)); }
-        const names = files.map(f => f.name).concat(mgrFile ? [mgrFile.name] : []);
+        for (const f of dlFiles) { ui.downloadFile(f, f.name); await new Promise(r => setTimeout(r, 350)); }
+        const names = dlFiles.map(f => f.name).concat(mgrFile ? [mgrFile.name] : []);
         const info = `✓ ${names.length} קבצים ירדו ל"הורדות": ${names.join(', ')}` + (bad.length ? `. לא נכללו: ${[...new Set(bad)].join(', ')}` : '');
         if (bad.length) ui.toast('לא נכללו: ' + [...new Set(bad)].join(', '), 7000);
         const opened = window.open(url, '_blank', 'noopener');
         status.replaceChildren(h('div', {}, info),
-          h('div', { class: 'small', style: 'font-weight:600' }, 'ב-Gmail גרור את הקבצים מ"הורדות" לחלון ההודעה (או 📎 ← בחר אותם מ"הורדות"). אם הדפדפן שאל אם להתיר הורדה של כמה קבצים, אשר.'),
+          h('div', { class: 'small', style: 'font-weight:600' }, 'Gmail בדפדפן לא מאפשר לאתר אחר לצרף אליו קבצים, אז צריך לצרף אותם ביד: גרור את הקבצים מ"הורדות" לחלון ההודעה (או 📎 ← סמן אותם ב"הורדות"). אם הדפדפן שאל אם להתיר הורדה של כמה קבצים, אשר.'),
           h('div', { class: 'row' },
             h('a', { class: 'btn' + (opened ? '' : ' primary big'), href: url, target: '_blank', rel: 'noopener' }, '✉ פתח את Gmail'),
-            h('button', { class: 'btn', onclick: () => files.concat(mgrFile ? [mgrFile] : []).forEach((f, i) => setTimeout(() => ui.downloadFile(f, f.name), i * 350)) }, '⬇ הורד שוב את הקבצים')));
+            h('button', { class: 'btn', onclick: () => dlFiles.concat(mgrFile ? [mgrFile] : []).forEach((f, i) => setTimeout(() => ui.downloadFile(f, f.name), i * 350)) }, '⬇ הורד שוב את הקבצים')));
         return;
       }
-      const packed = await packForShare(files, say), out = packed.share;
+      const packed = await packForShare(files, say, cbEach.checked && (eachHow.querySelector('input:checked') || {}).value === 'zip'), out = packed.share;
       const { subject, body } = App.mailText(sent);
       const mb = Math.round(out.reduce((a, f) => a + f.size, 0) / 1048576 * 10) / 10;
-      const zipNote = (packed.zip ? `. קבצי ה-PDF של כל סקר נשמרו ב"הורדות" בקובץ "${packed.zip.name}" (אנדרואיד לא מצרף יותר מ-10 קבצים או ZIP דרך השיתוף)` : '') + mgrNote
+      const zipNote = (packed.zip ? `. קבצי ה-PDF של כל סקר נשמרו ב"הורדות" בקובץ "${packed.zip.name}" (אנדרואיד לא מצרף ZIP דרך השיתוף)` : '') + mgrNote
         + (packed.zip || mgrFile ? '. ב-Gmail לחץ 📎 ← צרף קובץ ← הורדות' : '');
       if (packed.zip) ui.downloadFile(packed.zip, packed.zip.name);
       const info = `${out.length} קבצים במייל (${mb}MB): ${out.map(f => f.name).join(', ')}` + zipNote + (bad.length ? `. לא נכללו: ${[...new Set(bad)].join(', ')}` : '');
