@@ -9,6 +9,68 @@
   const FILE = 'רשימות עבודה.json';
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+  // (1.169, ori) גרירת סימן במפה רק אחרי לחיצה ארוכה (חצי שנייה בלי להזיז את האצבע). נגיעה רגעית
+  // תוך כדי הזזת המפה לא גוררת את הסימן; הקשה רגילה עדיין פותחת אותו. בסוף הגרירה נשלח 'dragend' כרגיל
+  const HOLD_MS = 500, HOLD_TOL = 8;
+  function holdDrag(mk) {
+    mk._hold = true;
+    mk.on('add', () => { const map = mk._map; if (map && !map._holdOn) holdSetup(map); });
+    return mk;
+  }
+  function holdSetup(map) {
+    map._holdOn = true;
+    const box = map.getContainer();
+    let st = null, eat = false;
+    const pt = e => map.mouseEventToContainerPoint(e);
+    const end = () => {
+      if (!st) return;
+      clearTimeout(st.t);
+      document.removeEventListener('pointermove', move, true);
+      document.removeEventListener('pointerup', up, true);
+      document.removeEventListener('pointercancel', up, true);
+      const s = st; st = null;
+      if (s.on) {
+        if (s.mk._icon) s.mk._icon.classList.remove('wl-lift');
+        map.dragging.enable();
+        eat = true; setTimeout(() => { eat = false; }, 400); // לא לפתוח את החלון בשחרור
+        if (s.moved) s.mk.fire('dragend', { distance: 1 });
+      }
+    };
+    const move = e => {
+      if (!st || e.pointerId !== st.id) return;
+      const p = pt(e);
+      if (!st.on) { if (p.distanceTo(st.p0) > HOLD_TOL) end(); return; } // זז לפני הזמן = הזזת מפה
+      e.preventDefault(); e.stopPropagation();
+      st.moved = true;
+      st.mk.setLatLng(map.containerPointToLatLng(st.m0.add(p.subtract(st.p0))));
+      st.mk.fire('drag');
+    };
+    const up = e => { if (st && e.pointerId === st.id) end(); };
+    box.addEventListener('pointerdown', e => {
+      end();
+      if (e.isPrimary === false || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      const icon = e.target.closest && e.target.closest('.leaflet-marker-icon');
+      if (!icon) return;
+      let mk = null;
+      map.eachLayer(x => { if (x._hold && x._icon === icon) mk = x; });
+      if (!mk) return;
+      st = { mk, id: e.pointerId, p0: pt(e), m0: map.latLngToContainerPoint(mk.getLatLng()), on: false, moved: false };
+      st.t = setTimeout(() => {
+        if (!st) return;
+        st.on = true;
+        map.dragging.disable(); // המפה לא זזה בזמן גרירת הסימן
+        mk.closePopup();
+        if (mk._icon) mk._icon.classList.add('wl-lift');
+        try { navigator.vibrate && navigator.vibrate(30); } catch (_) {}
+      }, HOLD_MS);
+      document.addEventListener('pointermove', move, true);
+      document.addEventListener('pointerup', up, true);
+      document.addEventListener('pointercancel', up, true);
+    }, true);
+    box.addEventListener('click', e => { if (eat && e.target.closest && e.target.closest('.leaflet-marker-icon')) { eat = false; e.stopPropagation(); e.preventDefault(); } }, true);
+    box.addEventListener('contextmenu', e => { if (st || (e.target.closest && e.target.closest('.leaflet-marker-icon'))) e.preventDefault(); }, true);
+  }
+
   // שדות הסקר שאפשר לשייך להם עמודה. prev: כשפותחים על בסיס סקר קודם, הערך מהסקר הקודם נשאר (כבוי כברירת מחדל: הפרטים מהרשימה)
   const FIELDS = [
     { key: 'siteName', label: 'שם המוסד / האתר', re: /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר|בי"ס)|^שם$|^מוסד|^מעון/, safetyOnly: true },
@@ -2331,7 +2393,9 @@
           const lb = labelIn(S.L, r);
           // מיקום משוער: מסגרת מקווקוות וסימן שאלה (הצבע נשאר של הרשימה)
           const ck = isCheck(r);
-          const mk = L.marker([g.lat, g.lon], { draggable: g.src !== 'gps', zIndexOffset: ck ? 200 : -500, icon: L.divIcon({ className: 'wl-pin side' + (g.approx ? ' approx' : '') + (ck ? ' check' : ''), html: ck ? `<span class="wl-sp" style="border-color:${C}">!</span>` : `<span class="wl-sp" style="background:${C};color:${textOn(C)}">${g.approx ? '?' : '+'}</span>`, iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(layer);
+          const mk = L.marker([g.lat, g.lon], { zIndexOffset: ck ? 200 : -500, icon: L.divIcon({ className: 'wl-pin side' + (g.approx ? ' approx' : '') + (ck ? ' check' : ''), html: ck ? `<span class="wl-sp" style="border-color:${C}">!</span>` : `<span class="wl-sp" style="background:${C};color:${textOn(C)}">${g.approx ? '?' : '+'}</span>`, iconSize: [22, 22], iconAnchor: [11, 11] }) });
+          if (g.src !== 'gps') holdDrag(mk);
+          mk.addTo(layer);
           mk.bindPopup(() => h('div', { class: 'wl-popup', dir: 'rtl' },
             h('b', {}, lb.name), h('div', {}, lb.addr), h('div', { class: 'small', style: `color:${C};font-weight:700` }, 'רשימה משנית: ' + S.L.name), flagBadge(r, h), g.approx ? h('i', {}, approxTxt(g)) : null,
             h('div', { class: 'row', style: 'gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap' },
@@ -2339,7 +2403,7 @@
               flagBtn(S.L, r, () => map.closePopup()), assignBtn(r, () => map.closePopup()),
               h('button', { class: 'btn', onclick: () => { map.closePopup(); fixLoc(r, S); } }, '📍 תקן מיקום'),
               h('a', { href: g.src === 'gps' || g.manual ? `https://waze.com/ul?ll=${g.lat},${g.lon}&navigate=yes` : 'https://waze.com/ul?q=' + encodeURIComponent(lb.addr) + '&navigate=yes', target: '_blank', rel: 'noopener' }, 'וייז')),
-            h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם לגרור את הנקודה')), { minWidth: 220 })
+            h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם להזיז: לחיצה ארוכה על הנקודה ואז גרירה')), { minWidth: 220 })
             .on('dragend', e => { const p = e.target.getLatLng(); setManual(r, { lat: p.lat, lon: p.lng }, null, S); ui.toast('המיקום של ' + lb.name + ' עודכן', 2500); });
           S.pins.set(r.id, mk);
         }
@@ -2472,7 +2536,7 @@
           if (!p) { msg.textContent = `לא מצאתי את "${t}". נסה לכתוב אחרת, או סמן במפה.`; return; }
           const use = () => { close(); setManual(r, p, t, S);
             if (map) { userMoved = true; map.setView([p.lat, p.lon], 17); }
-            ui.toast('נמצא. אם הנקודה לא בדיוק במקום, גרור אותה', 4000); };
+            ui.toast('נמצא. אם הנקודה לא בדיוק במקום, לחץ עליה לחיצה ארוכה וגרור', 4000); };
           // התוצאה לא מכילה את כל מה שכתבת (רחוב אחר / בלי מספר): לא מזיזים לבד, מראים מה נמצא ואתה מחליט
           if (!p.fit) { msg.textContent = ''; msg.append(`לא מצאתי בדיוק את "${t}". הכי קרוב שנמצא: "${clean(p.label) || 'בלי שם'}". אם זה לא המקום, נסה כתיב אחר או סמן במפה. `,
             h('button', { class: 'btn', onclick: use }, 'השתמש בזה בכל זאת')); return; }
@@ -2519,8 +2583,8 @@
       layer = L.layerGroup().addTo(map);
       const ll = [];
       if (l.start.mode === 'addr' && l.start.geo && l.start.geo.key === l.start.addr)
-        L.marker([l.start.geo.lat, l.start.geo.lon], { draggable: true, icon: L.divIcon({ className: 'wl-pin start', html: '🏠', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(layer)
-          .bindPopup('התחלה: ' + l.start.addr.replace(/</g, '&lt;') + '<br><i>אפשר לגרור כדי לדייק</i>')
+        holdDrag(L.marker([l.start.geo.lat, l.start.geo.lon], { icon: L.divIcon({ className: 'wl-pin start', html: '🏠', iconSize: [30, 30], iconAnchor: [15, 15] }) })).addTo(layer)
+          .bindPopup('התחלה: ' + l.start.addr.replace(/</g, '&lt;') + '<br><i>לחיצה ארוכה ואז גרירה כדי לדייק</i>')
           .on('dragend', e => { const p = e.target.getLatLng(); l.start.geo = { lat: p.lat, lon: p.lng, key: l.start.addr, manual: true }; persist(); redraw(); });
       // כמה מוסדות באותה כתובת: סיכה אחת. מרחוק המספר הראשון (ונקודה קטנה שמסמנת שיש עוד), ובקירוב כל המספרים (1-2)
       const groups = new Map();
@@ -2549,7 +2613,7 @@
             h('button', { class: 'btn', onclick: () => { map.closePopup(); fixLoc(r); } }, '📍 תקן מיקום'),
             flagBtn(l, r, () => map.closePopup()), assignBtn(r, () => map.closePopup()),
             h('a', { href: navUrl(r), target: '_blank', rel: 'noopener' }, 'נווט בוויז')),
-          h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם לגרור את הנקודה'),
+          h('div', { class: 'muted small' }, g.manual ? 'מיקום שתיקנת ביד' : 'אפשר גם להזיז: לחיצה ארוכה על הנקודה ואז גרירה'),
           ...nearChips(id, 'btn wl-near-btn', () => map.closePopup()),
           mk && mk._grp.length > 1 ? h('button', { class: 'btn', style: 'margin-top:6px', onclick: e => { e.stopPropagation(); setTimeout(() => { mk._one = null; mk.setPopupContent(mk._pop()); }, 0); } }, `↩ כל ${mk._grp.length} המוסדות בכתובת הזו`) : null);
       };
@@ -2568,7 +2632,8 @@
           const hgt = big ? 38 : 30, w = Math.max(hgt, Math.round(txt.length * (big ? 12 : 9.5)) + 14);
           return L.divIcon({ className: cls + (near ? ' near' : '') + (big ? ' big' : '') + (hl ? ' hl' : ''), html: ringHtml + `<span dir="ltr">${txt}</span>` + (!near && ms.length > 1 ? `<i>+${ms.length - 1}</i>` : ''), iconSize: [w, hgt], iconAnchor: [w / 2, hgt / 2] });
         };
-        const mk = L.marker([g.lat, g.lon], { icon: iconFor(false), draggable: g.src !== 'gps' });
+        const mk = L.marker([g.lat, g.lon], { icon: iconFor(false) });
+        if (g.src !== 'gps') holdDrag(mk);
         mk._grp = ms; mk._one = null; mk._icon2 = iconFor;
         mk._pop = () => mk._one || ms.length === 1 ? popOf(mk._one || ms[0], mk) : h('div', { class: 'wl-popup', dir: 'rtl' },
           h('b', {}, `${ms.length} מוסדות באותה כתובת`), h('div', {}, label(ms[0].r).addr), h('div', { class: 'muted small' }, 'בחר מוסד כדי לפתוח את הסקר שלו:'),
@@ -2582,7 +2647,7 @@
                 flagBtn(l, m.r, () => map.closePopup()),
                 h('button', { class: 'btn', title: 'מקום בסדר, תיקון מיקום, ניווט וקרובים', onclick: one }, 'עוד…'))); }),
           ...[...new Set(ms.flatMap(m => nearOf(m.id).map(x => x.S)))].map(S => { const m = ms.find(x => nearOf(x.id).some(y => y.S === S)); return nearChips(m.id, 'btn wl-near-btn', () => map.closePopup()).find((_, k) => nearOf(m.id)[k].S === S); }),
-          h('div', { class: 'muted small', style: 'margin-top:6px' }, 'גרירת הנקודה מזיזה את כולם יחד'));
+          h('div', { class: 'muted small', style: 'margin-top:6px' }, 'לחיצה ארוכה וגרירת הנקודה מזיזה את כולם יחד'));
         mk.addTo(layer).bindPopup(() => mk._pop(), { minWidth: 220, maxWidth: 360 })
           .on('popupclose', () => { mk._one = null; })
           .on('dragend', e => { const p = e.target.getLatLng(); ms.forEach(m => { m.r.geo = { lat: p.lat, lon: p.lng, key: (m.r.geo && m.r.geo.key) || '', manual: true }; m.r.u = Date.now(); geo.set(m.id, m.r.geo); }); persist(); redraw(); ui.toast(ms.length > 1 ? `המיקום של ${ms.length} המוסדות עודכן` : 'המיקום של ' + label(ms[0].r).name + ' עודכן', 2500); });
