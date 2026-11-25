@@ -2061,7 +2061,7 @@
     const mgr = h('input', { type: 'checkbox', style: 'width:20px;height:20px' });
     const mailOpts = h('div', { class: 'stack', style: 'gap:6px;border-top:1px solid var(--line, #ddd);padding-top:8px' },
       h('b', { class: 'small' }, 'במייל:'), kindBox,
-      h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, mgr, 'לצרף גם את דוח המנהלים של הרשימה (אקסל)'));
+      h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, mgr, 'לצרף גם דוח מנהלים (אקסל) של הסקרים שסימנת'));
     const boxes = rows.map(r => h('input', { type: 'checkbox', checked: true, style: 'width:22px;height:22px;flex:none', onchange: e => { e.target.checked ? sel.add(r.id) : sel.delete(r.id); upd(); } }));
     let busy = false;
     const upd = () => { count.textContent = `נבחרו ${sel.size} מתוך ${rows.length}`; btnPdf.disabled = btnMail.disabled = !sel.size || busy; };
@@ -2123,7 +2123,7 @@
       }
       if (!files.length) { say('לא נוצרו קבצים לשליחה. ' + bad.join(', ')); return; }
       if (mgr.checked) {
-        const r = await buildManagersReport(l, say).catch(e => { bad.push('דוח מנהלים (' + e.message + ')'); return null; });
+        const r = await buildManagersReport(l, say, new Set(rows.filter(x => sel.has(x.id)).map(x => x.id))).catch(e => { bad.push('דוח מנהלים (' + e.message + ')'); return null; });
         if (r) files.push(asFile(r.blob, r.name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
       }
       const { subject, body } = App.mailText(sent);
@@ -2164,14 +2164,15 @@
     finally { btn.disabled = false; btn.textContent = label0; }
   }
   // דוח מנהלים (אקסל) של הרשימה: null כשאין עדיין סקרים
-  async function buildManagersReport(l, say) {
+  // only: קבוצת מזהי שורות — רק הסקרים שנבחרו (שליחה במייל של חלק מהסקרים)
+  async function buildManagersReport(l, say, only) {
     const ui = U();
     {
       const nameCol = l.cols.find(c => /שם\s*ה?(מוסד|מעון|גן|אתר|בית\s*ספר)/.test(c.name)) || null;
       let idx = null;
       const rows = [], missing = [];
       let inst = 0, trees = 0, i = 0;
-      const rs = l.rows.filter(r => !r.deleted);
+      const rs = l.rows.filter(r => !r.deleted && (!only || only.has(r.id)));
       for (const r of rs) {
         say(`דוח מנהלים: טוען סקרים… ${++i}/${rs.length}`);
         if (!r.sid) { missing.push(r); continue; }
