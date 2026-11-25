@@ -605,6 +605,45 @@
     const n = kabatFirst(valuesOf(l, r).kabat);
     return n ? (sp || kabatSpell(l)).get(kabatKey(n)) || n : '';
   }
+  // ---------- צבע סמנים לפי קב"ט (1.174, ori) ----------
+  // הקב"ט של שורה: מהעמודה שלה, ואם אין בה עמודה (רשימת האורנים / החדשים) לפי סמל המוסד מרשימה שיש בה עמודת קב"ט.
+  // הצבע של כל קב"ט נשמר בכל רשימה שיש בה קב"ט (L.kabatColors {מפתח: צבע}), אז הוא אותו צבע בכל מפה, ראשית או משנית, ובכל מכשיר.
+  // ההפעלה לכל רשימה (L.kabatPins) נשמרת ברשימה עצמה: אותו דבר כשהיא ראשית וכשהיא משנית. (מוכן לעבור לכלל בכישור של ירושלים)
+  const KABAT_COLORS = ['#e53935', '#1e88e5', '#43a047', '#fb8c00', '#8e24aa', '#00897b', '#f4511e', '#3949ab', '#c0ca33', '#6d4c41', '#d81b60', '#00acc1', '#5e35b1', '#7cb342'];
+  const hasKabatCol = L => !!L && !L.deleted && colsOf((L.map || {}).kabat).length > 0;
+  function kabatIndex(lists) {
+    const byCode = new Map(), colors = new Map(), names = new Map(), sp = new Map();
+    for (const L of lists) {
+      if (!hasKabatCol(L)) continue;
+      const spl = kabatSpell(L); sp.set(L.id, spl);
+      for (const [k, c] of Object.entries(L.kabatColors || {})) if (/^#[0-9a-f]{6}$/i.test(c) && !colors.has(k)) colors.set(k, c);
+      for (const r of L.rows) {
+        if (r.deleted) continue;
+        const n = kabatOfRow(L, r, spl); if (!n) continue;
+        const k = kabatKey(n); if (!names.has(k)) names.set(k, n);
+        for (const c of codeKeys(L, r)) if (!byCode.has(c)) byCode.set(c, k);
+      }
+    }
+    // קב"ט בלי צבע שמור: הצבע הפנוי הבא (לפי א-ב, כדי שבכל מכשיר ייצא אותו דבר)
+    const used = new Set([...colors.values()].map(c => c.toLowerCase()));
+    for (const k of [...names.keys()].sort((a, b) => names.get(a).localeCompare(names.get(b), 'he'))) {
+      if (colors.has(k)) continue;
+      const c = KABAT_COLORS.find(x => !used.has(x)) || KABAT_COLORS[colors.size % KABAT_COLORS.length];
+      colors.set(k, c); used.add(c);
+    }
+    return { byCode, colors, names, sp };
+  }
+  function rowKabatKey(L, r, ix) {
+    if (hasKabatCol(L)) { let spl = ix.sp.get(L.id); if (!spl) { spl = kabatSpell(L); ix.sp.set(L.id, spl); } const n = kabatOfRow(L, r, spl); return n ? kabatKey(n) : ''; }
+    for (const c of codeKeys(L, r)) { const k = ix.byCode.get(c); if (k) return k; }
+    return '';
+  }
+  const kabatCapable = (L, ix) => hasKabatCol(L) || L.rows.some(r => !r.deleted && codeKeys(L, r).some(c => ix.byCode.has(c)));
+  // צבע לקב"ט: נשמר בכל הרשימות שיש בהן קב"ט
+  async function setKabatColor(k, c, lists, ix) {
+    ix.colors.set(k, c);
+    for (const L of lists) if (hasKabatCol(L)) { L.kabatColors = Object.assign({}, L.kabatColors || {}, { [k]: c }); await save(L); }
+  }
   // סקרים שנפתחו מהרשימה (גם כרשימה נוספת של סקר משותף): הקב"ט לסקר והעברת הקבצים. רשימה שכובתה / שורה שהוסרה: הסקר חוזר לתיקיית הפרויקט / שכונה
   let kabatRun = Promise.resolve();
   async function kabatToSurveys(local) {
@@ -2362,7 +2401,17 @@
     const SIDES = [];
     for (const c of l.sides) { const L2 = otherLists.find(x => x.id === c.id); if (L2) SIDES.push({ c, L: L2, geo: new Map(), pins: new Map() }); }
     const mOf = S => S.self ? +l.selfM || 150 : +S.c.m || 150;
-    const colOf = S => okC(S.c.color) || SIDE_COLORS[0];
+    // (1.174, ori) הצבע שייך לרשימה עצמה (L.mapColor): אותו צבע כשהיא ראשית וכשהיא משנית בכל מפה אחרת. צבע ישן של השיוך עובר לרשימה פעם אחת
+    const MAIN_DEF = '#2e6b33';
+    for (const S of SIDES) if (!okC(S.L.mapColor) && okC(S.c.color)) { S.L.mapColor = S.c.color; save(S.L); }
+    const mainCol = () => okC(l.mapColor) || MAIN_DEF;
+    const colOf = S => S.self ? okC(S.c.color) : okC(S.L.mapColor) || okC(S.c.color) || SIDE_COLORS[0];
+    // (1.174, ori) צבע לפי קב"ט (L.kabatPins), הצבעים משותפים לכל הרשימות
+    const allLists = (await all()).filter(x => !x.deleted);
+    let kix = kabatIndex(allLists);
+    const kabCol = k => kix.colors.get(k) || null;
+    const kabOn = L => !!L.kabatPins && kabatCapable(L, kix);
+    const pinKab = (L, r) => kabOn(L) ? rowKabatKey(L, r, kix) : '';
     const sideDone = r => { const s = r.sid && local.get(r.sid); return !!(s && (s.finished || s.finishPending)); };
     const rowsOf = S => S.L.rows.filter(r => !r.deleted && !sideDone(r) && !gone(r));
     // מוסדות מכל רשימה משנית שקרובים לתחנה (אותה כתובת או עד המרחק של אותה רשימה): [{ S, rs }]
@@ -2384,6 +2433,45 @@
       onclick: e => { e.stopPropagation(); if (after) after(); showNear(id, S); } }, nearTxt(rs.length) + (S.self ? ' · מאותה רשימה' : SIDES.length > 1 || after ? ' · ' + (S.L.name || 'רשימה') : '')));
     // (1.144, ori) מעבר ל-50/150/300: "מרחק אחר…" = כל מספר מטרים. (1.145) לכל רשימה משנית בנפרד
     const PRESET_M = [50, 150, 300];
+    // (1.174, ori) "צבע לפי קב"ט" לרשימה (נשמר ברשימה עצמה, אז גם כשהיא משנית במפה אחרת)
+    function kabToggle(L) {
+      if (!kabatCapable(L, kix)) return null;
+      return h('label', { class: 'row small', style: 'gap:4px;align-items:center', title: 'כל קב"ט בצבע משלו. רשימה בלי עמודת קב"ט: לפי סמל המוסד ברשימה שיש בה קב"ט' },
+        h('input', { type: 'checkbox', checked: !!L.kabatPins, onchange: e => { if (e.target.checked) L.kabatPins = true; else delete L.kabatPins; save(L); drawSideCtl(); redraw(); } }), 'צבע לפי קב"ט');
+    }
+    // מקרא הקב"טים שבמפה, עם אפשרות לשנות צבע (משותף לכל הרשימות)
+    function kabLegend() {
+      const shown = [l, ...SIDES.map(S => S.L)].filter(kabOn);
+      if (!shown.length) return null;
+      const keys = new Map();
+      for (const L of shown) for (const r of L.rows) { if (r.deleted) continue; const k = rowKabatKey(L, r, kix); if (k) keys.set(k, (keys.get(k) || 0) + 1); }
+      let noK = 0; for (const L of shown) noK += L.rows.filter(r => !r.deleted && !rowKabatKey(L, r, kix)).length;
+      const ks = [...keys.keys()].sort((a, b) => (kix.names.get(a) || a).localeCompare(kix.names.get(b) || b, 'he'));
+      return h('div', { class: 'stack wl-kab-legend', style: 'gap:6px' },
+        h('div', { class: 'small' }, 'צבעים לפי קב"ט (לחיצה על הצבע משנה אותו בכל הרשימות):'),
+        h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap' }, ...ks.map(k => {
+          const inp = h('input', { type: 'color', class: 'wl-color', value: kabCol(k), 'aria-label': 'צבע הקב"ט ' + (kix.names.get(k) || k),
+            onchange: async () => { if (!okC(inp.value)) return; await setKabatColor(k, inp.value, allLists, kix); drawSideCtl(); redraw(); } });
+          return h('label', { class: 'row wl-kab', style: `gap:4px;align-items:center;border-inline-start:6px solid ${kabCol(k)}` }, inp, h('span', { class: 'small' }, `${kix.names.get(k) || k} (${keys.get(k)})`));
+        })),
+        noK ? h('div', { class: 'muted small' }, `${noK} מוסדות בלי קב"ט מופיעים בצבע של הרשימה שלהם`) : null);
+    }
+    // (1.174, ori) שתי רשימות באותו צבע במפה: הערה, ובחירה למי לשנות ולאיזה צבע
+    function clashBox() {
+      const items = [{ L: l, c: mainCol(), set: v => { l.mapColor = v; persist(); } }, ...SIDES.map(S => ({ L: S.L, c: colOf(S), set: v => { S.c.color = v; S.L.mapColor = v; save(S.L); persist(); } }))];
+      const by = new Map(); items.forEach(it => { const k = it.c.toLowerCase(); by.set(k, [...(by.get(k) || []), it]); });
+      const dup = [...by.values()].filter(a => a.length > 1);
+      if (!dup.length) return null;
+      const usedC = new Set(items.map(it => it.c.toLowerCase()));
+      const free = () => [...SIDE_COLORS, ...KABAT_COLORS].find(c => !usedC.has(c.toLowerCase())) || '#000000';
+      return h('div', { class: 'stack wl-clash', style: 'gap:6px;padding:8px 10px;border-radius:10px;background:#fff4d6;border:1px solid #e0b000;color:#5a4300' },
+        ...dup.map(a => h('div', { class: 'stack', style: 'gap:6px' },
+          h('b', { class: 'small' }, `⚠ ${a.length} רשימות באותו צבע במפה: ${a.map(it => it.L.name || 'רשימה').join(', ')}. בחר לאיזו לשנות ולאיזה צבע:`),
+          ...a.map(it => { const inp = h('input', { type: 'color', class: 'wl-color', value: free(), 'aria-label': 'צבע חדש ל' + (it.L.name || 'רשימה') });
+            return h('div', { class: 'row', style: 'gap:6px;align-items:center;flex-wrap:wrap' }, h('span', { class: 'small', style: 'min-width:120px' }, it.L.name || 'רשימה'), inp,
+              h('button', { class: 'btn', style: 'min-height:36px', onclick: () => { if (!okC(inp.value)) return; it.set(inp.value); drawSideCtl(); redraw(); } }, 'שנה את הצבע של הרשימה הזו')); }))),
+        h('div', { class: 'muted small' }, 'הצבע נשמר ברשימה עצמה, אז הוא משתנה גם בכל מפה אחרת שהיא מופיעה בה.'));
+    }
     function sideRowCtl(S) {
       const c = S.c, cur = mOf(S), pre = PRESET_M.includes(cur);
       const num = h('input', { class: 'in', type: 'number', inputmode: 'numeric', min: 1, max: 5000, step: 1, style: 'width:90px;min-height:40px', 'aria-label': 'מרחק במטרים', placeholder: 'מטר',
@@ -2399,24 +2487,30 @@
       const wrap = h('div', { class: 'row wl-side-ctl', style: `gap:6px;align-items:center;flex-wrap:wrap;border-inline-start:6px solid ${colOf(S)}` });
       const color = h('input', { type: 'color', class: 'wl-color', value: colOf(S), title: 'צבע הסמנים של הרשימה במפה', 'aria-label': 'צבע הסמנים של ' + S.L.name,
         oninput: () => { wrap.style.borderInlineStartColor = color.value; },
-        onchange: () => { if (!okC(color.value)) return; c.color = color.value; persist(); drawSideCtl(); redraw(); } });
+        onchange: () => { if (!okC(color.value)) return; c.color = color.value; S.L.mapColor = color.value; save(S.L); persist(); drawSideCtl(); redraw(); } });
       const rm = h('button', { class: 'icon-btn', title: 'הסר את הרשימה המשנית מהמסלול (הרשימה עצמה לא נמחקת)', 'aria-label': 'הסר את ' + S.L.name, onclick: async () => {
         l.sides = l.sides.filter(x => x !== c); syncOld(); await persist(); renderRoute(l); } }, '✕');
-      wrap.append(color, h('b', { class: 'small', style: 'max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, S.L.name || 'רשימה'), sel, num, mu, rm);
+      wrap.append(...[color, h('b', { class: 'small', style: 'max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, S.L.name || 'רשימה'), sel, num, mu, kabToggle(S.L), rm].filter(Boolean));
       return wrap;
     }
     const sideCtl = h('div', { class: 'stack', style: 'gap:6px' });
     function drawSideCtl() {
       const used = new Set(l.sides.map(c => c.id)), free = otherLists.filter(x => !used.has(x.id));
       const add = h('select', { class: 'in', style: 'width:auto;min-height:40px;max-width:280px', 'aria-label': 'צרף רשימה משנית', onchange: async () => {
-          if (!add.value) return; l.sides.push({ id: add.value, m: 150, color: freeColor() }); syncOld(); await persist(); renderRoute(l); } },
+          if (!add.value) return; const L2 = otherLists.find(x => x.id === add.value);
+          l.sides.push({ id: add.value, m: 150, color: (L2 && okC(L2.mapColor)) || freeColor() }); syncOld(); await persist(); renderRoute(l); } },
         h('option', { value: '' }, SIDES.length ? '➕ צרף עוד רשימה משנית…' : 'בלי רשימה משנית (➕ צרף…)'), ...free.map(x => h('option', { value: x.id }, x.name || 'רשימה')));
       // (1.164, ori) קרובים מאותה רשימה ראשית
       const selfSel = h('select', { class: 'in', style: 'width:auto;min-height:40px', 'aria-label': 'מרחק שנחשב קרוב בתוך אותה רשימה', onchange: () => { l.selfM = +selfSel.value; persist(); redraw(); } },
         [[0, 'בלי'], ...PRESET_M.map(m => [m, `עד ${m} מ'`])].concat(PRESET_M.includes(+l.selfM) || !+l.selfM ? [] : [[+l.selfM, `עד ${+l.selfM} מ'`]])
           .map(([v, t]) => h('option', { value: v, selected: +l.selfM === v ? '' : null }, t)));
       const selfRow = h('div', { class: 'row wl-side-ctl', style: 'gap:6px;align-items:center;flex-wrap:wrap;border-inline-start:6px solid #222' }, h('b', { class: 'small' }, 'קרובים מאותה רשימה:'), selfSel);
-      sideCtl.replaceChildren(selfRow, h('div', { class: 'small' }, SIDES.length > 1 ? `רשימות משניות (מוסדות קרובים, ${SIDES.length}):` : 'רשימה משנית (מוסדות קרובים):'),
+      // (1.174) צבע הרשימה הראשית עצמה + צבע לפי קב"ט
+      const mc = h('input', { type: 'color', class: 'wl-color', value: mainCol(), title: 'צבע הסמנים של הרשימה הזו במפה', 'aria-label': 'צבע הסמנים של ' + (l.name || 'הרשימה'),
+        onchange: () => { if (!okC(mc.value)) return; l.mapColor = mc.value; persist(); drawSideCtl(); redraw(); } });
+      const mainRow = h('div', { class: 'row wl-side-ctl', style: `gap:6px;align-items:center;flex-wrap:wrap;border-inline-start:6px solid ${mainCol()}` },
+        mc, h('b', { class: 'small' }, 'הרשימה הזו: ' + (l.name || 'רשימה')), okC(l.mapColor) ? h('button', { class: 'btn', style: 'min-height:36px', title: 'חזרה לירוק הרגיל', onclick: () => { delete l.mapColor; persist(); drawSideCtl(); redraw(); } }, '↺ רגיל') : null, kabToggle(l));
+      sideCtl.replaceChildren(...[mainRow, clashBox(), kabLegend()].filter(Boolean), selfRow, h('div', { class: 'small' }, SIDES.length > 1 ? `רשימות משניות (מוסדות קרובים, ${SIDES.length}):` : 'רשימה משנית (מוסדות קרובים):'),
         ...SIDES.map(sideRowCtl), ...(free.length ? [add] : []));
     }
     const sideBox = h('div', { class: 'stack' });
@@ -2478,17 +2572,19 @@
       for (const S of SIDES) {
         S.pins.clear();
         if (!map) continue;
-        const C = colOf(S);
+        const C0 = colOf(S);
         for (const r of rowsOf(S)) {
           const g = S.geo.get(r.id); if (!g) continue;
           const lb = labelIn(S.L, r);
+          // (1.174) צבע לפי קב"ט: המילוי בצבע הקב"ט והמסגרת בצבע הרשימה
+          const kk = pinKab(S.L, r), C = (kk && kabCol(kk)) || C0, bord = kk ? `border:2.5px solid ${C0};` : '';
           // מיקום משוער: מסגרת מקווקוות וסימן שאלה (הצבע נשאר של הרשימה)
           const ck = isCheck(r);
-          const mk = L.marker([g.lat, g.lon], { zIndexOffset: ck ? 200 : -500, icon: L.divIcon({ className: 'wl-pin side' + (g.approx ? ' approx' : '') + (ck ? ' check' : ''), html: ck ? `<span class="wl-sp" style="border-color:${C}">!</span>` : `<span class="wl-sp" style="background:${C};color:${textOn(C)}">${g.approx ? '?' : '+'}</span>`, iconSize: [22, 22], iconAnchor: [11, 11] }) });
+          const mk = L.marker([g.lat, g.lon], { zIndexOffset: ck ? 200 : -500, icon: L.divIcon({ className: 'wl-pin side' + (g.approx ? ' approx' : '') + (ck ? ' check' : ''), html: ck ? `<span class="wl-sp" style="border-color:${C}">!</span>` : `<span class="wl-sp" style="background:${C};color:${textOn(C)};${bord}">${g.approx ? '?' : '+'}</span>`, iconSize: [22, 22], iconAnchor: [11, 11] }) });
           if (g.src !== 'gps') holdDrag(mk);
           mk.addTo(layer);
           mk.bindPopup(() => h('div', { class: 'wl-popup', dir: 'rtl' },
-            h('b', {}, lb.name), h('div', {}, lb.addr), h('div', { class: 'small', style: `color:${C};font-weight:700` }, 'רשימה משנית: ' + S.L.name), flagBadge(r, h), g.approx ? h('i', {}, approxTxt(g)) : null,
+            h('b', {}, lb.name), h('div', {}, lb.addr), h('div', { class: 'small', style: `color:${C0};font-weight:700` }, 'רשימה משנית: ' + S.L.name + (kk ? ' · קב"ט ' + (kix.names.get(kk) || kk) : '')), flagBadge(r, h), g.approx ? h('i', {}, approxTxt(g)) : null,
             h('div', { class: 'row', style: 'gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap' },
               h('button', { class: 'btn primary', onclick: () => { map.closePopup(); openRow(S.L, r, true); } }, 'פתח סקר'),
               flagBtn(S.L, r, () => map.closePopup()), assignBtn(r, () => map.closePopup()),
@@ -2728,11 +2824,15 @@
         // טבעת בצבע של כל רשימה משנית שיש בה מוסד קרוב (כמה רשימות = כמה טבעות)
         const rings = [...new Set(ms.flatMap(m => nearOf(m.id).map(x => colOf(x.S))))];
         const ringHtml = rings.length ? `<b class="wl-ring" style="box-shadow:${rings.map((c, k) => `0 0 0 ${3 * (k + 1)}px ${c}`).join(',')}"></b>` : '';
+        // (1.174) צבע הרשימה / צבע הקב"ט (לא במיקום משוער / לבדיקה, שיש להם צבע משלהם)
+        const mk0 = pinKab(l, ms[0].r), pc = (mk0 && kabCol(mk0)) || mainCol();
+        const bgHtml = pc !== MAIN_DEF && !g.approx && !ms.some(m => isCheck(m.r)) ? `<b class="wl-bg" style="background:${pc}"></b>` : '';
+        const txtCss = bgHtml ? ` style="color:${textOn(pc)}"` : '';
         const iconFor = hl => {
           const z = map.getZoom(), near = z >= 15, big = z >= 17;
           const txt = near ? full : String(nums[0]);
           const hgt = big ? 38 : 30, w = Math.max(hgt, Math.round(txt.length * (big ? 12 : 9.5)) + 14);
-          return L.divIcon({ className: cls + (near ? ' near' : '') + (big ? ' big' : '') + (hl ? ' hl' : ''), html: ringHtml + `<span dir="ltr">${txt}</span>` + (!near && ms.length > 1 ? `<i>+${ms.length - 1}</i>` : ''), iconSize: [w, hgt], iconAnchor: [w / 2, hgt / 2] });
+          return L.divIcon({ className: cls + (near ? ' near' : '') + (big ? ' big' : '') + (hl ? ' hl' : ''), html: bgHtml + ringHtml + `<span dir="ltr"${txtCss}>${txt}</span>` + (!near && ms.length > 1 ? `<i>+${ms.length - 1}</i>` : ''), iconSize: [w, hgt], iconAnchor: [w / 2, hgt / 2] });
         };
         const mk = L.marker([g.lat, g.lon], { icon: iconFor(false) });
         if (g.src !== 'gps') holdDrag(mk);

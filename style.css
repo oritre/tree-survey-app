@@ -807,3 +807,7 @@ body:has(> .modal) .wl-mapview { visibility: hidden; }
 /* (1.169) לחיצה ארוכה על סימן במפת המסלול: הסימן "מורם" וניתן לגרירה */
 .leaflet-marker-icon.wl-pin { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 .leaflet-marker-icon.wl-lift { outline: 3px solid #1a73e8; outline-offset: 2px; box-shadow: 0 8px 14px rgba(0,0,0,.5) !important; z-index: 100000 !important; }
+/* (1.174) צבע רשימה / קב"ט לסמנים הראשיים, מקרא קב"ט, התנגשות צבעים */
+.wl-pin .wl-bg { position: absolute; inset: 0; border-radius: inherit; z-index: -1; }
+.wl-pin > span { position: relative; }
+.wl-kab { padding: 2px 8px 2px 4px; border-radius: 8px; background: var(--surface-2, #f4f4f4); }
