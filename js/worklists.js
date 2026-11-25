@@ -581,7 +581,7 @@
     for (const L of await live()) if (hoodOn(L)) { await ensureHood(L).catch(() => {}); await hoodToSurveys(L, local).catch(() => {}); }
     await kabatToSurveys(local).catch(e => console.warn('kabat', e));
   }
-  setTimeout(() => { sync(false).catch(() => {}).then(autoHoods).catch(() => {}); }, 6000);
+  setTimeout(() => { sync(false).catch(() => {}).then(() => mirrorGeoAll().catch(e => console.warn('mirror', e))).then(autoHoods).catch(() => {}); }, 6000);
 
   // ---------- תיקייה לפי קב"ט (1.163, ori) ----------
   // ירושלים כללי: סקרי עצים / ירושלים / <קב"ט ראשון> / <שכונה>. שורה בלי קב"ט ודאי: "ללא שיוך" / <שכונה>.
@@ -735,6 +735,70 @@
       if ((r.sid && x.sid === r.sid) || codeKeys(L, x).some(c => keys.has(c))) out.push({ L, r: x });
     }
     return out;
+  }
+  // ---------- אותו מוסד בכמה רשימות: תיקון עובר לכולן (1.170, ori) ----------
+  // מיקום שתיקנת במפה (גרירה / סימון / חיפוש / "המיקום נכון") ותיקון בתא של שדה משויך (כתובת, שם, עיר, מנהל, שכונה…)
+  // עוברים לשורות של אותו מוסד בשאר הרשימות: אותו סמל מוסד או אותו סקר. סמל המוסד עצמו לא מועתק (הוא מה שמזהה את המוסד)
+  async function peersOf(l, r) {
+    const keys = new Set(codeKeys(l, r)), out = [];
+    if (!keys.size && !r.sid) return out;
+    for (const L of await live()) {
+      if (L.id === l.id) continue;
+      for (const x of L.rows) if (!x.deleted && ((r.sid && x.sid === r.sid) || codeKeys(L, x).some(c => keys.has(c)))) out.push({ L, r: x });
+    }
+    return out;
+  }
+  const oneCol = (L, key) => { const cs = colsOf((L.map || {})[key]); return cs.length === 1 ? cs[0] : null; };
+  // מיקום ידני של r לכל השורות של אותו מוסד ברשימות האחרות. מחזיר את השורות שעודכנו ({ L, r })
+  async function mirrorGeo(l, r) {
+    if (!r.geo || !r.geo.manual) return [];
+    const done = [], lists = new Set();
+    for (const p of await peersOf(l, r)) {
+      const g = p.r.geo;
+      if (g && g.manual && g.lat === r.geo.lat && g.lon === r.geo.lon) continue;
+      p.r.geo = Object.assign({}, r.geo, { key: (g && g.key) || '' });
+      p.r.u = Date.now(); lists.add(p.L); done.push(p);
+    }
+    for (const L of lists) await save(L);
+    return done;
+  }
+  // תא שנערך ברשימה l: אם העמודה משויכת לשדה (לא סמל מוסד), אותו ערך עובר לעמודה של אותו שדה ברשימות האחרות
+  async function mirrorCell(l, r, colId) {
+    const f = fieldsOf(l).find(f => f.key !== 'code' && oneCol(l, f.key) === colId);
+    if (!f) return 0;
+    const v = r.cells[colId] || '', lists = new Set();
+    let n = 0;
+    for (const p of await peersOf(l, r)) {
+      const c = oneCol(p.L, f.key);
+      if (!c || (p.r.cells[c] || '') === v) continue;
+      p.r.cells[c] = v; p.r.u = Date.now(); lists.add(p.L); n++;
+    }
+    for (const L of lists) await save(L);
+    return n;
+  }
+  // פעם אחת (ואחרי כל סנכרון רשימות): מיקום שתוקן ביד באחת הרשימות נכנס לשורות של אותו מוסד ברשימות האחרות שאין להן מיקום ידני
+  async function mirrorGeoAll() {
+    const lists = await live(), changed = new Set();
+    const byKey = new Map();
+    const add = (k, it) => { if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(it); };
+    for (const L of lists) for (const x of L.rows) {
+      if (x.deleted) continue;
+      const it = { L, r: x };
+      codeKeys(L, x).forEach(c => add('c' + c, it));
+      if (x.sid) add('s' + x.sid, it);
+    }
+    for (const grp of byKey.values()) {
+      const man = grp.filter(it => it.r.geo && it.r.geo.manual).sort((a, b) => ((b.r.geo.at || 0) - (a.r.geo.at || 0)) || (b.r.u || 0) - (a.r.u || 0));
+      if (!man.length) continue;
+      const src = man[0];
+      for (const it of grp) {
+        if (it.L.id === src.L.id || (it.r.geo && it.r.geo.manual)) continue;
+        it.r.geo = Object.assign({}, src.r.geo, { key: (it.r.geo && it.r.geo.key) || '' });
+        it.r.u = Date.now(); changed.add(it.L);
+      }
+    }
+    for (const L of changed) await save(L);
+    return changed.size;
   }
   async function setFlag(l, r, flag, note) {
     const all = await sameInst(l, r), lists = new Set();
@@ -1506,7 +1570,9 @@
                 r.sid ? h('button', { class: 'link-btn small', title: 'לאיזו רשימה הסקר שייך, שכונה ותיקייה בדרייב', onclick: () => assignBySid(r.sid, () => renderList(l)) }, '📁 שיוך') : null,
                 r.sid ? h('button', { class: 'link-btn small', onclick: () => { if (!confirm('לנתק את השורה מהסקר? הסקר עצמו לא נמחק.')) return; delete r.sid; r.u = Date.now(); save(l); draw(); } }, 'נתק') : null)),
             ...cols.map(c => h('td', { 'data-c': c.id }, h('input', { class: 'wl-cell' + (hit(r.cells[c.id] || '') ? ' wl-hit' : ''), value: r.cells[c.id] || '', 'aria-label': c.name, style: `width:var(--w-${c.id}, ${width.get(c.id)}ch)`, title: (r.cells[c.id] || '').length > 20 ? r.cells[c.id] : null,
-              oninput: e => { r.cells[c.id] = e.target.value; r.u = Date.now(); saveSoon(); } }))),
+              oninput: e => { r.cells[c.id] = e.target.value; r.u = Date.now(); saveSoon(); },
+              // (1.170) בסיום העריכה: אותו שדה גם בשורות של אותו מוסד ברשימות האחרות
+              onchange: async () => { const n = await mirrorCell(l, r, c.id).catch(() => 0); if (n) ui.toast(`עודכן גם ב-${n} ${n > 1 ? 'שורות' : 'שורה'} של אותו מוסד ברשימות האחרות`, 2500); } }))),
             h('td', {}, h('button', { class: 'icon-btn', title: 'מחק שורה', 'aria-label': 'מחק שורה', onclick: () => {
               if (!confirm('למחוק את השורה מהרשימה?')) return;
               r.deleted = Date.now(); r.u = Date.now(); r.cells = {}; save(l); draw();
@@ -2520,17 +2586,28 @@
       ui.toast(msg, 5000);
     }
     // S: רשימה משנית ({ L, geo }); בלי S: הרשימה של המסלול
+    // (1.170) מיקום שתוקן עובר לאותו מוסד ברשימות האחרות, וגם הסיכות שלהן במפה הזו מתעדכנות
+    async function mirrorHere(LL, rows) {
+      let n = 0;
+      for (const r of rows) for (const p of await mirrorGeo(LL, r).catch(() => [])) {
+        n++;
+        if (p.L.id === l.id) geo.set(p.r.id, p.r.geo);
+        for (const S of SIDES) if (S.L.id === p.L.id) S.geo.set(p.r.id, p.r.geo);
+      }
+      if (n) { ui.toast(`המיקום עודכן גם ב-${n} ${n > 1 ? 'שורות' : 'שורה'} של אותו מוסד ברשימות האחרות`, 3000); redraw(); }
+    }
     function setManual(r, p, q, S) {
-      r.geo = { lat: p.lat, lon: p.lon, key: (r.geo && r.geo.key) || '', manual: true };
+      r.geo = { lat: p.lat, lon: p.lon, key: (r.geo && r.geo.key) || '', manual: true, at: Date.now() };
       if (q) r.geo.q = q;
       r.u = Date.now(); (S ? S.geo : geo).set(r.id, r.geo);
       // (1.139.1) שאר השורות באותה כתובת בדיוק (כמה גנים במתחם אחד) עוברות יחד, אם לא תוקנו ביד בעצמן ואין להן נ"צ מעצים
       const LL = S ? S.L : l, G = S ? S.geo : geo, ak = x => { const v = valuesOf(LL, x); return norm(v.street) + '|' + norm(v.city); }, k = ak(r);
       let n = 0;
       if (norm(valuesOf(LL, r).street)) for (const x of LL.rows) if (x !== r && !x.deleted && !(x.geo && (x.geo.manual || x.geo.src === 'gps')) && !(G.get(x.id) && G.get(x.id).src === 'gps') && ak(x) === k) {
-        x.geo = { lat: p.lat, lon: p.lon, key: (x.geo && x.geo.key) || '', manual: true }; if (q) x.geo.q = q; x.u = Date.now(); G.set(x.id, x.geo); n++; }
+        x.geo = { lat: p.lat, lon: p.lon, key: (x.geo && x.geo.key) || '', manual: true, at: Date.now() }; if (q) x.geo.q = q; x.u = Date.now(); G.set(x.id, x.geo); n++; }
       if (n) ui.toast(`המיקום עודכן גם ל-${n} שורות נוספות באותה כתובת`, 3500);
       save(LL); redraw();
+      mirrorHere(LL, [r]);
     }
     function fixLoc(r, S) {
       const LL = S ? S.L : l, G = S ? S.geo : geo;
@@ -2660,7 +2737,7 @@
           h('div', { class: 'muted small', style: 'margin-top:6px' }, 'לחיצה ארוכה וגרירת הנקודה מזיזה את כולם יחד'));
         mk.addTo(layer).bindPopup(() => mk._pop(), { minWidth: 220, maxWidth: 360 })
           .on('popupclose', () => { mk._one = null; })
-          .on('dragend', e => { const p = e.target.getLatLng(); ms.forEach(m => { m.r.geo = { lat: p.lat, lon: p.lng, key: (m.r.geo && m.r.geo.key) || '', manual: true }; m.r.u = Date.now(); geo.set(m.id, m.r.geo); }); persist(); redraw(); ui.toast(ms.length > 1 ? `המיקום של ${ms.length} המוסדות עודכן` : 'המיקום של ' + label(ms[0].r).name + ' עודכן', 2500); });
+          .on('dragend', e => { const p = e.target.getLatLng(); ms.forEach(m => { m.r.geo = { lat: p.lat, lon: p.lng, key: (m.r.geo && m.r.geo.key) || '', manual: true, at: Date.now() }; m.r.u = Date.now(); geo.set(m.id, m.r.geo); }); persist(); redraw(); mirrorHere(l, ms.map(m => m.r)); ui.toast(ms.length > 1 ? `המיקום של ${ms.length} המוסדות עודכן` : 'המיקום של ' + label(ms[0].r).name + ' עודכן', 2500); });
         ms.forEach(m => pinOf.set(m.id, mk));
         pinDraws.push(() => mk.setIcon(iconFor(hlPin === mk)));
       }
@@ -2896,5 +2973,5 @@
       return null;
     },
     flagRow: async (lid, rid, after) => { const L = await byId(lid), r = L && L.rows.find(x => x.id === rid && !x.deleted); if (!r) { U().toast('השורה לא נמצאה ברשימה', 3000); return; } flagDialog(L, r, after); },
-    _t: { kabatFirst, kabatKey, kabatOn, kabatOfRow, kabatSpell, kabatToSurveys, colPlan, ensureHood, hoodIndex, hoodLookup, hoodMatch, addrKey, codeKeys, setFlag, searchAll, geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
+    _t: { mirrorGeo, mirrorCell, mirrorGeoAll, peersOf, kabatFirst, kabatKey, kabatOn, kabatOfRow, kabatSpell, kabatToSurveys, colPlan, ensureHood, hoodIndex, hoodLookup, hoodMatch, addrKey, codeKeys, setFlag, searchAll, geoStreet, streetWords, bestOrder, norm, streetKey, scoreOf, guessHeader, buildFromRaw, valuesOf, mergeList, parseCsv } };
 })(window);
