@@ -796,3 +796,14 @@ body:has(> .modal) .wl-mapview { visibility: hidden; }
 .gps-live.mid { background: #fff3dc; color: #8a5300; }
 .gps-live.bad { background: #fde5e5; color: #b71c1c; }
 .gps-live.wait { background: var(--surface-2, #eef1f4); color: var(--muted, #667); }
+.wl-docs-pick .wl-doc-open { grid-template-columns: auto auto 1fr; }
+.wl-docs-pick .wl-doc-open input { grid-row: 1 / 3; width: 22px; height: 22px; margin: 0; }
+.wl-docs-pick .wl-doc-open .wl-doc-name, .wl-docs-pick .wl-doc-open .muted { grid-column: 3; }
+/* (1.166) map column on the route screen: map + small documents button under it */
+.wl-route-mapcol { position: sticky; top: 70px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wl-route-mapcol .wl-mapview { position: relative; top: auto; height: calc(100vh - 160px); }
+@media (max-width: 860px) { .wl-route-mapcol { position: static; } .wl-route-mapcol .wl-mapview { height: 46vh; } }
+
+/* (1.169) לחיצה ארוכה על סימן במפת המסלול: הסימן "מורם" וניתן לגרירה */
+.leaflet-marker-icon.wl-pin { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.leaflet-marker-icon.wl-lift { outline: 3px solid #1a73e8; outline-offset: 2px; box-shadow: 0 8px 14px rgba(0,0,0,.5) !important; z-index: 100000 !important; }

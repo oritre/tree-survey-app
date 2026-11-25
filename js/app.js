@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.162.0';
+  const APP_VERSION = '1.170.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -223,9 +223,21 @@
   // ---------- ניווט ----------
   window.addEventListener('hashchange', route);
   initPlanDrop();
+  // חץ "חזרה" בסקר (1.167.0): למסך שממנו נכנסו לסקר (מפת המסלול, הרשימה, מסך הבית)
+  let lastHash = null;
+  const FROM_RE = /^#\/(lists(\/|$)|summary\/|$)/;
+  const surveyFrom = (() => { try { return JSON.parse(sessionStorage.getItem('surveyFrom') || '{}'); } catch (e) { return {}; } })();
+  function noteFrom(id, prev) {
+    if (prev == null || !FROM_RE.test(prev) || surveyFrom[id] === prev) return;
+    surveyFrom[id] = prev;
+    try { sessionStorage.setItem('surveyFrom', JSON.stringify(surveyFrom)); } catch (e) { /* בלי אחסון: חוזרים למסך הבית */ }
+  }
+  const surveyBack = id => surveyFrom[id] || '#/';
   async function route() {
     const hash = location.hash || '#/';
+    const prev = lastHash; lastHash = hash;
     const m = /^#\/s\/([^/]+)(?:\/(\w+))?(?:\/t\/(.+))?/.exec(hash);
+    if (m) noteFrom(m[1], prev === '' ? '#/' : prev);
     if (m) {
       if (!cur || cur.id !== m[1]) {
         await saveNow();
@@ -234,7 +246,7 @@
         cur = Sync.holding(m[1]) || await Sync.refresh(m[1]) || await DB.getSurvey(m[1]);
         if (!cur || cur.deleted) { cur = null; location.hash = '#/'; return; }
         const next = await onOpenSurvey(cur);
-        if (next !== cur) { cur = null; go('#/s/' + next.id + '/details'); return; }
+        if (next !== cur) { if (surveyFrom[m[1]]) noteFrom(next.id, surveyFrom[m[1]]); cur = null; go('#/s/' + next.id + '/details'); return; }
         migrateSite(cur);
         for (const t of cur.trees) { delete t._gpsBusy; delete t._gpsRefine; delete t._gpsAcc; Core.normalizePhotos(t); }
         refreshSuggestions();
@@ -426,7 +438,8 @@
     };
     const shown = projectFilter == null ? projects : [projectFilter];
     // (1.155.1, ori) בתוך כל פרויקט: חלוקה לפי שכונה (התיקייה בדרייב), כשיש בפרויקט סקרים עם שכונה
-    const hoodOfS = s => Construction.isConstruction(s) ? '' : String(s.hood || '').trim();
+    // (1.163) ירושלים כללי: קב"ט / שכונה, כמו התיקיות בדרייב
+    const hoodOfS = s => Construction.isConstruction(s) ? '' : [s.kabatProj != null && String(s.kabatProj).trim() === String(s.project || '').trim() ? String(s.kabat || '').trim() || 'ללא שיוך' : '', String(s.hood || '').trim()].filter(Boolean).join(' / ');
     const projBody = ss => {
       const hoods = [...new Set(ss.map(hoodOfS))];
       if (hoods.length === 1 && !hoods[0]) return h('div', { class: 'grid-list' }, ss.map(card));
@@ -1578,7 +1591,7 @@
       const blob = await Reports.pinesXlsx(list);
       await deliver(blob, name);
       const tot = rows[rows.length - 1];
-      let m = `✓ האקסל הורד: ${list.length} מוסדות, ${tot[tot.length - 3]} אורנים` + (tot[tot.length - 2] ? ` (ב-${tot[tot.length - 2]} חסרים פרטים)` : '') + '.';
+      let m = `✓ האקסל הורד: ${list.length} מוסדות, ${tot[tot.length - 3]} אורנים.`;
       const saved = await saveSummaryToCloud(list, name, blob);
       if (saved) m += ` נשמר גם בגוגל דרייב: ${saved}.`;
       return m;
@@ -1653,7 +1666,7 @@
     const body = h('main', {});
     const n = cur.trees.filter(Core.hasContent).length;
     app.replaceChildren(
-      bar({ title: cur.site || 'סקר חדש', sub: [cur.project, fmtDate(cur.date), n ? `${n} עצים` : null, Construction.isConstruction(cur) ? 'סקר לבנייה' : null].filter(Boolean).join(' · ') }, '#/'),
+      bar({ title: cur.site || 'סקר חדש', sub: [cur.project, fmtDate(cur.date), n ? `${n} עצים` : null, Construction.isConstruction(cur) ? 'סקר לבנייה' : null].filter(Boolean).join(' · ') }, surveyBack(cur.id)),
       h('nav', { class: 'tabs', 'aria-label': 'חלקי הסקר' }, tabs.map(([k, label, ic]) =>
         h('button', { class: 'tab' + (tab === k ? ' on' : ''), 'aria-current': tab === k ? 'page' : null, onclick: () => go(`#/s/${cur.id}/${k}`) }, icon(ic), label))),
       body);
@@ -3736,7 +3749,7 @@
     };
     return h('div', { class: 'card stack' },
       h('h2', { style: 'margin:0;font-size:20px' }, '🌲 ריכוז אורנים'),
-      h('div', { class: 'muted small' }, `במוסד הזה ${n} אורנים ב-${rows.length} שורות. ריכוז האורנים הוא אקסל אחד לכל המוסדות ${s.listRef ? 'של הרשימה "' + (s.listRef.name || '') + '"' : 'של הפרויקט'}: גיליון "מוסדות" (סמלים, שם, כתובת, מספר אורנים) וגיליון "כל האורנים" (מיקום, גובה, גזעים, נ"צ וקישור לגוגל מפות). מתעדכן לבד בגוגל דרייב בכל "סיום סקר", בקובץ אחד בתיקיית הפרויקט.`),
+      h('div', { class: 'muted small' }, `במוסד הזה ${n} אורנים ב-${rows.length} שורות. ריכוז האורנים הוא אקסל אחד לכל המוסדות ${s.listRef ? 'של הרשימה "' + (s.listRef.name || '') + '"' : 'של הפרויקט'}: גיליון "מוסדות" (סמלים, שם, כתובת, מספר אורנים, גובה וקוטר ממוצעים) וגיליון "כל האורנים" (מיקום, גובה, גזעים, נ"צ וקישור לגוגל מפות). מתעדכן לבד בגוגל דרייב בכל "סיום סקר", בקובץ אחד בתיקיית הפרויקט.`),
       miss ? h('div', { class: 'small', style: 'color:var(--danger)' }, `ב-${miss} אורנים חסרים פרטים (ראה "בדיקה לפני הפקה").`) : null,
       h('div', { class: 'row' },
         h('button', { class: 'btn primary big', onclick: run(false) }, 'הורד ריכוז אורנים של כל המוסדות'),
