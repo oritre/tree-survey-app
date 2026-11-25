@@ -803,3 +803,7 @@ body:has(> .modal) .wl-mapview { visibility: hidden; }
 .wl-route-mapcol { position: sticky; top: 70px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .wl-route-mapcol .wl-mapview { position: relative; top: auto; height: calc(100vh - 160px); }
 @media (max-width: 860px) { .wl-route-mapcol { position: static; } .wl-route-mapcol .wl-mapview { height: 46vh; } }
+
+/* (1.169) לחיצה ארוכה על סימן במפת המסלול: הסימן "מורם" וניתן לגרירה */
+.leaflet-marker-icon.wl-pin { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.leaflet-marker-icon.wl-lift { outline: 3px solid #1a73e8; outline-offset: 2px; box-shadow: 0 8px 14px rgba(0,0,0,.5) !important; z-index: 100000 !important; }
