@@ -424,6 +424,10 @@ a.btn { text-decoration: none; color: inherit; }
 .clear-x.hidden { display: none; }
 .clear-x:active { background: var(--border); color: var(--text); }
 input.in.has-x { padding-inline-end: 50px; }
+textarea.in.has-x { padding-left: 48px; }
+.clear-x.undo { gap: 4px; padding: 0 12px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 15px; font-weight: 700; white-space: nowrap; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+.clear-x.undo:active { background: var(--accent-strong); color: var(--accent-ink); }
+.clear-x .cx-u { font-size: 18px; line-height: 1; }
 input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
 
 /* צפייה ב-PDF */

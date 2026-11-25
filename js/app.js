@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.175.0';
+  const APP_VERSION = '1.176.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -130,38 +130,72 @@
     return u;
   }
 
-  // X שמוחק את מה שכתוב בשדה טקסט: כפתור אחד שצף בקצה השדה שבפוקוס, רק כשיש בו טקסט
+  // X שמוחק את מה שכתוב בשדה טקסט: כפתור אחד שצף בקצה השדה שבפוקוס, רק כשיש בו טקסט.
+  // אחרי מחיקה ה-X מתחלף ל"בטל" שמחזיר את הטקסט שנמחק (1.176, ori). בתיבת טקסט גדולה
+  // (textarea עם data-clear, כמו הערות וטיפול מומלץ) הכפתור בפינה השמאלית העליונה.
   (function clearX() {
     const TYPES = new Set(['', 'text', 'search', 'email', 'tel', 'url']);
+    const X_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
     const btn = h('button', { type: 'button', class: 'clear-x hidden', 'aria-label': 'מחק את מה שכתוב', tabindex: '-1' });
-    btn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-    let el = null, hideT = 0;
-    const ok = t => t && t.tagName === 'INPUT' && TYPES.has((t.getAttribute('type') || '').toLowerCase()) && !t.readOnly && !t.disabled && !t.hasAttribute('data-noclear');
+    let el = null, hideT = 0, undo = null; // undo = { el, text } אחרי לחיצה על X
+    const setMode = u => {
+      btn.classList.toggle('undo', !!u);
+      btn.innerHTML = u ? '<span class="cx-u">↶</span> בטל' : X_SVG;
+      btn.setAttribute('aria-label', u ? 'בטל מחיקה' : 'מחק את מה שכתוב');
+    };
+    setMode(null);
+    const ok = t => t && !t.readOnly && !t.disabled && !t.hasAttribute('data-noclear') &&
+      ((t.tagName === 'INPUT' && TYPES.has((t.getAttribute('type') || '').toLowerCase())) || (t.tagName === 'TEXTAREA' && t.hasAttribute('data-clear')));
     const off = () => { btn.classList.add('hidden'); if (el) el.classList.remove('has-x'); };
     const place = () => {
-      if (!el || !el.isConnected || !el.value || document.activeElement !== el) return off();
+      if (undo && (undo.el !== el || el.value)) undo = null;
+      if (!el || !el.isConnected || document.activeElement !== el || (!el.value && !undo)) return off();
       const r = el.getBoundingClientRect();
       if (!r.width || r.bottom < 0 || r.top > innerHeight) return off();
-      const size = Math.max(28, Math.min(38, r.height - 10));
-      const rtl = getComputedStyle(el).direction === 'rtl';
-      Object.assign(btn.style, { width: size + 'px', height: size + 'px', top: (r.top + (r.height - size) / 2) + 'px', left: (rtl ? r.left + 6 : r.right - size - 6) + 'px' });
-      el.classList.add('has-x');
+      const area = el.tagName === 'TEXTAREA';
+      const size = area ? 34 : Math.max(28, Math.min(38, r.height - 10));
+      setMode(undo);
+      Object.assign(btn.style, { height: size + 'px', width: undo ? 'auto' : size + 'px', top: '0px', left: '0px' });
       btn.classList.remove('hidden');
+      const w = btn.offsetWidth || size;
+      const rtl = getComputedStyle(el).direction === 'rtl';
+      const top = area ? r.top + 5 : r.top + (r.height - size) / 2;
+      const left = area ? r.left + 5 : (rtl ? r.left + 6 : r.right - w - 6);
+      Object.assign(btn.style, { top: top + 'px', left: left + 'px' });
+      el.classList.add('has-x');
     };
-    document.addEventListener('focusin', e => { clearTimeout(hideT); off(); el = ok(e.target) ? e.target : null; place(); });
+    document.addEventListener('focusin', e => {
+      clearTimeout(hideT);
+      if (e.target === btn) return;
+      off(); el = ok(e.target) ? e.target : null; place();
+    });
     // בטאבלט הלחיצה על ה-X יכולה להוציא את הפוקוס לרגע, אז מסתירים רק אחרי השהיה קצרה
     document.addEventListener('focusout', () => { clearTimeout(hideT); hideT = setTimeout(place, 250); });
+    // הקלדה (או צ'יפ) אחרי מחיקה מבטלת את אפשרות ה"בטל" וחוזרים ל-X
     document.addEventListener('input', e => { if (e.target === el) place(); }, true);
     window.addEventListener('scroll', place, true);
     window.addEventListener('resize', place);
     btn.addEventListener('pointerdown', e => e.preventDefault());
     btn.addEventListener('mousedown', e => e.preventDefault());
-    btn.addEventListener('click', () => {
-      if (!el || !el.isConnected) return off();
-      el.value = '';
-      el.focus();
+    const fire = () => {
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    btn.addEventListener('click', () => {
+      if (!el || !el.isConnected) return off();
+      if (undo && undo.el === el) {
+        const text = undo.text; undo = null;
+        el.value = text;
+        el.focus();
+        fire();
+        try { el.setSelectionRange(text.length, text.length); } catch (_) {}
+      } else {
+        const text = el.value;
+        el.value = '';
+        el.focus();
+        fire();
+        undo = text ? { el, text } : null;
+      }
       place();
     });
     document.body.append(btn);
@@ -2593,7 +2627,7 @@
     markSpChips();
 
     // הערות. צ'יפ של הערה שכבר כתובה מסומן, ולחיצה עליו מסירה אותה
-    const notesIn = h('textarea', { class: 'in', 'aria-label': 'הערות וטיפול מומלץ', oninput: e => { t.notes = e.target.value; markNoteChips(); changed(); } });
+    const notesIn = h('textarea', { class: 'in', 'data-clear': '', 'aria-label': 'הערות וטיפול מומלץ', oninput: e => { t.notes = e.target.value; markNoteChips(); changed(); } });
     notesIn.value = t.notes || '';
     const noteParts = () => notesIn.value.split(/\s*[,.]\s*/).map(s => s.trim()).filter(Boolean);
     const markNoteChips = () => { const parts = noteParts(); for (const c of notesChips.children) c.classList.toggle('on', parts.includes(c.textContent)); };
