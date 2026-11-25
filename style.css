@@ -799,3 +799,7 @@ body:has(> .modal) .wl-mapview { visibility: hidden; }
 .wl-docs-pick .wl-doc-open { grid-template-columns: auto auto 1fr; }
 .wl-docs-pick .wl-doc-open input { grid-row: 1 / 3; width: 22px; height: 22px; margin: 0; }
 .wl-docs-pick .wl-doc-open .wl-doc-name, .wl-docs-pick .wl-doc-open .muted { grid-column: 3; }
+/* (1.166) map column on the route screen: map + small documents button under it */
+.wl-route-mapcol { position: sticky; top: 70px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wl-route-mapcol .wl-mapview { position: relative; top: auto; height: calc(100vh - 160px); }
+@media (max-width: 860px) { .wl-route-mapcol { position: static; } .wl-route-mapcol .wl-mapview { height: 46vh; } }

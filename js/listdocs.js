@@ -363,6 +363,33 @@
     body.append(page);
   }
 
+  // חלון מסמכים קטן (1.166.0): ממסך המפה. פותחים מסמך, וסגירתו מחזירה לחלון ולמפה
+  function popup(l, listHref) {
+    const ui = U(), { h } = ui;
+    const close = () => { ov.remove(); window.removeEventListener('hashchange', close); };
+    const ds = live(l);
+    const list = h('div', { class: 'wl-doc-list', style: 'max-height:60vh;overflow:auto' }, ds.map(d => {
+      const k = kindOf(d);
+      return h('div', { class: 'wl-doc' },
+        h('button', { class: 'wl-doc-open', title: 'פתח', onclick: ev => { const b = ev.currentTarget; b.disabled = true; open(d).finally(() => { b.disabled = false; }); } },
+          h('span', { class: 'wl-doc-ic', 'aria-hidden': 'true' }, ICON[k]),
+          h('span', { class: 'wl-doc-name', dir: 'auto' }, d.name),
+          h('span', { class: 'muted small' }, sizeText(d.size || 0))));
+    }));
+    const ov = h('div', { class: 'modal wl-docs-pop', onclick: e => { if (e.target === ov) close(); } },
+      h('div', { class: 'card stack', style: 'max-width:640px;width:96%' },
+        h('h2', { style: 'margin:0;font-size:20px' }, '📁 מסמכים · ' + (l.name || 'רשימה')),
+        ds.length ? list : h('div', { class: 'muted' }, 'אין מסמכים ברשימה הזו. מוסיפים אותם בדף הרשימה.'),
+        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+          h('button', { class: 'btn primary', onclick: close }, 'סגור'),
+          listHref ? h('button', { class: 'btn', onclick: () => ui.go(listHref) }, '➕ הוספה בדף הרשימה') : '')));
+    window.addEventListener('hashchange', close);
+    document.body.append(ov);
+    // שאר המסמכים יורדים ברקע, ו-PDF נטען מראש כדי שייפתח גם בלי קליטה
+    if (ds.some(d => kindOf(d) === 'pdf') && navigator.onLine !== false) pdfjs().catch(() => {});
+  }
+  const count = l => live(l).length;
+
   // ---------- חלק במסך הרשימה ----------
   // others(): רשימות פעילות אחרות (לא הסתיימו), לחיפוש מסמכים שכבר הוספו שם
   function section(l, save, others) {
@@ -427,5 +454,5 @@
     return { el: box, redraw: draw, add };
   }
 
-  root.ListDocs = { section, merge, open, syncDocs, _t: { kindOf, merge, copyDocs, sameDoc } };
+  root.ListDocs = { section, merge, open, syncDocs, popup, count, _t: { kindOf, merge, copyDocs, sameDoc } };
 })(window);

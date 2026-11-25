@@ -2697,7 +2697,9 @@
     }
     ui.app().replaceChildren(ui.bar({ title: 'מסלול נסיעה', sub: l.name }, back),
       h('main', { class: 'wl-route' },
-        mapEl,
+        h('div', { class: 'wl-route-mapcol' }, mapEl,
+          h('div', { class: 'row', style: 'gap:8px;align-items:center' },
+            h('button', { class: 'btn small wl-route-docs', title: 'המסמכים של הרשימה (אישורי כניסה וכו\')', onclick: () => ListDocs.popup(l, back) }, `📁 מסמכים (${ListDocs.count(l)})`))),
         h('div', { class: 'stack' },
           h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' },
             h('button', { class: 'btn primary', onclick: ev => { ev.currentTarget.disabled = true; auto().finally(() => { ev.target.disabled = false; }); } }, '⚡ סדר אוטומטי (הכי מהר בכבישים)'),
