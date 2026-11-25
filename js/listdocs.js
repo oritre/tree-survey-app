@@ -90,6 +90,71 @@
     await save(l);
   }
 
+  // מוסיף לרשימה עותק של מסמכים מרשימות אחרות (1.165.0). הקובץ מועתק במכשיר ומגובה לתיקיית הרשימה הזו בדרייב
+  async function copyDocs(l, picks, save) {
+    l.docs = l.docs || [];
+    let ok = 0; const bad = [];
+    for (const { d: src, list } of picks) {
+      try {
+        const b = await getBlob(src);
+        const d = { id: uid(), name: src.name, type: src.type || b.type || '', size: src.size || b.size, added: Date.now(), u: Date.now(), src: src.id, from: list.name || '' };
+        await DB.setKV(KEY(d.id), b);
+        blobs.set(d.id, b);
+        l.docs.push(d); ok++;
+      } catch (e) { bad.push(src.name + ': ' + e.message); }
+    }
+    if (ok) await save(l);
+    return { ok, bad };
+  }
+  const sameDoc = (a, b) => a.id === b.id || a.src === b.id || b.src === a.id || (a.src && a.src === b.src) || (a.name === b.name && (a.size || 0) === (b.size || 0));
+
+  // חלון חיפוש במסמכים של רשימות פעילות אחרות
+  async function pickOther(l, others, onPick) {
+    const ui = U(), { h } = ui;
+    const lists = (await others()).filter(x => live(x).length);
+    const all = lists.flatMap(list => live(list).map(d => ({ d, list, have: live(l).some(x => sameDoc(x, d)) })));
+    const chosen = new Set();
+    const close = () => { ov.remove(); window.removeEventListener('hashchange', close); };
+    const q = h('input', { type: 'search', placeholder: 'חיפוש לפי שם מסמך או שם רשימה', style: 'flex:1', oninput: () => draw() });
+    const box = h('div', { class: 'stack', style: 'max-height:55vh;overflow:auto;gap:6px' });
+    const addBtn = h('button', { class: 'btn primary', onclick: async () => {
+      const picks = all.filter(x => chosen.has(x));
+      if (!picks.length) return;
+      addBtn.disabled = true; addBtn.textContent = 'מעתיק…';
+      try { await onPick(picks); close(); } finally { addBtn.disabled = false; }
+    } });
+    function draw() {
+      const words = (q.value || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const vis = all.filter(x => { const hay = (x.d.name + ' ' + (x.list.name || '') + ' ' + (x.list.project || '')).toLowerCase(); return words.every(w => hay.includes(w)); });
+      addBtn.textContent = chosen.size ? `הוסף ${chosen.size === 1 ? 'מסמך אחד' : chosen.size + ' מסמכים'} לרשימה` : 'סמן מסמכים להוספה';
+      addBtn.disabled = !chosen.size;
+      if (!all.length) { box.replaceChildren(h('div', { class: 'muted' }, 'אין מסמכים ברשימות הפעילות האחרות.')); return; }
+      if (!vis.length) { box.replaceChildren(h('div', { class: 'muted' }, 'לא נמצאו מסמכים בחיפוש הזה.')); return; }
+      const groups = new Map();
+      for (const x of vis) { if (!groups.has(x.list)) groups.set(x.list, []); groups.get(x.list).push(x); }
+      box.replaceChildren(...[...groups].map(([list, xs]) => h('div', { class: 'stack', style: 'gap:4px' },
+        h('div', { class: 'small', style: 'font-weight:700' }, '📋 ' + (list.name || 'רשימה') + (list.project ? ' · ' + list.project : '')),
+        ...xs.map(x => h('div', { class: 'wl-doc' + (x.have ? ' muted' : '') },
+          h('label', { class: 'wl-doc-open', style: 'cursor:' + (x.have ? 'default' : 'pointer') },
+            h('input', { type: 'checkbox', checked: chosen.has(x), disabled: x.have, onchange: e => { e.target.checked ? chosen.add(x) : chosen.delete(x); draw(); } }),
+            h('span', { class: 'wl-doc-ic', 'aria-hidden': 'true' }, ICON[kindOf(x.d)]),
+            h('span', { class: 'wl-doc-name', dir: 'auto' }, x.d.name),
+            h('span', { class: 'muted small' }, x.have ? 'כבר ברשימה הזו' : sizeText(x.d.size || 0))),
+          h('button', { class: 'icon-btn', title: 'הצג', 'aria-label': 'הצג: ' + x.d.name, onclick: () => open(x.d) }, '👁'))))));
+    }
+    const ov = h('div', { class: 'modal wl-docs-pick', onclick: e => { if (e.target === ov) close(); } },
+      h('div', { class: 'card stack', style: 'max-width:640px;width:96%' },
+        h('h2', { style: 'margin:0;font-size:20px' }, '🔎 מסמכים מרשימות פעילות'),
+        h('div', { class: 'muted small' }, 'בוחרים מסמכים שכבר נמצאים ברשימות אחרות שעוד לא הסתיימו, והם מתווספים גם לרשימה הזו (עותק, נפתח גם בלי קליטה).'),
+        h('div', { class: 'row', style: 'gap:8px' }, q),
+        box,
+        h('div', { class: 'row', style: 'gap:8px' }, addBtn, h('button', { class: 'btn', onclick: close }, 'ביטול'))));
+    window.addEventListener('hashchange', close);
+    document.body.append(ov);
+    draw();
+    q.focus();
+  }
+
   // ---------- תצוגה ----------
   function overlay(d, blob) {
     const { h } = U();
@@ -299,7 +364,8 @@
   }
 
   // ---------- חלק במסך הרשימה ----------
-  function section(l, save) {
+  // others(): רשימות פעילות אחרות (לא הסתיימו), לחיפוש מסמכים שכבר הוספו שם
+  function section(l, save, others) {
     const ui = U(), { h } = ui;
     const box = h('div', { class: 'card stack wl-docs' });
     const input = h('input', { type: 'file', multiple: true, class: 'hidden' });
@@ -317,7 +383,8 @@
         h('button', { class: 'link-btn', style: 'font-weight:700;font-size:16px', 'aria-expanded': open_ ? 'true' : 'false', onclick: () => { open_ = !open_; DB.setKV(KV, open_).catch(() => {}); draw(); } },
           (open_ ? '▾ ' : '▸ ') + `📁 מסמכים (${ds.length})`),
         h('span', { class: 'muted small', style: 'flex:1' }, 'אישורי כניסה וכל מה שצריך להראות. נפתח בתוך האפליקציה, גם בלי קליטה'),
-        h('button', { class: 'btn', onclick: () => input.click() }, '➕ הוסף מסמך'));
+        h('button', { class: 'btn', title: 'קובץ מהזיכרון של המכשיר', onclick: () => input.click() }, '➕ הוסף מהמכשיר'),
+        others ? h('button', { class: 'btn', title: 'מסמך שכבר נמצא ברשימה פעילה אחרת', onclick: () => pickOther(l, others, fromOthers) }, '🔎 מרשימות אחרות') : '');
       if (!open_) { box.replaceChildren(head, input); return; }
       const item = d => {
         const k = kindOf(d);
@@ -326,7 +393,7 @@
           h('button', { class: 'wl-doc-open', title: 'פתח', onclick: ev => { ev.currentTarget.disabled = true; open(d).finally(() => { ev.currentTarget && (ev.currentTarget.disabled = false); }); } },
             h('span', { class: 'wl-doc-ic', 'aria-hidden': 'true' }, ICON[k]),
             h('span', { class: 'wl-doc-name', dir: 'auto' }, d.name),
-            h('span', { class: 'muted small' }, sizeText(d.size || 0) + (pending ? ' · ממתין לגיבוי בדרייב' : ''))),
+            h('span', { class: 'muted small' }, sizeText(d.size || 0) + (d.from ? ' · מהרשימה ' + d.from : '') + (pending ? ' · ממתין לגיבוי בדרייב' : ''))),
           h('button', { class: 'icon-btn', title: 'שנה שם', 'aria-label': 'שנה שם: ' + d.name, onclick: async () => {
             const e = extOf(d.name);
             const n = prompt('שם המסמך', e ? d.name.slice(0, -(e.length + 1)) : d.name);
@@ -347,11 +414,18 @@
     DB.getKV(KV, true).then(v => { open_ = v !== false; draw(); }).catch(() => draw());
     draw();
     const add = async files => { await addFiles(l, files, save); open_ = true; draw(); ui.toast(files.length > 1 ? `נוספו ${files.length} מסמכים` : 'המסמך נוסף', 2500); syncDocs(l, save, draw); };
+    const fromOthers = async picks => {
+      const { ok, bad } = await copyDocs(l, picks, save);
+      open_ = true; draw();
+      if (ok) ui.toast(ok > 1 ? `נוספו ${ok} מסמכים` : 'המסמך נוסף', 2500);
+      if (bad.length) ui.toast(`${bad.length} לא נוספו: ` + bad.join(' · '), 6000);
+      if (ok) syncDocs(l, save, draw);
+    };
     syncDocs(l, save, draw);
     // PDF בלי קליטה: טוענים את קורא ה-PDF למטמון כבר עכשיו
     if (live(l).some(d => kindOf(d) === 'pdf') && navigator.onLine !== false) pdfjs().catch(() => {});
     return { el: box, redraw: draw, add };
   }
 
-  root.ListDocs = { section, merge, open, syncDocs, _t: { kindOf, merge } };
+  root.ListDocs = { section, merge, open, syncDocs, _t: { kindOf, merge, copyDocs, sameDoc } };
 })(window);

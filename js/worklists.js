@@ -1418,7 +1418,7 @@
       ui.downloadFile(blob, ui.safeName(l.name || 'רשימה') + '.xlsx');
     };
     // מסמכים של הרשימה (אישורי כניסה וכו'): נפתחים בתוך האפליקציה
-    const docs = ListDocs.section(l, save);
+    const docs = ListDocs.section(l, save, async () => (await live()).filter(x => x.id !== l.id && !x.finished));
     dropDocs = { id: l.id, add: docs.add };
     const missing = fieldsOf(l).filter(f => ['street', 'city'].includes(f.key) && !(l.map[f.key] || {}).col && !clean((l.map[f.key] || {}).pre)).map(f => f.label);
     ui.app().replaceChildren(ui.bar({ title: l.name || 'רשימה', sub: [l.project ? 'פרויקט ' + l.project : null, Construction.TYPES[l.type || 'safety']].filter(Boolean).join(' · ') }, '#/lists'),
