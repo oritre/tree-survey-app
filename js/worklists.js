@@ -357,8 +357,10 @@
       // (1.163) קב"ט: תיקייה מעל השכונה, רק בתיקיית הפרויקט של הרשימה הזו. בלי קב"ט: "ללא שיוך"
       if (kabatOn(l)) { s.kabatProj = clean(l.project); s.kabat = kabatOfRow(l, r); }
       // שורה שכתוב בה "אורנים" (למשל בהערות): הסקר נפתח כסקר אורנים (חלון פרטי אורנים, תזכורות, אקסל ריכוז)
-      if (l.type !== 'construction' && Object.values(r.cells || {}).some(v => /(^|[\s,;(])[הו]?או?רני?ם/.test(String(v || '')))) s.pinesMode = true;
+      if (pinesRow(l, r)) s.pinesMode = true;
       if ((l.repl || []).length) s.nameRepl = l.repl;
+      // (1.184) שם הקובץ לפי הכישור של הרשימה
+      { const nr = skillRule(l, 'fileName'); if (nr && nr !== 'auto') s.nameRule = nr; }
       s.listRef = { list: l.id, row: r.id, name: l.name };
       s.site = U().composeSite(s);
       r.sid = s.id; r.u = Date.now();
@@ -371,6 +373,8 @@
   // סמל מוסד ששייך גם לשורה ברשימה אחרת: שואלים, ואם מאשרים יש סקר אחד לשתי השורות,
   // והדוחות נשמרים גם בתיקיית הפרויקט של הרשימה השנייה (s.extraProjects, ב-Sync.putReportFile)
   const PINES_RE = /(^|[\s,;(])[הו]?או?רני?ם/;
+  // שורה שכתוב בה "אורנים": סקר אורנים, אלא אם הכישור של הרשימה מכבה את זה (1.184)
+  const pinesRow = (L, x) => L.type !== 'construction' && skillRule(L, 'pines') !== false && Object.values(x.cells || {}).some(v => PINES_RE.test(String(v || '')));
   const codeKeys = (L, r) => Core.codesOf(valuesOf(L, r).code).map(c => c.replace(/\D+/g, '')).filter(c => c.length >= 3);
   async function twinsOf(l, r) {
     const mine = new Set(codeKeys(l, r));
@@ -395,7 +399,7 @@
       if (x.sid !== s.id) continue;
       if (clean(L.project) && clean(L.project) !== clean(s.project)) projs.add(clean(L.project));
       // השורה השנייה היא שורת אורנים: גם הסקר המשותף הוא סקר אורנים
-      if (L.type !== 'construction' && Object.values(x.cells || {}).some(v => PINES_RE.test(String(v || '')))) s.pinesMode = true;
+      if (pinesRow(L, x)) s.pinesMode = true;
     }
     if (projs.size) s.extraProjects = [...projs]; else delete s.extraProjects;
   }
@@ -519,7 +523,9 @@
   }
   const hoodLookup = (l, r, ix) => hoodMatch(codeKeys(l, r), addrKey(l, r), ix).h;
   // (1.155.1, ori) תיקייה לפי שכונה דולקת לכל רשימה בנפרד (l.hoodOn). בלי בחירה: דולקת ברשימות של ירושלים
-  const hoodOn = l => !!l && l.type !== 'construction' && (l.hoodOn != null ? !!l.hoodOn : /ירושל/.test(clean(l.project) + ' ' + clean(l.name)));
+  // (1.184) כישור של הרשימה (js/skills.js): כשיש, הוא קובע במקום הניחוש לפי השם. סימון ברשימה עצמה גובר על שניהם
+  const skillRule = (l, k) => root.Skills ? Skills.rule(l, k) : undefined;
+  const hoodOn = l => !!l && l.type !== 'construction' && (l.hoodOn != null ? !!l.hoodOn : skillRule(l, 'hood') !== undefined ? !!skillRule(l, 'hood') : /ירושל/.test(clean(l.project) + ' ' + clean(l.name)));
   async function ensureHood(l) {
     if (!hoodOn(l)) return false;
     l.map = l.map || {};
@@ -594,7 +600,7 @@
   // אותו שם בכתיב אחר (אסנת / אוסנת, רווח כפול): תיקייה אחת
   const kabatKey = v => norm(v).replace(/[וי\s]/g, '');
   const kabatOn = l => !!l && l.type !== 'construction' && colsOf((l.map || {}).kabat).length > 0 &&
-    (l.kabatOn != null ? !!l.kabatOn : !/אורנ|חדש/.test(clean(l.project) + ' ' + clean(l.name)));
+    (l.kabatOn != null ? !!l.kabatOn : skillRule(l, 'kabat') !== undefined ? !!skillRule(l, 'kabat') : !/אורנ|חדש/.test(clean(l.project) + ' ' + clean(l.name)));
   // הכתיב של כל קב"ט ברשימה: הנפוץ ביותר
   function kabatSpell(l) {
     const cnt = new Map();
@@ -1001,7 +1007,7 @@
       } else delete s.listRef;
       const projs = [...new Set(rows.filter(x => x !== main).map(x => clean(x.L.project)).filter(p => p && p !== clean(s.project)))];
       if (projs.length) s.extraProjects = projs; else delete s.extraProjects;
-      if (rows.some(x => x.L.type !== 'construction' && Object.values(x.r.cells || {}).some(v => PINES_RE.test(String(v || ''))))) s.pinesMode = true;
+      if (rows.some(x => pinesRow(x.L, x.r))) s.pinesMode = true;
       const hood = clean(hoodIn.value), rh = await rowHood();
       if (hood) s.hood = hood; else delete s.hood;
       if (hood !== rh) s.hoodManual = true; else delete s.hoodManual;
@@ -1316,6 +1322,16 @@
       // פרויקט: רק אם שם של פרויקט קיים מופיע בכותרת או בשם הקובץ (למשל "אמונה"), לא הפרויקט האחרון
       const hay = norm(l.name + ' ' + f.name);
       l.project = (await ui.projectsRecent()).filter(p => norm(p).length >= 3).find(p => hasWord(hay, norm(p)) || hay.includes(norm(p))) || '';
+      // (1.184) כישור שמתאים לשם הקובץ / הפרויקט: נבחר מיד (אפשר להחליף ברשימה), העמודות שלו משויכות, והבדיקה מוצגת
+      if (root.Skills) {
+        await Skills.ready;
+        const sk = Skills.suggest(l);
+        if (sk) {
+          l.skill = sk.id; Skills.applyMap(sk, l);
+          const res = Skills.check(sk, l, api._t);
+          ui.toast(`כישור "${sk.name}": ${Skills.LEVEL[res.level]}` + (res.level === 'ok' ? '' : ' (פרטים במסך הרשימה)'), 5000);
+        }
+      }
       await save(l);
       ui.go('#/lists/' + encodeURIComponent(l.id) + '/setup');
     } catch (e) { ui.toast('הייבוא נכשל: ' + e.message, 5000); }
@@ -1637,7 +1653,8 @@
     };
     q.addEventListener('input', draw);
     // "אורנים ומפות" רק ברשימת אורנים: שורה שכתוב בה אורנים, או סקר של הרשימה ש"ריכוז אורנים" דולק בו
-    const pinesList = l.type !== 'construction' && (l.rows.some(r => !r.deleted && Object.values(r.cells || {}).some(v => /(^|[\s,;(])[הו]?או?רני?ם/.test(String(v || '')))) || [...local.values()].some(s => Core.pinesOn(s) && ((s.listRef && s.listRef.list === l.id) || l.rows.some(r => r.sid === s.id))));
+    const pinesBtn = skillRule(l, 'pinesBtn');
+    const pinesList = l.type !== 'construction' && pinesBtn !== 'off' && (pinesBtn === 'on' || l.rows.some(r => !r.deleted && Object.values(r.cells || {}).some(v => /(^|[\s,;(])[הו]?או?רני?ם/.test(String(v || '')))) || [...local.values()].some(s => Core.pinesOn(s) && ((s.listRef && s.listRef.list === l.id) || l.rows.some(r => r.sid === s.id))));
     const pIdx = await prevIndex();
     const exportXlsx = async () => {
       const rs = l.rows.filter(r => !r.deleted);
@@ -1667,6 +1684,12 @@
         l.finished ? h('div', { class: 'card row', style: 'gap:10px;align-items:center;background:var(--accent-soft)' }, h('b', { style: 'flex:1' }, '✓ הרשימה הסתיימה ' + new Date(l.finished).toLocaleDateString('he-IL')),
           h('button', { class: 'btn', onclick: async () => { delete l.finished; delete l.offHome; await save(l); renderList(l); } }, '↩ החזר לפעילות')) : null,
         docs.el,
+        root.Skills ? Skills.listRow(l, async v => {
+          l = await setSkill(l.id, v) || l;
+          const sk = Skills.forList(l);
+          ui.toast(sk ? `כישור "${sk.name}": ${Skills.LEVEL[Skills.check(sk, l, api._t).level]}` : 'הרשימה עובדת בלי כישור', 3500);
+          renderList(l);
+        }) : null,
         h('div', { class: 'row small', style: 'gap:8px;align-items:center;flex-wrap:wrap' },
           h('span', {}, '📁 תיקייה בדרייב לחיפוש סקרים קודמים: ', h('b', {}, l.folder ? l.folder.name : 'הארכיון הרגיל')),
           h('button', { class: 'btn', onclick: () => pickListFolder(l, () => renderList(l)) }, l.folder ? 'החלף' : 'בחר תיקייה'),
@@ -2575,7 +2598,9 @@
     const allLists = (await all()).filter(x => !x.deleted);
     let kix = kabatIndex(allLists);
     const kabCol = k => kix.colors.get(k) || null;
-    const kabOn = L => !!L.kabatPins && kabatCapable(L, kix);
+    // (1.184) בלי בחירה ברשימה: לפי הכישור (ירושלים כללי: דולק). כיבוי ברשימה נשמר כ-false וגובר על הכישור
+    const pinsWanted = L => L.kabatPins != null ? !!L.kabatPins : !!skillRule(L, 'kabatPins');
+    const kabOn = L => pinsWanted(L) && kabatCapable(L, kix);
     const pinKab = (L, r) => kabOn(L) ? rowKabatKey(L, r, kix) : '';
     const sideDone = r => { const s = r.sid && local.get(r.sid); return !!(s && (s.finished || s.finishPending)); };
     const rowsOf = S => S.L.rows.filter(r => !r.deleted && !sideDone(r) && !gone(r));
@@ -2602,7 +2627,7 @@
     function kabToggle(L) {
       if (!kabatCapable(L, kix)) return null;
       return h('label', { class: 'row small', style: 'gap:4px;align-items:center', title: 'כל קב"ט בצבע משלו. רשימה בלי עמודת קב"ט: לפי סמל המוסד ברשימה שיש בה קב"ט' },
-        h('input', { type: 'checkbox', checked: !!L.kabatPins, onchange: e => { if (e.target.checked) L.kabatPins = true; else delete L.kabatPins; save(L); drawSideCtl(); redraw(); } }), 'צבע לפי קב"ט');
+        h('input', { type: 'checkbox', checked: pinsWanted(L), onchange: e => { L.kabatPins = e.target.checked; save(L); drawSideCtl(); redraw(); } }), 'צבע לפי קב"ט');
     }
     // מקרא הקב"טים שבמפה, עם אפשרות לשנות צבע (משותף לכל הרשימות)
     function kabLegend() {
@@ -3236,7 +3261,28 @@
     });
   })();
 
-  root.WorkLists = { render, sync,
+  // (1.184) כישור לרשימה: שיוך העמודות שלו, ותיקיות לפי שכונה / קב"ט לסקרים שכבר נעשו
+  async function setSkill(id, skillId) {
+    const l = await byId(id);
+    if (!l) return null;
+    l.skill = skillId || 'none';
+    const sk = root.Skills ? Skills.forList(l) : null;
+    if (sk) Skills.applyMap(sk, l);
+    await save(l);
+    const local = new Map((await DB.allSurveys()).map(s => [s.id, s]));
+    ensureHood(l).catch(() => {}).then(() => hoodToSurveys(l, local)).catch(() => {}).then(() => kabatToSurveys(local)).catch(() => {});
+    return l;
+  }
+  // קובץ לבדיקה בלי לייבא אותו (מסך הכישור)
+  async function previewFile(f) {
+    const sheets = (await readFile(f)).filter(s => s.rows.some(r => r.some(v => cellText(v))));
+    if (!sheets.length) throw new Error('הקובץ ריק');
+    const sh = sheets[0];
+    const l = { id: 'preview', name: f.name, file: f.name, type: 'safety', raw: sh.rows.map(r => Array.from(r, v => cellText(v))), headerRow: guessHeader(sh.rows) };
+    buildFromRaw(l);
+    return l;
+  }
+  const api = root.WorkLists = { render, sync, setSkill, previewFile, allLists: () => live(),
     // (1.155) מתוך מסך הסקר: שיוך לרשימות/תיקייה, וסימון המוסד ברשימה
     assign: (s, after) => assignDialog(s, after),
     // (1.155.1) הצעת שכונה לסקר: מהשורה ברשימה, ואם אין לפי סמל המוסד או הכתובת ברשימות שהשכונה דולקת בהן
