@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.177.0';
+  const APP_VERSION = '1.178.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -403,7 +403,7 @@
         toast(msg || 'הסקר עודכן ממכשיר אחר', 2500);
       } else if (!cur && /^#\/?$/.test(location.hash || '#/')) renderHome();
     },
-    buildReport, buildPdf, combinedPdf, viewCombined, planFiles, hasRef: s => hasRef(s), REF_SUFFIX, refName, fileBase: s => fileBase(s),
+    buildReport, buildPdf, combinedPdf, viewCombined, surveyPdf, mailText: a => mailText(a), shareFiles: (...a) => shareFilesTogether(...a), planFiles, hasRef: s => hasRef(s), REF_SUFFIX, refName, fileBase: s => fileBase(s),
     // שם תת-התיקייה של סקר לבנייה בתיקיית הדוחות: כתובת - תאריך (כמו לפני 1.66, כדי שתיקיות קיימות לא ישנו שם)
     reportDirName: s => safeName(`${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${(s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : ''}`),
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
@@ -4304,6 +4304,8 @@
   // ---------- PDF אחד לכמה סקרים (1.175, ori) ----------
   // מתוך רשימת עבודה: הסקרים שנבחרו, אחד אחרי השני, בקובץ PDF אחד. גם סקר שלא נעשה לו "סיום סקר".
   // לכל סקר: ה-PDF השמור אם הסקר לא השתנה, אחרת מגוגל דרייב, אחרת מופק מחדש (כמו בשליחה). סקר לבנייה: ה-PDF המלא
+  // ה-PDF של סקר אחד לשליחה / לאיחוד: סקר לבנייה = ה-PDF המלא
+  function surveyPdf(s, say) { return Construction.isConstruction(s) ? buildFullPdf(s, say) : pdfForSend(s, say); }
   async function combinedPdf(surveys, name, say) {
     say = say || (() => {});
     await PdfVec.loadLibs();
@@ -4316,7 +4318,7 @@
       const sayI = t => say(`${tag}: ${t}`);
       try {
         sayI('מכין PDF…');
-        const pdf = Construction.isConstruction(s) ? await buildFullPdf(s, sayI) : await pdfForSend(s, sayI);
+        const pdf = await surveyPdf(s, sayI);
         if (!pdf || !pdf.blob) throw new Error('אין PDF');
         const src = await PDFDocument.load(new Uint8Array(await pdf.blob.arrayBuffer()), { ignoreEncryption: true });
         const pages = await out.copyPages(src, src.getPageIndices());
