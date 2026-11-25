@@ -816,6 +816,7 @@
     }
     await syncLists(r, cloud);
     await syncParking(r, cloud);
+    await syncSkills(r, cloud).catch(e => console.warn('skills sync', e));
     await Sig.sync(r).catch(() => {}); // החתימה והחותמת, שלא נמצאות באתר הציבורי
     settingsSynced = true; settingsAt = Date.now();
   }
@@ -861,6 +862,17 @@
     const merged = X.merge(local, cp), key = a => JSON.stringify([...a].sort((x, y) => x.id < y.id ? -1 : 1));
     if (key(merged) !== key(local)) { await DB.setKV('myParking', merged); log('info', 'החניות במפה עודכנו ממכשיר אחר'); }
     if (key(merged) !== key(cp)) { cloud.parking = merged; await OD.upload(r, SETTINGS, new Blob([JSON.stringify(cloud)], { type: 'application/json' }), true); }
+  }
+
+  // (1.184) כישורים לעבודות (js/skills.js): מיזוג לפי כישור, מה שעודכן אחרון מנצח (גם מחיקה)
+  async function syncSkills(r, cloud) {
+    const K = root.Skills;
+    if (!K) return;
+    await K.ready;
+    const local = K.list(), cs = cloud.skills || [];
+    const merged = K.merge(local, cs), key = a => JSON.stringify([...a].sort((x, y) => x.id < y.id ? -1 : 1));
+    if (key(merged) !== key(local)) { await K.setAll(merged); log('info', 'הכישורים לעבודות עודכנו ממכשיר אחר'); }
+    if (key(merged) !== key(cs)) { cloud.skills = merged; await OD.upload(r, SETTINGS, new Blob([JSON.stringify(cloud)], { type: 'application/json' }), true); }
   }
 
   // סקר מלא לפי רשומה באינדקס: מהטאבלט אם הוא שם, אחרת מגוגל דרייב
@@ -1349,6 +1361,7 @@
     geminiChanged() { settingsSynced = false; DB.setKV('geminiUpdated', Date.now()).then(() => schedule(0)); },
     // רשימות הבחירה נשמרו בהגדרות: עולות לענן עכשיו
     listsChanged() { settingsSynced = false; DB.setKV('listsUpdated', Date.now()).then(() => schedule(0)); },
+    skillsChanged() { settingsSynced = false; schedule(0); },
     parkingChanged() { settingsSynced = false; schedule(5000); },
     settingsChanged() { settingsSynced = false; DB.setKV('tgUpdated', Date.now()).then(() => schedule(0)); },
     pendingOf(s, tgOn, odOn) {

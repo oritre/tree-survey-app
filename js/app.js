@@ -301,6 +301,7 @@
     if (hash.startsWith('#/summary')) return renderSummary(decodeURIComponent(hash.slice('#/summary/'.length)));
     if (hash.startsWith('#/import')) return renderImport();
     if (hash.startsWith('#/settings')) return renderSettings();
+    if (hash.startsWith('#/skills/')) return Skills.render(hash);
     if (hash.startsWith('#/multi')) { const a = hash.split('/')[2]; return renderMultiSend(a ? decodeURIComponent(a) : null); }
     if (hash.startsWith('#/quotes')) return QuotesUI.render(hash);
     if (hash.startsWith('#/lists')) return WorkLists.render(hash);
@@ -4120,12 +4121,14 @@
     if (orig) return safeName(orig.replace(/\.xls[xm]?$/i, ''));
     const proj = s.project || '';
     // ויצו: סמל_התאריך בעוד שנה מיום הסקר_26
-    if (/ויצ"?ו/.test(proj) && s.code) {
+    // (1.184) כלל השם מהכישור של הרשימה שממנה נפתח הסקר (s.nameRule). בלי כישור: לפי שם הפרויקט
+    const nr = s.nameRule || '';
+    if ((nr === 'wizo' || (!nr && /ויצ"?ו/.test(proj))) && s.code) {
       const d = new Date((s.date || today()) + 'T12:00'); d.setFullYear(d.getFullYear() + 1);
       return safeName(`${s.code}_${d.getFullYear()}_${String(d.getMonth() + 1).padStart(2, '0')}_${String(d.getDate()).padStart(2, '0')}_26`) + k;
     }
     // ירושלים: סמל מוסד, שם מוסד וכתובת בלי עיר. אחרים: שם מוסד, כתובת ועיר
-    const parts = /ירושלים/.test(proj) ? [s.code, s.siteName, s.street] : [s.siteName, s.street, s.city];
+    const parts = nr === 'jlm' || (!nr && /ירושלים/.test(proj)) ? [s.code, s.siteName, s.street] : [s.siteName, s.street, s.city];
     return safeName(nameRepl(s, parts.filter(Boolean).join(' ')) || s.site || 'סקר בטיחות עצים') + k;
   }
 
@@ -4713,6 +4716,7 @@
           h('h2', { style: 'margin:0;font-size:20px' }, 'עבודה בשטח'),
           inAppCamera, camFast, annotateAfter, shareFiles, field('כיוון המסך באפליקציה', orientSel)),
         cadCard(),
+        Skills.settingsCard(),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'רשימות בחירה'),
           h('div', { class: 'muted small' }, 'שורה לכל פריט. ההערות מתחת לשדה ההערות הן רק מה שכתוב כאן (בלי למידה מהסקרים). מין שתכתוב כאן ואינו ברשימה נוסף לרשימת המינים בסקר בטיחות במקומו לפי א-ב (בסקר לבנייה לא).'),

@@ -815,3 +815,11 @@ body:has(> .modal) .wl-mapview { visibility: hidden; }
 .wl-pin .wl-bg { position: absolute; inset: 0; border-radius: inherit; z-index: -1; }
 .wl-pin > span { position: relative; }
 .wl-kab { padding: 2px 8px 2px 4px; border-radius: 8px; background: var(--surface-2, #f4f4f4); }
+
+/* (1.184) כישורים לעבודות: דוח הבדיקה */
+.skill-item { padding: 6px 10px; border-radius: 8px; background: var(--surface-3); }
+.skill-item.bad { background: #fde2e1; color: #7a1712; }
+.skill-item.warn { background: #fff2cc; color: #5a4300; }
+.skill-item.ok { background: var(--accent-soft); }
+.skill-lvl.bad { border-color: #c62828; }
+.skill-lvl.warn { border-color: #c79a00; }
