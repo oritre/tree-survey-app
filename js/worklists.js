@@ -1677,7 +1677,7 @@
           h('button', { class: 'btn', title: 'הרשימה שהעלית, עם עמודת סטטוס בסוף: בוצע / בתהליך / לא בוצע', onclick: exportXlsx }, '⬇ הורד לאקסל עם סטטוס'),
           h('button', { class: 'btn', title: 'שיוך סקרים משנים קודמות לשורות, הצגת הקבצים והורדה מראש', onclick: () => prevManager(l, draw) }, '📎 סקרים קודמים'),
           h('button', { class: 'btn', onclick: ev => managersReport(l, ev.currentTarget) }, '📊 דוח מנהלים'),
-          h('button', { class: 'btn', title: 'בוחרים שורות (או את כולן) ומקבלים קובץ PDF אחד שבו הסקרים אחד אחרי השני, גם בלי "סיום סקר"', onclick: () => combinedPdfDialog(l, lastShown, stateOf) }, '📄 PDF אחד לכמה סקרים'),
+          h('button', { class: 'btn', title: 'בוחרים שורות (או את כולן) ומורידים: ריכוז דוחות (PDF אחד), PDF לכל סקר (נפרד או ZIP), דוח מנהלים', onclick: () => combinedPdfDialog(l, lastShown, stateOf) }, '⬇ הורדת קבצים של כמה סקרים'),
           h('button', { class: 'btn', title: 'בוחרים סקרים מהרשימה ושולחים אותם במייל אחד: PDF אחד "ריכוז דוחות" או קובץ לכל סקר, ואפשר לצרף את דוח המנהלים', onclick: () => combinedPdfDialog(l, lastShown, stateOf, 'mail') }, '✉ שליחת כמה סקרים במייל'),
           pinesList ? h('button', { class: 'btn', title: 'סיכום אורנים ומפת עצים לשיתוף מהסקרים של הרשימה (ירושלים)', onclick: () => ui.go('#/summary/' + encodeURIComponent(l.id)) }, '🌲 אורנים ומפות') : null,
           l.finished ? null : h('button', { class: 'btn', onclick: async () => { l.finished = Date.now(); await save(l); ui.toast('הרשימה הסתיימה ועברה ל"רשימות שהסתיימו"', 3500); ui.go('#/lists'); } }, '✓ סיום רשימה'), clearBox, hideBox),
@@ -2109,7 +2109,8 @@
     const nameOf = r => { const t = labelOf(l, r); return t !== 'שורה' ? t : (Object.values(r.cells || {}).map(clean).find(Boolean) || t); };
     const status = h('div', { class: 'small', role: 'status' });
     const count = h('b');
-    const btnPdf = h('button', { class: 'btn' + (mode === 'mail' ? '' : ' primary big') }, '📄 הפק PDF (ריכוז דוחות)');
+    // (1.189, ori) במקום "הפק PDF": הורדת הקבצים שסומנו (ריכוז דוחות / כל סקר נפרד או ZIP / דוח מנהלים)
+    const btnPdf = h('button', { class: 'btn' + (mode === 'mail' ? '' : ' primary big') }, '⬇ הורדת קבצים');
     const btnMail = h('button', { class: 'btn' + (mode === 'mail' ? ' primary big' : '') }, '✉ שליחה במייל');
     // (1.180, ori) בחירה מרובה: ריכוז דוחות, PDF לכל סקר, דוח מנהלים — אפשר כמה ביחד
     const cbOne = h('input', { type: 'checkbox', checked: true, style: 'width:20px;height:20px' });
@@ -2123,8 +2124,8 @@
     const kindBox = h('div', { class: 'stack', style: 'gap:4px' }, cbRow(cbOne, `PDF אחד לכל הסקרים ("${COMBINED_NAME}")`), cbRow(cbEach, 'קובץ PDF נפרד לכל סקר'), eachHow);
     const mgr = h('input', { type: 'checkbox', style: 'width:20px;height:20px' });
     const mailOpts = h('div', { class: 'stack', style: 'gap:6px;border-top:1px solid var(--line, #ddd);padding-top:8px' },
-      h('b', { class: 'small' }, 'לצרף למייל (אפשר לסמן כמה):'), kindBox,
-      h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, mgr, 'דוח מנהלים (אקסל) של הסקרים שסימנת: יורד לטאבלט, ומצרפים אותו ב-Gmail'));
+      h('b', { class: 'small' }, mode === 'mail' ? 'לצרף למייל (אפשר לסמן כמה):' : 'מה להוריד (אפשר לסמן כמה):'), kindBox,
+      h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, mgr, mode === 'mail' ? 'דוח מנהלים (אקסל) של הסקרים שסימנת: יורד לטאבלט, ומצרפים אותו ב-Gmail' : 'דוח מנהלים (אקסל) של הסקרים שסימנת'));
     const boxes = rows.map(r => h('input', { type: 'checkbox', checked: true, style: 'width:22px;height:22px;flex:none', onchange: e => { e.target.checked ? sel.add(r.id) : sel.delete(r.id); upd(); } }));
     let busy = false;
     const upd = () => { count.textContent = `נבחרו ${sel.size} מתוך ${rows.length}`; btnPdf.disabled = btnMail.disabled = !sel.size || busy; };
@@ -2155,19 +2156,25 @@
       finally { busy = false; upd(); }
     };
     btnPdf.onclick = run(async () => {
-      const { surveys, missing } = await loadSel();
-      if (!surveys.length) { say('לא נמצאו סקרים להפקה' + (missing.length ? ': ' + missing.join(', ') : '')); return; }
-      const pdf = await App.combinedPdf(surveys, COMBINED_NAME, say);
-      const bad = missing.concat((pdf.failed || []).map(f => (f.s.siteName || f.s.site || 'סקר') + ' (' + f.err + ')'));
-      if (!pdf.blob) { say('ה-PDF לא נוצר. ' + bad.join(', ')); return; }
-      say(`✓ נוצר PDF אחד: ${pdf.surveys.length} סקרים, ${pdf.pages} עמודים` + (bad.length ? `. לא נכללו: ${bad.join(', ')}` : ''));
-      if (bad.length) ui.toast('לא נכללו: ' + bad.join(', '), 7000);
-      App.viewCombined(pdf);
+      const c = await collect('סמן אילו קבצים להוריד');
+      if (!c) return;
+      const { files, mgrFile, bad } = c;
+      const wantZip = cbEach.checked && (eachHow.querySelector('input:checked') || {}).value === 'zip';
+      const pk = wantZip && files.length ? await packForShare(files, say, true) : { share: files, zip: null };
+      const dl = (pk.zip ? [...pk.share, pk.zip] : files).concat(mgrFile ? [mgrFile] : []);
+      if (!dl.length) { say('לא נוצרו קבצים. ' + [...new Set(bad)].join(', ')); return; }
+      say('מוריד את הקבצים…');
+      for (const f of dl) { ui.downloadFile(f, f.name); await new Promise(r => setTimeout(r, 350)); }
+      if (bad.length) ui.toast('לא נכללו: ' + [...new Set(bad)].join(', '), 7000);
+      status.replaceChildren(h('div', {}, `✓ ${dl.length} קבצים ירדו ל"הורדות": ${dl.map(f => f.name).join(', ')}` + (bad.length ? `. לא נכללו: ${[...new Set(bad)].join(', ')}` : '')),
+        h('div', { class: 'muted small' }, 'אם הדפדפן שאל אם להתיר הורדה של כמה קבצים, אשר.'),
+        h('button', { class: 'btn', onclick: () => dl.forEach((f, i) => setTimeout(() => ui.downloadFile(f, f.name), i * 350)) }, '⬇ הורד שוב'));
     });
-    btnMail.onclick = run(async () => {
-      if (!cbOne.checked && !cbEach.checked && !mgr.checked) { say('סמן מה לצרף למייל'); return; }
+    // הקבצים שנבחרו (ריכוז דוחות, PDF לכל סקר, דוח מנהלים) — למייל ולהורדה
+    async function collect(what) {
+      if (!cbOne.checked && !cbEach.checked && !mgr.checked) { say(what); return null; }
       const { surveys, missing } = await loadSel();
-      if (!surveys.length) { say('לא נמצאו סקרים לשליחה' + (missing.length ? ': ' + missing.join(', ') : '')); return; }
+      if (!surveys.length) { say('לא נמצאו סקרים' + (missing.length ? ': ' + missing.join(', ') : '')); return null; }
       const files = [], bad = missing.slice(), sentIds = new Set();
       const asFile = (b, n, type) => new File([b], ui.shareName(n), { type });
       const badOf = (s, e) => (s.siteName || s.site || 'סקר') + ' (' + e + ')';
@@ -2191,8 +2198,15 @@
       if (mgr.checked) {
         const r = await buildManagersReport(l, say, new Set(rows.filter(x => sel.has(x.id)).map(x => x.id))).catch(e => { bad.push('דוח מנהלים (' + e.message + ')'); return null; });
         // (1.186, ori) דוח המנהלים נשאר אקסל ויורד לטאבלט (אנדרואיד לא משתף אקסל); מצרפים אותו ב-Gmail מ"הורדות"
-        if (r) { mgrFile = new File([r.blob], ui.shareName(r.name), { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }); ui.downloadFile(mgrFile, mgrFile.name); }
+        if (r) mgrFile = new File([r.blob], ui.shareName(r.name), { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       }
+      return { files, mgrFile, sent, bad };
+    }
+    btnMail.onclick = run(async () => {
+      const c = await collect('סמן מה לצרף למייל');
+      if (!c) return;
+      const { files, mgrFile, sent, bad } = c;
+      if (mgrFile) ui.downloadFile(mgrFile, mgrFile.name);
       const mgrNote = mgrFile ? `. דוח המנהלים (אקסל) ירד ל"הורדות": "${mgrFile.name}"` : '';
       if (!files.length) { say((mgrFile ? '✓ אין קובצי PDF למייל' : 'לא נוצרו קבצים לשליחה') + mgrNote + (bad.length ? '. ' + [...new Set(bad)].join(', ') : '')); return; }
       // (1.181, 1.183, 1.184 ori) חלון השיתוף של אנדרואיד: עד 10 קבצים, ורק PDF/תמונות (לא ZIP ולא אקסל). מעל 10: ה-PDF של כל סקר ב-ZIP שיורד לטאבלט.
@@ -2239,7 +2253,7 @@
     });
     const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
       h('div', { class: 'card stack', style: 'max-width:620px;width:96%;max-height:92vh;display:flex;flex-direction:column' },
-        h('h2', { style: 'margin:0;font-size:20px' }, mode === 'mail' ? 'שליחת כמה סקרים במייל' : 'PDF אחד לכמה סקרים'),
+        h('h2', { style: 'margin:0;font-size:20px' }, mode === 'mail' ? 'שליחת כמה סקרים במייל' : 'הורדת קבצים של כמה סקרים'),
         h('div', { class: 'muted small' }, 'סמן את הסקרים (לפי הסדר שבטבלה, עם המיון והסינון שעל המסך). נכללים גם סקרים שעוד לא נעשה להם "סיום סקר".'),
         rows.length ? h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => setAll(true) }, '☑ סמן הכל'), h('button', { class: 'btn', onclick: () => setAll(false) }, '☐ נקה הכל'), count) : h('div', { class: 'small' }, 'אין בשורות שעל המסך סקרים שנפתחו.'),
         h('div', { class: 'stack', style: 'overflow:auto;flex:1;min-height:0' }, rows.map((r, i) => {
