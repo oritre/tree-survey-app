@@ -1225,6 +1225,7 @@
         h('div', { class: 'card stack' },
           h('div', { class: 'small' }, 'רשימת מוסדות מאקסל (למשל רשימת המעונות מהלקוח): אפשר לערוך את התאים כאן, לבחור איזו עמודה היא הכתובת, העיר, סמל המוסד והמנהל/ת, ולפתוח סקר מכל שורה. לפני הפתיחה האפליקציה מחפשת סקר קודם באותו מקום (גם בארכיון בגוגל דרייב), כדי להתחיל מהסקר של השנה שעברה עם העצים והתמונות.'),
           h('button', { class: 'btn primary big', onclick: () => pick.click() }, '📥 ייבוא רשימה מאקסל'), pick,
+          h('button', { class: 'btn big', title: 'רשימה ריקה בלי קובץ, לעבודות שונות באותו יום. יש לה טבלה, מפה ומסלול כמו לכל רשימה', onclick: () => newTempList() }, '➕ רשימה זמנית (בלי קובץ)'),
           h('div', { class: 'muted small', style: 'text-align:center' }, 'במחשב אפשר גם לגרור את קובץ האקסל לכאן')),
         lists.length ? sq : h('div', { class: 'empty' }, ui.icon('list'), 'עוד אין רשימות. ייבא קובץ אקסל של רשימת מוסדות.'),
         found,
@@ -1237,6 +1238,20 @@
     syncThen(renderLists);
   }
 
+  // (1.172, ori) רשימה זמנית: עבודות לא קשורות שרוצים לעשות באותו יום. רשימה ריקה עם עמודות בסיס משויכות,
+  // ומשם הכל כמו ברשימה רגילה: ➕ שורה, הוספה / הסתרה / מחיקה של עמודות (הגדרות), מפה ומסלול, סיום רשימה
+  async function newTempList() {
+    const ui = U(), d = new Date();
+    const cols = [['siteName', 'שם המוסד / האתר'], ['street', 'כתובת'], ['city', 'עיר'], ['code', 'סמל מוסד'], ['manager', 'איש קשר'], [null, 'טלפון'], [null, 'הערות']]
+      .map(([key, name], i) => ({ key, id: 'c' + i, name }));
+    const l = { id: uid(), temp: true, name: `רשימה זמנית ${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`, file: '', project: '', type: 'safety',
+      cols: cols.map(c => ({ id: c.id, name: c.name })), rows: [], map: {}, hide: [], mapV: 3, created: Date.now() };
+    for (const f of FIELDS) { const c = cols.find(x => x.key === f.key); l.map[f.key] = { col: c ? c.id : '', pre: '', prev: false }; }
+    l.rows.push({ id: uid(), cells: {}, u: Date.now() });
+    await save(l);
+    ui.toast('נפתחה רשימה זמנית. ממלאים שורה לכל עבודה (➕ שורה), ובהגדרות הרשימה אפשר לשנות שם, פרויקט ועמודות', 5000);
+    ui.go('#/lists/' + encodeURIComponent(l.id));
+  }
   async function importFile(f) {
     const ui = U();
     try {
@@ -1599,7 +1614,7 @@
       h('main', { class: 'stack' },
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/setup') }, ui.icon('gear'), 'שיוך עמודות (כתובת, עיר, סמל…) והגדרות'),
-          h('button', { class: 'btn', onclick: () => { l.rows.push({ id: uid(), cells: {}, u: Date.now() }); save(l); filter = 'all'; q.value = ''; draw(); const ins = table.querySelectorAll('tbody tr:last-child input'); if (ins[0]) ins[0].focus(); } }, '➕ שורה'),
+          h('button', { class: 'btn', onclick: () => { const nr = { id: uid(), cells: {}, u: Date.now() }; l.rows.push(nr); if (Array.isArray(l.route) && l.route.length) l.route.push(nr.id); save(l); filter = 'all'; q.value = ''; draw(); const ins = table.querySelectorAll('tbody tr:last-child input'); if (ins[0]) ins[0].focus(); } }, '➕ שורה'),
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/route') }, '🗺 מסלול ומפה'),
           h('button', { class: 'btn', title: 'הרשימה שהעלית, עם עמודת סטטוס בסוף: בוצע / בתהליך / לא בוצע', onclick: exportXlsx }, '⬇ הורד לאקסל עם סטטוס'),
           h('button', { class: 'btn', title: 'שיוך סקרים משנים קודמות לשורות, הצגת הקבצים והורדה מראש', onclick: () => prevManager(l, draw) }, '📎 סקרים קודמים'),
