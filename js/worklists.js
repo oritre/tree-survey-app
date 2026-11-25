@@ -2056,11 +2056,14 @@
     const count = h('b');
     const btnPdf = h('button', { class: 'btn' + (mode === 'mail' ? '' : ' primary big') }, '📄 הפק PDF (ריכוז דוחות)');
     const btnMail = h('button', { class: 'btn' + (mode === 'mail' ? ' primary big' : '') }, '✉ שליחה במייל');
-    const radio = (v, t, on) => h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, h('input', { type: 'radio', name: 'wlMailKind', value: v, checked: on || null }), t);
-    const kindBox = h('div', { class: 'stack', style: 'gap:4px' }, radio('one', `PDF אחד לכל הסקרים ("${COMBINED_NAME}")`, true), radio('each', 'קובץ PDF נפרד לכל סקר'));
+    // (1.180, ori) בחירה מרובה: ריכוז דוחות, PDF לכל סקר, דוח מנהלים — אפשר כמה ביחד
+    const cbOne = h('input', { type: 'checkbox', checked: true, style: 'width:20px;height:20px' });
+    const cbEach = h('input', { type: 'checkbox', style: 'width:20px;height:20px' });
+    const cbRow = (cb, t) => h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, cb, t);
+    const kindBox = h('div', { class: 'stack', style: 'gap:4px' }, cbRow(cbOne, `PDF אחד לכל הסקרים ("${COMBINED_NAME}")`), cbRow(cbEach, 'קובץ PDF נפרד לכל סקר'));
     const mgr = h('input', { type: 'checkbox', style: 'width:20px;height:20px' });
     const mailOpts = h('div', { class: 'stack', style: 'gap:6px;border-top:1px solid var(--line, #ddd);padding-top:8px' },
-      h('b', { class: 'small' }, 'במייל:'), kindBox,
+      h('b', { class: 'small' }, 'לצרף למייל (אפשר לסמן כמה):'), kindBox,
       h('label', { class: 'row small', style: 'gap:6px;cursor:pointer' }, mgr, 'לצרף גם דוח מנהלים (אקסל) של הסקרים שסימנת'));
     const boxes = rows.map(r => h('input', { type: 'checkbox', checked: true, style: 'width:22px;height:22px;flex:none', onchange: e => { e.target.checked ? sel.add(r.id) : sel.delete(r.id); upd(); } }));
     let busy = false;
@@ -2102,33 +2105,36 @@
       App.viewCombined(pdf);
     });
     btnMail.onclick = run(async () => {
-      const kind = (kindBox.querySelector('input:checked') || {}).value || 'one';
+      if (!cbOne.checked && !cbEach.checked && !mgr.checked) { say('סמן מה לצרף למייל'); return; }
       const { surveys, missing } = await loadSel();
       if (!surveys.length) { say('לא נמצאו סקרים לשליחה' + (missing.length ? ': ' + missing.join(', ') : '')); return; }
-      const files = [], bad = missing.slice(), sent = [];
+      const files = [], bad = missing.slice(), sentIds = new Set();
       const asFile = (b, n, type) => new File([b], ui.shareName(n), { type });
-      if (kind === 'one') {
+      const badOf = (s, e) => (s.siteName || s.site || 'סקר') + ' (' + e + ')';
+      if (cbOne.checked) {
         const pdf = await App.combinedPdf(surveys, COMBINED_NAME, say);
-        (pdf.failed || []).forEach(f => bad.push((f.s.siteName || f.s.site || 'סקר') + ' (' + f.err + ')'));
-        if (pdf.blob) { files.push(asFile(pdf.blob, pdf.name, 'application/pdf')); sent.push(...pdf.surveys); }
-      } else {
+        (pdf.failed || []).forEach(f => bad.push(badOf(f.s, f.err)));
+        if (pdf.blob) { files.push(asFile(pdf.blob, pdf.name, 'application/pdf')); pdf.surveys.forEach(s => sentIds.add(s.id)); }
+      }
+      if (cbEach.checked) {
         for (let i = 0; i < surveys.length; i++) {
           const s = surveys[i], tag = `${i + 1}/${surveys.length} ${s.siteName || s.site || ''}`.trim();
           try {
             const pdf = await App.surveyPdf(s, t => say(`${tag}: ${t}`));
             if (!pdf || !pdf.blob) throw new Error('אין PDF');
-            files.push(asFile(pdf.blob, pdf.name, 'application/pdf')); sent.push(s);
-          } catch (e) { bad.push((s.siteName || s.site || 'סקר') + ' (' + ((e && e.message) || e) + ')'); }
+            files.push(asFile(pdf.blob, pdf.name, 'application/pdf')); sentIds.add(s.id);
+          } catch (e) { bad.push(badOf(s, (e && e.message) || e)); }
         }
       }
-      if (!files.length) { say('לא נוצרו קבצים לשליחה. ' + bad.join(', ')); return; }
+      const sent = surveys.filter(s => sentIds.has(s.id) || (!cbOne.checked && !cbEach.checked));
       if (mgr.checked) {
         const r = await buildManagersReport(l, say, new Set(rows.filter(x => sel.has(x.id)).map(x => x.id))).catch(e => { bad.push('דוח מנהלים (' + e.message + ')'); return null; });
         if (r) files.push(asFile(r.blob, r.name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
       }
+      if (!files.length) { say('לא נוצרו קבצים לשליחה. ' + [...new Set(bad)].join(', ')); return; }
       const { subject, body } = App.mailText(sent);
-      const info = `${files.length} קבצים מוכנים: ${files.map(f => f.name).join(', ')}` + (bad.length ? `. לא נכללו: ${bad.join(', ')}` : '');
-      if (bad.length) ui.toast('לא נכללו: ' + bad.join(', '), 7000);
+      const info = `${files.length} קבצים מוכנים: ${files.map(f => f.name).join(', ')}` + (bad.length ? `. לא נכללו: ${[...new Set(bad)].join(', ')}` : '');
+      if (bad.length) ui.toast('לא נכללו: ' + [...new Set(bad)].join(', '), 7000);
       // ההכנה לוקחת זמן, ואז הדפדפן כבר לא מרשה לפתוח את חלון השיתוף בלי לחיצה נוספת
       if (await App.shareFiles(files, subject, body)) { say('✓ ' + info); return; }
       status.replaceChildren(h('div', {}, info), h('button', { class: 'btn primary big', onclick: async () => {
