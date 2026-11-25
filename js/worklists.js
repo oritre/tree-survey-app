@@ -2172,18 +2172,27 @@
     const otherLists = (await all()).filter(x => !x.deleted && x.id !== l.id);
     const SIDES = [];
     for (const c of l.sides) { const L2 = otherLists.find(x => x.id === c.id); if (L2) SIDES.push({ c, L: L2, geo: new Map(), pins: new Map() }); }
-    const mOf = S => +S.c.m || 150;
+    const mOf = S => S.self ? +l.selfM || 150 : +S.c.m || 150;
     const colOf = S => okC(S.c.color) || SIDE_COLORS[0];
     const sideDone = r => { const s = r.sid && local.get(r.sid); return !!(s && (s.finished || s.finishPending)); };
     const rowsOf = S => S.L.rows.filter(r => !r.deleted && !sideDone(r) && !gone(r));
     // מוסדות מכל רשימה משנית שקרובים לתחנה (אותה כתובת או עד המרחק של אותה רשימה): [{ S, rs }]
     const nearIn = (S, id) => { const g = geo.get(id); return g ? rowsOf(S).filter(r => { const x = S.geo.get(r.id); return x && km(g, x) * 1000 <= mOf(S); }) : []; };
-    const nearOf = id => SIDES.map(S => ({ S, rs: nearIn(S, id) })).filter(x => x.rs.length);
+    // (1.164, ori) גם תחנות אחרות מאותה רשימה ראשית שקרובות (לא באותה נקודה בדיוק, אלה כבר מופיעות כ"באותה נקודה"): l.selfM מטר, 0 = כבוי
+    if (l.selfM == null) l.selfM = 150;
+    const SELF = { self: true, c: { color: '#222222' }, L: l, geo, pins: new Map() };
+    const pkOf = g => g ? g.lat.toFixed(5) + ',' + g.lon.toFixed(5) : '';
+    const nearSelf = id => {
+      const g = geo.get(id), m = +l.selfM || 0; if (!g || !m) return [];
+      const k0 = pkOf(g);
+      return l.route.filter(x => x !== id).map(x => l.rows.find(r => r.id === x)).filter(r => { if (!r || r.deleted) return false; const x = geo.get(r.id); return x && pkOf(x) !== k0 && km(g, x) * 1000 <= m; });
+    };
+    const nearOf = id => { const out = SIDES.map(S => ({ S, rs: nearIn(S, id) })).filter(x => x.rs.length), me = nearSelf(id); return me.length ? [{ S: SELF, rs: me }, ...out] : out; };
     const nearTxt = n => n === 1 ? '➕ מוסד קרוב אחד' : `➕ ${n} מוסדות קרובים`;
     const chipCss = S => `background:${colOf(S)};color:${textOn(colOf(S))};border-color:${colOf(S)}`;
     // כפתור לכל רשימה שיש בה מוסדות קרובים, בצבע שלה
-    const nearChips = (id, cls, after) => nearOf(id).map(({ S, rs }) => h('button', { class: cls, style: chipCss(S), title: 'מוסדות מהרשימה "' + S.L.name + '" שקרובים לתחנה הזו',
-      onclick: e => { e.stopPropagation(); if (after) after(); showNear(id, S); } }, nearTxt(rs.length) + (SIDES.length > 1 || after ? ' · ' + (S.L.name || 'רשימה') : '')));
+    const nearChips = (id, cls, after) => nearOf(id).map(({ S, rs }) => h('button', { class: cls, style: chipCss(S), title: S.self ? 'תחנות אחרות במסלול של הרשימה הזו שקרובות לתחנה הזו' : 'מוסדות מהרשימה "' + S.L.name + '" שקרובים לתחנה הזו',
+      onclick: e => { e.stopPropagation(); if (after) after(); showNear(id, S); } }, nearTxt(rs.length) + (S.self ? ' · מאותה רשימה' : SIDES.length > 1 || after ? ' · ' + (S.L.name || 'רשימה') : '')));
     // (1.144, ori) מעבר ל-50/150/300: "מרחק אחר…" = כל מספר מטרים. (1.145) לכל רשימה משנית בנפרד
     const PRESET_M = [50, 150, 300];
     function sideRowCtl(S) {
@@ -2213,7 +2222,12 @@
       const add = h('select', { class: 'in', style: 'width:auto;min-height:40px;max-width:280px', 'aria-label': 'צרף רשימה משנית', onchange: async () => {
           if (!add.value) return; l.sides.push({ id: add.value, m: 150, color: freeColor() }); syncOld(); await persist(); renderRoute(l); } },
         h('option', { value: '' }, SIDES.length ? '➕ צרף עוד רשימה משנית…' : 'בלי רשימה משנית (➕ צרף…)'), ...free.map(x => h('option', { value: x.id }, x.name || 'רשימה')));
-      sideCtl.replaceChildren(h('div', { class: 'small' }, SIDES.length > 1 ? `רשימות משניות (מוסדות קרובים, ${SIDES.length}):` : 'רשימה משנית (מוסדות קרובים):'),
+      // (1.164, ori) קרובים מאותה רשימה ראשית
+      const selfSel = h('select', { class: 'in', style: 'width:auto;min-height:40px', 'aria-label': 'מרחק שנחשב קרוב בתוך אותה רשימה', onchange: () => { l.selfM = +selfSel.value; persist(); redraw(); } },
+        [[0, 'בלי'], ...PRESET_M.map(m => [m, `עד ${m} מ'`])].concat(PRESET_M.includes(+l.selfM) || !+l.selfM ? [] : [[+l.selfM, `עד ${+l.selfM} מ'`]])
+          .map(([v, t]) => h('option', { value: v, selected: +l.selfM === v ? '' : null }, t)));
+      const selfRow = h('div', { class: 'row wl-side-ctl', style: 'gap:6px;align-items:center;flex-wrap:wrap;border-inline-start:6px solid #222' }, h('b', { class: 'small' }, 'קרובים מאותה רשימה:'), selfSel);
+      sideCtl.replaceChildren(selfRow, h('div', { class: 'small' }, SIDES.length > 1 ? `רשימות משניות (מוסדות קרובים, ${SIDES.length}):` : 'רשימה משנית (מוסדות קרובים):'),
         ...SIDES.map(sideRowCtl), ...(free.length ? [add] : []));
     }
     const sideBox = h('div', { class: 'stack' });
@@ -2234,12 +2248,12 @@
               h('button', { class: 'btn', onclick: () => { close(); jumpTo(r.id); } }, 'במפה'),
               h('button', { class: 'btn primary', onclick: () => { close(); openRow(l, r); } }, 'פתח סקר')); })),
           ...groups.map(({ S, rs }) => h('div', { class: 'stack', style: `gap:6px;border-inline-start:6px solid ${colOf(S)};padding-inline-start:8px` },
-            h('div', { class: 'muted small' }, `מהרשימה "${S.L.name}", עד ${mOf(S)} מ' מהתחנה`),
-            ...rs.map(r => { const lb = labelIn(S.L, r), d = Math.round(km(geo.get(id), S.geo.get(r.id)) * 1000); return h('div', { class: 'wl-stop side', style: `border-color:${colOf(S)}` },
-              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, lb.name), srcTag(S.L.name || 'רשימה', chipCss(S)), flagBadge(r, h), metaIn(S.L, r) ? h('div', { class: 'small' }, metaIn(S.L, r)) : null, h('div', { class: 'muted small' }, lb.addr + (d < 15 ? ' · באותו מקום' : ` · ${d} מ'`))),
+            h('div', { class: 'muted small' }, S.self ? `תחנות קרובות מאותה רשימה "${l.name || 'הראשית'}", עד ${mOf(S)} מ' מהתחנה` : `מהרשימה "${S.L.name}", עד ${mOf(S)} מ' מהתחנה`),
+            ...rs.map(r => { const lb = labelIn(S.L, r), d = Math.round(km(geo.get(id), S.geo.get(r.id)) * 1000), n = S.self ? l.route.indexOf(r.id) + 1 : 0; return h('div', { class: 'wl-stop side', style: `border-color:${colOf(S)}` },
+              h('div', { style: 'flex:1;min-width:0' }, h('b', {}, (n ? n + '. ' : '') + lb.name + (S.self && done(r) ? ' ✓' : '')), srcTag(S.self ? (l.name || 'ראשית') : (S.L.name || 'רשימה'), S.self ? 'background:var(--accent);color:var(--accent-ink)' : chipCss(S)), flagBadge(r, h), metaIn(S.L, r) ? h('div', { class: 'small' }, metaIn(S.L, r)) : null, h('div', { class: 'muted small' }, lb.addr + (d < 15 ? ' · באותו מקום' : ` · ${d} מ'`))),
               flagBtn(S.L, r, close),
-              h('button', { class: 'btn', onclick: () => { close(); jumpSide(S, r.id); } }, 'במפה'),
-              h('button', { class: 'btn primary', onclick: () => { close(); openRow(S.L, r, true); } }, 'פתח סקר')); }))),
+              h('button', { class: 'btn', onclick: () => { close(); S.self ? jumpTo(r.id) : jumpSide(S, r.id); } }, 'במפה'),
+              h('button', { class: 'btn primary', onclick: () => { close(); S.self ? openRow(l, r) : openRow(S.L, r, true); } }, 'פתח סקר')); }))),
           only && nearOf(id).length > 1 ? h('button', { class: 'btn', onclick: () => { close(); showNear(id); } }, 'הצג קרובים מכל הרשימות') : null,
           h('button', { class: 'btn', onclick: close }, 'סגור')));
       document.body.append(ov);
@@ -2247,7 +2261,7 @@
     function drawSide() {
       const opened = new Set([...sideBox.querySelectorAll('details[open]')].map(d => d.dataset.sid));
       const nearIds = new Map(SIDES.map(S => [S, new Set()]));
-      vis().forEach(id => nearOf(id).forEach(({ S, rs }) => rs.forEach(r => nearIds.get(S).add(r.id))));
+      vis().forEach(id => nearOf(id).forEach(({ S, rs }) => { if (!S.self) rs.forEach(r => nearIds.get(S).add(r.id)); }));
       // (1.144) replaceChildren כותב null כטקסט: רק כשיש מה להציג
       sideBox.replaceChildren(...SIDES.map(S => {
         const rs = rowsOf(S), C = colOf(S), near = nearIds.get(S);
