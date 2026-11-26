@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.189.0';
+  const APP_VERSION = '1.191.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -1514,15 +1514,35 @@
     if (saved) msg += ` נשמרה גם בגוגל דרייב: ${saved}.`;
     return msg;
   }
+  // (1.191, ori) תיקיות פרויקט ישנות שעוד ישר ב"סקרי עצים": כפתור שמעביר אותן לתיקייה הראשית של הסוג שלהן (רק בלחיצה)
+  function splitLine() {
+    const box = h('div', { class: 'stack', style: 'gap:6px' });
+    Sync.legacyProjects().then(m => {
+      if (!m.size) return;
+      const msg = h('div', { class: 'small' });
+      const btn = h('button', { class: 'btn', onclick: async () => {
+        if (!confirm(`להעביר ${m.size} תיקיות פרויקט (${[...m.keys()].join(', ')}) מ"סקרי עצים" לתוך "${Sync.TYPE_DIRS.safety}" או "${Sync.TYPE_DIRS.build}" לפי סוג הסקר?\nהקבצים לא משתנים, רק המקום שלהם בדרייב.`)) return;
+        btn.disabled = true; msg.textContent = 'מעביר…';
+        try {
+          const r = await Sync.splitRoot();
+          msg.textContent = `✓ הועברו: ${r.safety} ל"${Sync.TYPE_DIRS.safety}", ${r.build} ל"${Sync.TYPE_DIRS.build}"` + (r.errors ? `. ${r.errors} לא הועברו (פרטים בבקרת גיבוי)` : '');
+        } catch (e) { msg.textContent = 'ההעברה נכשלה: ' + e.message; btn.disabled = false; }
+      } }, '📁 סדר תיקיות קיימות לפי סוג סקר');
+      box.append(h('div', { class: 'small' }, `ב"סקרי עצים" יש עוד ${m.size} תיקיות פרויקט מלפני החלוקה (${[...m.keys()].join(', ')}). עד שמסדרים, סקרים בפרויקטים האלה ממשיכים לשמור בהן.`), h('div', { class: 'row' }, btn), msg);
+    }).catch(() => {});
+    return box;
+  }
   // קובץ סיכום לתיקיית הדוחות בגוגל דרייב (תיקיית הפרויקט אם כולם מאותו פרויקט)
   async function saveSummaryToCloud(surveys, name, blob) {
     try {
       if (!navigator.onLine || !(await OD.connected())) return '';
-      const root = await OD.folder(null, (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים');
+      // (1.191) בתוך התיקייה הראשית של סוג הסקר (סקר בטיחות עצים / סקר עצים להיתר בנייה)
       const projects = [...new Set(surveys.map(s => s.project || 'ללא פרויקט'))];
-      const dir = projects.length === 1 ? await OD.folder(root, projects[0]) : root;
+      const s0 = surveys[0] || {};
+      const dir = projects.length === 1 ? await Sync.projDir(s0, projects[0]) : await OD.folder(await OD.folder(null, (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים'), Construction.isConstruction(s0) ? Sync.TYPE_DIRS.build : Sync.TYPE_DIRS.safety);
       await OD.upload(dir, name, blob, true);
-      const path = ((await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים') + (projects.length === 1 ? '/' + projects[0] : '');
+      const names = await Sync.projNames(s0, projects[0]);
+      const path = (projects.length === 1 ? names : [names[0], Construction.isConstruction(s0) ? Sync.TYPE_DIRS.build : Sync.TYPE_DIRS.safety]).join('/');
       Sync.log('ok', 'קובץ סיכום נשמר בגוגל דרייב: ' + name);
       return path;
     } catch (e) { Sync.log('error', 'שמירת קובץ סיכום בגוגל דרייב נכשלה: ' + e.message); return ''; }
@@ -4670,7 +4690,8 @@
           tgStatus),
         h('div', { class: 'card stack' },
           h('h2', { style: 'margin:0;font-size:20px' }, 'גוגל דרייב'),
-          h('div', { class: 'muted small' }, 'אקסל ו-PDF נשמרים בתיקיית הדוחות, תיקייה לכל פרויקט (בסקר לבנייה: תיקייה לכל סקר בתוך הפרויקט). הנתונים, התמונות וההגדרות המשותפות נשמרים בתיקייה "גיבוי אפליקציית סקרי עצים".'),
+          h('div', { class: 'muted small' }, `אקסל ו-PDF נשמרים בתיקיית הדוחות, בשתי תיקיות ראשיות: "${Sync.TYPE_DIRS.safety}" (תיקייה לכל פרויקט, ובתוכה קב"ט ושכונה לפי הרשימה) ו"${Sync.TYPE_DIRS.build}" (תיקייה לכל פרויקט, ובתוכה תיקייה לכל סקר). הנתונים, התמונות וההגדרות המשותפות נשמרים בתיקייה "גיבוי אפליקציית סקרי עצים".`),
+          odConnected ? splitLine() : null,
           odStatus,
           credLine, credBox,
           archLine,

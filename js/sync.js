@@ -181,7 +181,7 @@
     }
     if (!s.odReportDir) {
       s.odReportOwn = false;
-      const proj = await OD.folder(await reportRoot(), s.project || 'ללא פרויקט');
+      const proj = await projDir(s, s.project);
       if (isBuild(s)) {
         const name = buildDirName(s);
         s.odReportDir = await OD.folder(proj, name);
@@ -228,7 +228,7 @@
   const placeKey = (s, p) => projName(p) + ' / ' + subOf(s, p).join(' / ');
   const projOfKey = k => k.split(' / ')[0];
   async function placeFolder(s, p) {
-    let f = await OD.folder(await reportRoot(), projName(p));
+    let f = await projDir(s, p);
     for (const seg of subOf(s, p)) f = await hoodFolder(f, seg);
     return f;
   }
@@ -274,6 +274,7 @@
       [base, OD.clean('ריכוז אורנים - ' + base)].some(b => it.name.slice(0, it.name.lastIndexOf('.')) === b))));
   }
   async function moveFile(id, from, to) {
+    OD._created.delete(to); // תיקייה שנוצרה עכשיו כבר לא ריקה: לחפש בה (אחרת תיווצר בה תיקייה כפולה)
     return OD.api('PATCH', `/files/${id}?addParents=${encodeURIComponent(to)}&removeParents=${encodeURIComponent(from)}&fields=id&supportsAllDrives=true`, {});
   }
   // מעביר את הקבצים מכל מקום שכבר לא רלוונטי למקום החדש של אותו פרויקט (או לתיקייה הראשית של הסקר)
@@ -293,7 +294,7 @@
     // סקר מלפני 1.155: הקבצים בתיקיית הפרויקט (בלי שכונה), גם בפרויקטים הנוספים
     if (!s.odReportPlace && s.odReportDir) {
       have[projName(s.project) + ' / '] = s.odReportDir;
-      for (const p of extraProjects(s)) if (!have[projName(p) + ' / ']) have[projName(p) + ' / '] = await OD.folder(await reportRoot(), p);
+      for (const p of extraProjects(s)) if (!have[projName(p) + ' / ']) have[projName(p) + ' / '] = await projDir(s, p);
     }
     const wantKeys = new Set(want.map(w => w.k));
     let moved = 0;
@@ -313,7 +314,7 @@
           } catch (e) { log('error', `העברת "${it.name}" לתיקייה ${[to.p, ...subOf(s, to.p)].join(' / ')} נכשלה: ${e.message}`, s); }
         }
         // (1.163) תיקיית שכונה / קב"ט שנשארה ריקה (כל הסקרים שלה עברו): לפח, כדי שלא יהיו שתי תיקיות לאותה שכונה
-        if (k.split(' / ').length > 1 && k.split(' / ')[1]) await trashIfEmpty(fid, projOfKey(k)).catch(() => {});
+        if (k.split(' / ').length > 1 && k.split(' / ')[1]) await trashIfEmpty(s, fid, projOfKey(k)).catch(() => {});
       }
       delete have[k];
       have[to.k] = dest;
@@ -327,8 +328,8 @@
     return moved;
   }
   // תיקייה ריקה בתוך תיקיית פרויקט (ואם גם זו שמעליה התרוקנה, למשל קב"ט, גם אותה), אף פעם לא תיקיית הפרויקט עצמה
-  async function trashIfEmpty(fid, proj) {
-    const projId = await OD.folder(await reportRoot(), projName(proj));
+  async function trashIfEmpty(s, fid, proj) {
+    const projId = await projDir(s, proj);
     for (let i = 0; i < 2 && fid && fid !== projId; i++) {
       if ((await OD.children(fid)).length) return;
       const j = await OD.api('GET', `/files/${fid}?fields=id,parents&supportsAllDrives=true`).catch(() => null);
@@ -342,7 +343,83 @@
   // הנתיב לתצוגה: סקרי עצים / פרויקט [/ שכונה] [/ שם הסקר]
   async function reportPath(s) {
     if (s.odReportOwn && s.odReportDir && OD.folderPath) { const p = await OD.folderPath(s.odReportDir, 4).catch(() => null); if (p && p.length) return [].concat(p).join(' / '); }
-    return [(await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים', s.project || 'ללא פרויקט'].concat(isBuild(s) ? [s.odReportDirName || buildDirName(s)] : subOf(s, s.project)).join(' / ');
+    return (await projNames(s, s.project)).concat(isBuild(s) ? [s.odReportDirName || buildDirName(s)] : subOf(s, s.project)).join(' / ');
+  }
+
+  // ---------- (1.191, ori) שתי תיקיות ראשיות בתוך "סקרי עצים": סקר בטיחות עצים / סקר עצים להיתר בנייה ----------
+  // סקרי בטיחות (מהטאבלט) ב"סקר בטיחות עצים" / פרויקט / [קב"ט] / [שכונה]; סקרים לבנייה ב"סקר עצים להיתר בנייה" / פרויקט / סקר.
+  // bricscad_data נשאר ישר ב"סקרי עצים" (TREES ב-BricsCAD קורא משם).
+  // תיקיית פרויקט שעוד נמצאת ישר ב"סקרי עצים" (מלפני השינוי, עד "סדר תיקיות קיימות" בהגדרות): ממשיכים לשמור בה, כדי שסקר לא יתפצל לשני מקומות
+  const TYPE_DIRS = { safety: 'סקר בטיחות עצים', build: 'סקר עצים להיתר בנייה' };
+  const KEEP_TOP = new Set([TYPE_DIRS.safety, TYPE_DIRS.build, 'bricscad_data'].map(n => OD.clean(n)));
+  const typeDirName = s => isBuild(s) ? TYPE_DIRS.build : TYPE_DIRS.safety;
+  async function typeRoot(s) { return OD.folder(await reportRoot(), typeDirName(s)); }
+  let legacyP = null;
+  function legacyProjects() {
+    if (!legacyP) legacyP = (async () => {
+      const kids = await OD.children(await reportRoot());
+      return new Map(kids.filter(k => k.folder && !KEEP_TOP.has(OD.clean(k.name))).map(k => [OD.clean(k.name), k.id]));
+    })().catch(e => { legacyP = null; throw e; });
+    return legacyP;
+  }
+  async function projDir(s, p) {
+    const old = (await legacyProjects()).get(OD.clean(projName(p)));
+    if (old) return old;
+    return OD.folder(await typeRoot(s), projName(p));
+  }
+  // הנתיב לתצוגה עד תיקיית הפרויקט
+  async function projNames(s, p) {
+    const top = (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים';
+    const old = await legacyProjects().then(m => m.has(OD.clean(projName(p)))).catch(() => false);
+    return old ? [top, projName(p)] : [top, typeDirName(s), projName(p)];
+  }
+  // סקר לבנייה: תת-תיקייה בשם "כתובת - תאריך" (reportDirName)
+  const BUILD_SUB = /\s-\s\d{1,2}\.\d{1,2}\.\d{4}(\s-\s\d+)?$/;
+  // מעביר פריט מתיקייה לתיקייה. כבר יש שם פריט באותו שם: תיקייה מתאחדת, קובץ (החדש יותר נשאר, הישן לפח)
+  async function moveMerge(it, from, to) {
+    const there = (await OD.children(to)).find(x => OD.clean(x.name) === OD.clean(it.name) && !!x.folder === !!it.folder);
+    if (!there) { await moveFile(it.id, from, to); return 1; }
+    if (it.folder) {
+      let n = 0;
+      for (const c of await OD.children(it.id)) n += await moveMerge(c, it.id, there.id);
+      if (!(await OD.children(it.id)).length) await OD.api('PATCH', `/files/${it.id}?supportsAllDrives=true`, { trashed: true });
+      return n;
+    }
+    const older = (Date.parse(it.lastModifiedDateTime) || 0) > (Date.parse(there.lastModifiedDateTime) || 0) ? there : it;
+    await OD.api('PATCH', `/files/${older.id}?supportsAllDrives=true`, { trashed: true });
+    if (older === there) await moveFile(it.id, from, to);
+    return 1;
+  }
+  // "סדר תיקיות קיימות" (בהגדרות, רק בלחיצה): תיקיות הפרויקטים שישר ב"סקרי עצים" עוברות לתיקייה הראשית של הסוג שלהן.
+  // תיקייה של סקר לבנייה (בשם "כתובת - תאריך", או תיקייה שסקר לבנייה באפליקציה שומר בה) עוברת ל"סקר עצים להיתר בנייה" / פרויקט,
+  // וכל השאר (קבצי בטיחות, שכונות, קב"ט, ריכוזים) ל"סקר בטיחות עצים" / פרויקט. המזהים של התיקיות נשמרים, אז הסקרים ממשיכים לשמור בהן.
+  async function splitRoot() {
+    const top = await reportRoot();
+    const roots = { safety: await OD.folder(top, TYPE_DIRS.safety), build: await OD.folder(top, TYPE_DIRS.build) };
+    const buildIds = new Set((await DB.allSurveys()).filter(s => isBuild(s) && s.odReportDir).map(s => s.odReportDir));
+    const isBuildDir = it => it.folder && (buildIds.has(it.id) || BUILD_SUB.test(String(it.name).trim()));
+    const out = { safety: 0, build: 0, errors: 0 };
+    for (const it of await OD.children(top)) {
+      if (KEEP_TOP.has(OD.clean(it.name))) continue;
+      try {
+        if (!it.folder) { await moveMerge(it, top, roots.safety); out.safety++; continue; }
+        const kids = await OD.children(it.id);
+        const b = kids.filter(isBuildDir), rest = kids.filter(k => !isBuildDir(k));
+        if (!b.length || !rest.length) {
+          // כולה מסוג אחד (או ריקה): כל התיקייה עוברת כמו שהיא
+          const kind = b.length ? 'build' : 'safety';
+          await moveMerge(it, top, roots[kind]); out[kind]++;
+          continue;
+        }
+        // מעורבת: הסקרים לבנייה לתיקיית הפרויקט בצד של הבנייה, והתיקייה עצמה (עם השאר) לצד של הבטיחות
+        const bp = await OD.folder(roots.build, it.name);
+        for (const k of b) { await moveMerge(k, it.id, bp); out.build++; }
+        await moveMerge(it, top, roots.safety); out.safety++;
+      } catch (e) { out.errors++; log('error', `סידור תיקיות: "${it.name}" לא הועבר: ${e.message}`); }
+    }
+    legacyP = null; hoodChecked.clear();
+    log('ok', `סידור תיקיות בדרייב: ${out.safety} לסקר בטיחות עצים, ${out.build} לסקר עצים להיתר בנייה` + (out.errors ? `, ${out.errors} נכשלו` : ''));
+    return out;
   }
 
   // (1.150, ori) מוסד שנמצא בשתי רשימות עבודה (אותו סמל מוסד) וסקר אחד לשתיהן: הדוחות נשמרים גם בתיקיית הפרויקט של הרשימה השנייה
@@ -1106,7 +1183,7 @@
         const d = await reportFolder(s);
         if (!s.odReportOwn) return d;
         const name = buildDirName(s);
-        return OD.folder(await OD.folder(await reportRoot(), s.project || 'ללא פרויקט'), name);
+        return OD.folder(await projDir(s, s.project), name);
       };
       for (const f of files) {
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -1343,7 +1420,7 @@
       const folderId = await reportFolder(s);
       return { folderId, path: await reportPath(s) };
     },
-    reportPath,
+    reportPath, splitRoot, projDir, projNames, legacyProjects, TYPE_DIRS, _reportFolder: reportFolder,
     // (1.155) אחרי שינוי שכונה / רשימה / פרויקט: מעבירים עכשיו את הקבצים שכבר עלו (בלי להעלות מחדש)
     async relocate(s) { if (!navigator.onLine || !(await OD.connected()) || isBuild(s) || !s.odReportDir) return 0; return relocate(s); },
     cloudIndex, allInCloud, freeLocal, log, hashSurvey, loadSurvey, mergeSurvey,
