@@ -1,7 +1,7 @@
 // אפליקציית סקר בטיחות עצים לטאבלט
 (function () {
   'use strict';
-  const APP_VERSION = '1.189.0';
+  const APP_VERSION = '1.190.0';
   // מצב דיבור מוסתר לבקשת ori (2026-11-03): הכפתור וכרטיס ההגדרות לא מוצגים. הקוד נשאר, true מחזיר אותם
   const VOICE_UI = false;
   const REF_SUFFIX = 'כולל לא להתייחסות';
@@ -404,7 +404,7 @@
         toast(msg || 'הסקר עודכן ממכשיר אחר', 2500);
       } else if (!cur && /^#\/?$/.test(location.hash || '#/')) renderHome();
     },
-    buildReport, buildPdf, combinedPdf, viewCombined, surveyPdf, mailText: a => mailText(a), shareFiles: (...a) => shareFilesTogether(...a), planFiles, hasRef: s => hasRef(s), REF_SUFFIX, refName, fileBase: s => fileBase(s),
+    buildReport, buildPdf, combinedPdf, viewCombined, surveyPdf, mailText: (a, n) => mailText(a, n), getMailName: id => getMailName(id), gmailCompose: (a, b) => gmailCompose(a, b), shareFiles: (...a) => shareFilesTogether(...a), planFiles, hasRef: s => hasRef(s), REF_SUFFIX, refName, fileBase: s => fileBase(s),
     // שם תת-התיקייה של סקר לבנייה בתיקיית הדוחות: כתובת - תאריך (כמו לפני 1.66, כדי שתיקיות קיימות לא ישנו שם)
     reportDirName: s => safeName(`${s.site || 'ללא שם'} - ${fmtDate(s.date).replace(/\//g, '.')}${(s.odFolderK || 1) > 1 ? ' - ' + s.odFolderK : ''}`),
     // עזרים למסכים שבקבצים אחרים (הצעות מחיר)
@@ -4259,16 +4259,45 @@
     const place = Core.placeOf(s);
     return [s.siteName, s.street, s.city].filter(Boolean).join(' ') || [place.name, place.address].filter(Boolean).join(' ') || s.site || '';
   }
-  function mailText(surveys) {
+  // (1.190, ori) שורה ראשונה בגוף המייל: "<שם>, שלום." — השם נרשם בשדה "שם לפנייה" ליד כפתור השליחה
+  function mailText(surveys, name) {
     const y = new Date().getFullYear();
-    if (surveys.length === 1) return { subject: `סקר עצים ${y} ${whereOf(surveys[0])}`.trim(), body: '\nרצ"ב סקר עצים וחשבונית לתשלום' };
+    const hi = (name || '').trim() ? name.trim() + ', שלום.\n' : '';
+    if (surveys.length === 1) return { subject: `סקר עצים ${y} ${whereOf(surveys[0])}`.trim(), body: hi + '\nרצ"ב סקר עצים וחשבונית לתשלום' };
     const ws = surveys.map(whereOf).filter(Boolean);
     const head = ws.length > 3 ? ws.slice(0, 2).join(', ') + ` ועוד ${ws.length - 2}` : ws.join(', ');
-    return { subject: `סקרי עצים ${y} ${head}`.trim(), body: '\nרצ"ב סקרי עצים וחשבוניות לתשלום:\n' + ws.map(w => '- ' + w).join('\n') };
+    return { subject: `סקרי עצים ${y} ${head}`.trim(), body: hi + '\nרצ"ב סקרי עצים וחשבוניות לתשלום:\n' + ws.map(w => '- ' + w).join('\n') };
   }
-  async function sharePdf(s, pdf, via) {
+  // שם לפנייה: נשמר בטאבלט לכל סקר (לא בתוך הסקר, כדי שה-PDF לא ייחשב כ"השתנה"), ורשימת השמות האחרונים להצעה
+  const mailNameKey = id => 'mailName:' + id;
+  async function getMailName(id) { try { return (await DB.getKV(mailNameKey(id), '')) || ''; } catch (_) { return ''; } }
+  async function setMailName(ids, name) {
+    name = (name || '').trim();
+    try {
+      for (const id of ids) await DB.setKV(mailNameKey(id), name);
+      if (name) { const r = (await DB.getKV('mailNames', [])) || []; await DB.setKV('mailNames', [name, ...r.filter(x => x !== name)].slice(0, 30)); }
+    } catch (_) {}
+  }
+  // שדה "שם לפנייה" עם רשימת שמות אחרונים (ומנהל/ת הסקר), וכפתור X לניקוי. מחזיר { el, value() }
+  function mailNameField(ids, initial, extra) {
+    const dl = 'mn' + uid();
+    const list = h('datalist', { id: dl });
+    const inp = h('input', { class: 'in', type: 'text', list: dl, value: initial || '', placeholder: 'שם פרטי, למשל יאיר', autocomplete: 'off', style: 'flex:1;min-width:140px' });
+    const save = () => setMailName(ids, inp.value);
+    inp.addEventListener('change', save);
+    const clr = h('button', { class: 'btn', type: 'button', title: 'נקה', 'aria-label': 'נקה', onclick: () => { inp.value = ''; save(); inp.focus(); } }, '✕');
+    DB.getKV('mailNames', []).then(r => {
+      const names = [...new Set([...(extra || []).filter(Boolean), ...(r || [])])];
+      list.replaceChildren(...names.map(n => h('option', { value: n })));
+    }).catch(() => {});
+    const el = h('label', { class: 'row', style: 'gap:8px;align-items:center;flex-wrap:wrap' }, h('span', { class: 'small' }, 'שם לפנייה במייל:'), inp, clr, list);
+    return { el, value: () => inp.value.trim(), save };
+  }
+  const firstName = full => ((full || '').trim().split(/\s+/)[0] || '');
+  async function sharePdf(s, pdf, via, name) {
     const file = new File([pdf.blob], shareName(pdf.name), { type: 'application/pdf' });
-    const { subject, body } = mailText([s]);
+    if (name == null) name = await getMailName(s.id);
+    const { subject, body } = mailText([s], name);
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       // בוואטסאפ אין נושא, אז הנושא נכנס כשורה ראשונה בהודעה
       const data = { files: [file], title: subject, text: via === 'mail' ? body : subject + '\n' + body };
@@ -4277,8 +4306,13 @@
     }
     // אין שיתוף קבצים בדפדפן הזה: מורידים את הקובץ, ובמייל פותחים הודעה חדשה עם נושא (את הקובץ מצרפים מההורדות)
     downloadFile(pdf.blob, pdf.name);
-    if (via === 'mail') location.href = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    if (via === 'mail') location.href = gmailCompose(subject, body);
     toast('הקובץ הורד. צרף אותו מתיקיית ההורדות.', 5000);
+  }
+  // (1.190, ori) כשאין חלון שיתוף (מחשב): Gmail בדפדפן, מהחשבון oritrees@gmail.com ולא מחשבון ברירת המחדל
+  const MAIL_FROM = 'oritrees@gmail.com';
+  function gmailCompose(subject, body) {
+    return 'https://mail.google.com/mail/?authuser=' + encodeURIComponent(MAIL_FROM) + '&view=cm&fs=1&su=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
   }
   // שיתוף כמה קבצים יחד בחלון השיתוף של אנדרואיד (או הורדה, כשאין שיתוף קבצים)
   async function shareFilesTogether(files, subject, body) {
@@ -4287,7 +4321,7 @@
       catch (e) { if (e.name === 'AbortError') return true; if (e.name !== 'NotAllowedError') throw e; return false; }
     }
     for (const f of files) downloadFile(f, f.name);
-    location.href = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    location.href = gmailCompose(subject, body);
     toast('הקבצים הורדו. צרף אותם מתיקיית ההורדות.', 5000);
     return true;
   }
@@ -4340,7 +4374,8 @@
   function viewCombined(pdf) {
     const share = async () => {
       const file = new File([pdf.blob], shareName(pdf.name), { type: 'application/pdf' });
-      const { subject, body } = mailText(pdf.surveys);
+      const names = await Promise.all(pdf.surveys.map(x => getMailName(x.id)));
+      const { subject, body } = mailText(pdf.surveys, names.every(n => n === names[0]) ? names[0] : '');
       if (!(await shareFilesTogether([file], subject, body))) downloadFile(pdf.blob, pdf.name);
     };
     const view = pdf.html ? PdfVec.view(pdf.html, { rootId: 'printRoot' }) : null;
@@ -4374,10 +4409,11 @@
     const sel = new Set(pre ? [pre] : []);
     let entries = [];
     const btnMail = h('button', { class: 'btn primary big', disabled: true }, '✉ שליחה במייל');
+    const mnMulti = mailNameField([], pre ? await getMailName(pre) : '');
     app.replaceChildren(bar('שליחת כמה סקרים', pre ? '#/s/' + encodeURIComponent(pre) + '/export' : '#/'), h('main', { class: 'stack', style: 'max-width:820px;margin:0 auto' },
       h('div', { class: 'card stack' },
         h('div', { class: 'small' }, 'בחר את הסקרים ששולחים לאותו אדם. ה-PDF של כל סקר מצורף לאותו מייל (סקרי בנייה לא נכללים, יש בהם רק אקסל).'),
-        picked, h('div', { class: 'row' }, btnMail), status),
+        picked, mnMulti.el, h('div', { class: 'row' }, btnMail), status),
       q, msg, list));
     const hay = e => [e.code, e.siteName, e.street, e.city, e.project, e.site].join(' ').toLowerCase();
     const byId = new Map();
@@ -4439,7 +4475,8 @@
     // כמו בשליחה של סקר אחד: חלון השיתוף של אנדרואיד עם כל הקבצים מצורפים, ובוחרים בו Gmail (ושם מוסיפים נמען וחשבונית)
     const shareAll = via => run(async items => {
       const files = items.map(it => new File([it.pdf.blob], shareName(it.pdf.name), { type: 'application/pdf' }));
-      const t = mailText(items.map(it => it.s));
+      await setMailName(items.map(it => it.s.id), mnMulti.value());
+      const t = mailText(items.map(it => it.s), mnMulti.value());
       const text = via === 'mail' ? t.body : t.subject + '\n' + t.body;
       // אחרי הכנה ארוכה הדפדפן לא מאפשר לפתוח שיתוף בלי לחיצה נוספת
       if (!(await shareFilesTogether(files, t.subject, text))) {
@@ -4522,12 +4559,14 @@
       if (!pdf || !pdf.blob) { box.replaceChildren(h('div', { class: 'row' }, multi)); return; }
       const hm = new Date(pdf.at).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
       const stale = pdf.hash !== Sync.hashSurvey(s);
+      const mn = mailNameField([s.id], await getMailName(s.id), [firstName(s.manager)]);
       box.replaceChildren(
         h('div', { class: 'small' }, `PDF אחרון: ${hm}, ${pdf.pages} עמודים.`, stale ? h('span', { style: 'color:var(--danger)' }, ' הסקר השתנה מאז. לחץ "הפק PDF" כדי לעדכן.') : null),
+        mn.el,
         h('div', { class: 'row' },
           h('button', { class: 'btn primary', onclick: () => viewPdf(s, pdf) }, '👁 הצג PDF'),
           // לפי ori: כפתור שליחה אחד. בחלון השיתוף בוחרים Gmail, וואטסאפ או כל אפליקציה אחרת
-          h('button', { class: 'btn', onclick: () => sharePdf(s, pdf, 'mail') }, '✉ שליחה במייל'),
+          h('button', { class: 'btn', onclick: () => { mn.save(); sharePdf(s, pdf, 'mail', mn.value()); } }, '✉ שליחה במייל'),
           multi));
     };
     const onCh = id => { if (id === s.id) draw(); };
