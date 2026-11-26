@@ -111,6 +111,11 @@
 
   // ---------- אחסון וסנכרון ----------
   let cache = null;
+  // (1.190) שם לפנייה במייל: רק אם לכל הסקרים שנשלחים נרשם אותו שם
+  async function sameMailName(surveys) {
+    const n = await Promise.all((surveys || []).map(s => App.getMailName(s.id)));
+    return n.length && n.every(x => x === n[0]) ? n[0] : '';
+  }
   async function all() { if (!cache) cache = (await DB.getKV('workLists', [])) || []; return cache; }
   const live = async () => (await all()).filter(l => !l.deleted);
   const byId = async id => (await all()).find(l => l.id === id && !l.deleted) || null;
@@ -2213,8 +2218,8 @@
       // ריכוז דוחות ודוח מנהלים תמיד קבצים רגילים. לא לחלק לכמה מיילים (ori ביטל)
       // (1.187, ori) במחשב חלון השיתוף של Windows לא מגיע ל-Gmail: כל הקבצים יורדים ל"הורדות" (בלי ZIP, אין מגבלה), ונפתח Gmail בדפדפן עם נושא וגוף
       if (isDesktop()) {
-        const { subject, body } = App.mailText(sent);
-        const url = 'https://mail.google.com/mail/?view=cm&fs=1&su=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+        const { subject, body } = App.mailText(sent, await sameMailName(sent));
+        const url = App.gmailCompose(subject, body);
         const wantZip = cbEach.checked && (eachHow.querySelector('input:checked') || {}).value === 'zip';
         const pk = wantZip ? await packForShare(files, say, true) : { share: files, zip: null };
         const dlFiles = pk.zip ? [...pk.share, pk.zip] : files;
@@ -2232,7 +2237,7 @@
         return;
       }
       const packed = await packForShare(files, say, cbEach.checked && (eachHow.querySelector('input:checked') || {}).value === 'zip'), out = packed.share;
-      const { subject, body } = App.mailText(sent);
+      const { subject, body } = App.mailText(sent, await sameMailName(sent));
       const mb = Math.round(out.reduce((a, f) => a + f.size, 0) / 1048576 * 10) / 10;
       const zipNote = (packed.zip ? `. קבצי ה-PDF של כל סקר נשמרו ב"הורדות" בקובץ "${packed.zip.name}" (אנדרואיד לא מצרף ZIP דרך השיתוף)` : '') + mgrNote
         + (packed.zip || mgrFile ? '. ב-Gmail לחץ 📎 ← צרף קובץ ← הורדות' : '');
