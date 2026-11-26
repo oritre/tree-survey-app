@@ -882,6 +882,97 @@
         h('button', { class: 'btn', onclick: close }, 'ביטול')));
     document.body.append(ov);
   }
+  // ---------- הוספת מוסד ביד לרשימה קיימת (1.192, ori) ----------
+  // טופס עם כל העמודות של הרשימה (קודם העמודות המשויכות: שם, כתובת, עיר, סמל...). שורה חדשה = כמו שורה מיובאת:
+  // נכנסת לסוף המסלול, מקבלת מיקום במפה (חיפוש כתובת במסך המסלול), סטטוס, פתיחת סקר, וסנכרון לשאר המכשירים.
+  // סמל שכבר קיים ברשימה אחרת: כפתור שממלא את השדות הריקים משם (וגם המיקום שתוקן ביד עובר אחרי השמירה)
+  function addRowDialog(l, onAdded) {
+    const ui = U(), { h } = ui;
+    const fieldOfCol = new Map();
+    for (const f of fieldsOf(l)) colsOf((l.map || {})[f.key]).forEach((c, i, cs) => fieldOfCol.set(c, f.label + (cs.length > 1 ? ` (${i + 1})` : '')));
+    const rs = l.rows.filter(r => !r.deleted);
+    const cols = [...(l.cols || [])].sort((a, b) => (fieldOfCol.has(b.id) - fieldOfCol.has(a.id)));
+    const codeCol = oneCol(l, 'code'), cityCol = oneCol(l, 'city');
+    const inputs = new Map();
+    const lists = [];
+    const fieldsBox = h('div', { class: 'stack', style: 'gap:8px' });
+    for (const c of cols) {
+      const vals = [...new Set(rs.map(r => clean(r.cells[c.id])).filter(Boolean))];
+      // עמודה עם ערך אחד בכל השורות (עיר "ירושלים", יום אחד וכו'): ממולאת מראש
+      const one = vals.length === 1 && rs.length > 1 && (c.id === cityCol || (l.hide || []).includes(c.id)) ? vals[0] : '';
+      const dl = vals.length > 1 && vals.length <= 80 ? h('datalist', { id: 'wl-add-' + c.id }, ...vals.sort((a, b) => a.localeCompare(b, 'he', { numeric: true })).map(v => h('option', { value: v }))) : null;
+      if (dl) lists.push(dl);
+      const inp = h('input', { class: 'in', value: one, list: dl ? dl.id : null, 'aria-label': c.name });
+      inputs.set(c.id, inp);
+      fieldsBox.append(h('label', { class: 'stack', style: 'gap:2px' },
+        h('span', { class: 'small' }, h('b', {}, c.name), fieldOfCol.has(c.id) ? h('span', { class: 'muted' }, ' ← ' + fieldOfCol.get(c.id)) : null, (l.hide || []).includes(c.id) ? h('span', { class: 'muted' }, ' (מוסתרת בטבלה)') : null),
+        inp));
+    }
+    const cellsNow = () => { const o = {}; for (const [id, inp] of inputs) { const v = clean(inp.value); if (v) o[id] = v; } return o; };
+    const info = h('div', { class: 'stack small', style: 'gap:6px' });
+    // סמל מוסד: כפילות ברשימה הזו / אותו מוסד ברשימה אחרת
+    let lastKey = '';
+    const checkCode = async () => {
+      const probe = { id: '_new', cells: cellsNow() };
+      const mine = new Set(codeKeys(l, probe));
+      // רק כשהסמל השתנה (אחרת לחיצה על "מלא פרטים" אחרי הקלדה הייתה נבלעת בבנייה מחדש)
+      const key = [...mine].join(',');
+      if (key === lastKey) return;
+      lastKey = key;
+      info.replaceChildren();
+      if (!mine.size) return;
+      const dup = rs.find(x => codeKeys(l, x).some(k => mine.has(k)));
+      if (dup) { const v = valuesOf(l, dup); info.append(h('div', { class: 'card', style: 'background:var(--warn-soft, #fff3cd);padding:8px' }, '⚠ הסמל הזה כבר ברשימה: ' + ([v.siteName, v.street, v.city].filter(Boolean).join(', ') || 'שורה קיימת'))); }
+      for (const p of await twinsOf(l, probe)) {
+        const v = valuesOf(p.L, p.r);
+        info.append(h('div', { class: 'row', style: 'gap:8px;align-items:center;flex-wrap:wrap' },
+          h('span', { style: 'flex:1;min-width:180px' }, `נמצא ברשימה "${p.L.name}": `, h('b', {}, [v.siteName, v.street, v.city].filter(Boolean).join(', '))),
+          h('button', { class: 'btn', onclick: () => {
+            let n = 0;
+            for (const f of fieldsOf(l)) {
+              const to = oneCol(l, f.key), from = oneCol(p.L, f.key);
+              if (!to || !from || !inputs.has(to) || clean(inputs.get(to).value)) continue;
+              const val = clean(p.r.cells[from]); if (val) { inputs.get(to).value = val; n++; }
+            }
+            // עמודות עם אותו שם בשתי הרשימות (טלפון, נייד, סוג מוסד...)
+            for (const c of l.cols) {
+              const inp = inputs.get(c.id); if (!inp || clean(inp.value)) continue;
+              const pc = (p.L.cols || []).find(x => clean(x.name) === clean(c.name)); const val = pc ? clean(p.r.cells[pc.id]) : '';
+              if (val) { inp.value = val; n++; }
+            }
+            ui.toast(n ? `מולאו ${n} שדות מהרשימה "${p.L.name}"` : 'אין שדות ריקים למלא', 2500);
+          } }, 'מלא פרטים משם')));
+      }
+    };
+    if (codeCol && inputs.has(codeCol)) inputs.get(codeCol).addEventListener('change', () => checkCode().catch(() => {}));
+    const close = () => ov.remove();
+    const add = async more => {
+      const cells = cellsNow();
+      if (!Object.keys(cells).length) { ui.toast('לא מולא אף שדה', 2500); return; }
+      const nr = { id: uid(), cells, u: Date.now() };
+      l.rows.push(nr);
+      if (Array.isArray(l.route) && l.route.length) l.route.push(nr.id);
+      await save(l);
+      // מיקום שתוקן ביד לאותו מוסד ברשימה אחרת
+      mirrorGeoAll().catch(() => {});
+      const v = valuesOf(l, nr);
+      ui.toast('נוסף לרשימה: ' + ([v.siteName, v.street].filter(Boolean).join(', ') || 'שורה חדשה'), 3000);
+      if (more) { for (const [id, inp] of inputs) if (id !== cityCol && !(l.hide || []).includes(id)) inp.value = ''; info.replaceChildren(); lastKey = ''; const f0 = inputs.values().next().value; if (f0) f0.focus(); }
+      else close();
+      if (onAdded) onAdded(nr, more);
+    };
+    const ov = h('div', { class: 'modal', onclick: e => { if (e.target === ov) close(); } },
+      h('div', { class: 'card stack', style: 'max-width:560px;width:96%;max-height:92vh;overflow:auto' },
+        h('h2', { style: 'margin:0;font-size:20px' }, '➕ הוספת מוסד לרשימה'),
+        h('div', { class: 'muted small' }, `"${l.name || 'רשימה'}". ממלאים מה שידוע (לא חובה הכל). אחרי השמירה זו שורה רגילה: מפה, מסלול, סטטוס ופתיחת סקר.`),
+        ...lists, fieldsBox, info,
+        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+          h('button', { class: 'btn primary', onclick: () => add(false) }, 'הוסף'),
+          h('button', { class: 'btn', onclick: () => add(true) }, 'הוסף והמשך לעוד אחד'),
+          h('button', { class: 'btn', onclick: close }, 'ביטול'))));
+    document.body.append(ov);
+    const f0 = inputs.values().next().value; if (f0) setTimeout(() => f0.focus(), 50);
+  }
   const flagBadge = (r, h) => flagOf(r) ? h('span', { class: 'wl-badge flag-' + r.flag, title: r.flagNote || null }, (r.flag === 'gone' ? '⛔ ' : '🟡 ') + FLAGS[r.flag] + (r.flagNote ? ': ' + r.flagNote : '')) : null;
 
   // ---------- שיוך סקר לרשימות, לפרויקט ולשכונה (1.155, ori) ----------
@@ -1629,7 +1720,7 @@
           const dv = dc && byDay ? clean(r.cells[dc.id]) : null;
           const sep = dc && byDay && (i === 0 || clean(shown[i - 1].cells[dc.id]) !== dv)
             ? h('tr', { class: 'wl-dayrow' }, h('td', { colspan: cols.length + 2 }, h('span', { class: 'wl-daylbl' }, `${dv || 'בלי יום'} · ${shown.filter(x => clean(x.cells[dc.id]) === dv).length} מוסדות`))) : null;
-          return [sep, h('tr', { class: 'st-' + st.k },
+          return [sep, h('tr', { class: 'st-' + st.k, 'data-r': r.id },
             h('td', { class: 'wl-act' },
               (l.route || []).includes(r.id) ? rnumInput(l, r.id, () => { save(l); draw(); }) : null,
               h('button', { class: 'btn ' + (st.k === 'todo' ? 'primary' : ''), title: !r.sid && r.prev && !r.prev.none ? 'סקר חדש מהיום עם העצים וההערות מהסקר הקודם, והפרטים מהרשימה' : null, onclick: () => openRow(l, r) },
@@ -1675,7 +1766,13 @@
       h('main', { class: 'stack' },
         h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/setup') }, ui.icon('gear'), 'שיוך עמודות (כתובת, עיר, סמל…) והגדרות'),
-          h('button', { class: 'btn', onclick: () => { const nr = { id: uid(), cells: {}, u: Date.now() }; l.rows.push(nr); if (Array.isArray(l.route) && l.route.length) l.route.push(nr.id); save(l); filter = 'all'; q.value = ''; draw(); const ins = table.querySelectorAll('tbody tr:last-child input'); if (ins[0]) ins[0].focus(); } }, '➕ שורה'),
+          // (1.192, ori) הוספת מוסד ביד: טופס עם עמודות הרשימה. אחרי ההוספה מנקים חיפוש/סינון כדי שהשורה תיראה, ומדגישים אותה
+          h('button', { class: 'btn primary', title: 'מוסד שלא היה בקובץ: טופס עם כל העמודות של הרשימה', onclick: () => addRowDialog(l, (nr, more) => {
+            filter = 'all'; q.value = ''; view.filt = {}; saveView(); draw();
+            if (more) return;
+            const tr = table.querySelector(`tr[data-r="${nr.id}"]`);
+            if (tr) { tr.classList.add('wl-new'); tr.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => tr.classList.remove('wl-new'), 4000); }
+          }) }, '➕ הוספת מוסד'),
           h('button', { class: 'btn', onclick: () => ui.go('#/lists/' + encodeURIComponent(l.id) + '/route') }, '🗺 מסלול ומפה'),
           h('button', { class: 'btn', title: 'הרשימה שהעלית, עם עמודת סטטוס בסוף: בוצע / בתהליך / לא בוצע', onclick: exportXlsx }, '⬇ הורד לאקסל עם סטטוס'),
           h('button', { class: 'btn', title: 'שיוך סקרים משנים קודמות לשורות, הצגת הקבצים והורדה מראש', onclick: () => prevManager(l, draw) }, '📎 סקרים קודמים'),
