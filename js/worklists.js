@@ -940,6 +940,9 @@
     const rowsBox = h('div', { class: 'stack', style: 'gap:6px' });
     const paths = h('div', { class: 'small wl-paths' });
     const root0 = (await DB.getKV('odRoot', 'סקרי עצים')) || 'סקרי עצים';
+    // (1.191) "סקר בטיחות עצים" בין "סקרי עצים" לפרויקט, חוץ מתיקיית פרויקט ישנה שעוד ישר ב"סקרי עצים"
+    const legacy = await Sync.legacyProjects().catch(() => new Map());
+    const baseOf = p => legacy.has(OD.clean(p)) ? [root0] : [root0, Sync.TYPE_DIRS.safety];
     const projOf = x => clean(x.L.project) || clean(s.project) || 'ללא פרויקט';
     // (1.163) רשימה עם קב"ט (ירושלים כללי): תיקיית הקב"ט מעל השכונה בפרויקט שלה
     const kabRow = () => [...sel.values()].find(x => kabatOn(x.L)) || null;
@@ -948,7 +951,7 @@
       const hood = clean(hoodIn.value);
       const mp = main ? projOf(main) : clean(s.project) || 'ללא פרויקט';
       const ps = [mp, ...new Set([...sel.values()].filter(x => x !== main).map(projOf).filter(p => p !== mp))];
-      paths.replaceChildren(h('b', {}, 'הקבצים יהיו ב:'), ...ps.map((p, i) => h('div', {}, `📁 ${[root0, p, kabOf(p), hood].filter(Boolean).join(' / ')}` + (i ? ' (עותק)' : ' (ראשי)'))));
+      paths.replaceChildren(h('b', {}, 'הקבצים יהיו ב:'), ...ps.map((p, i) => h('div', {}, `📁 ${[...baseOf(p), p, kabOf(p), hood].filter(Boolean).join(' / ')}` + (i ? ' (עותק)' : ' (ראשי)'))));
     }
     const rowLine = (x, on) => {
       const v = valuesOf(x.L, x.r), k = K(x.L, x.r), other = x.r.sid && x.r.sid !== s.id;
