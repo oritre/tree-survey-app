@@ -823,3 +823,5 @@ body:has(> .modal) .wl-mapview { visibility: hidden; }
 .skill-item.ok { background: var(--accent-soft); }
 .skill-lvl.bad { border-color: #c62828; }
 .skill-lvl.warn { border-color: #c79a00; }
+/* (1.192) שורה שנוספה ביד: הבהוב קצר כדי לראות איפה היא */
+.wl-table tr.wl-new > td { background: var(--accent-soft, #dff3e4) !important; transition: background .6s; }
